@@ -150,6 +150,7 @@ export async function recomputeClassificationsAndAccuracies(): Promise<number> {
         ply: m.ply,
         inBookPhase: hasOpening,
         fenBefore: m.fenBefore,
+        fenAfter: m.fenAfter,
         playedUci: m.uci ?? '',
         prevMoveToSquare,
       });

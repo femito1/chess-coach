@@ -292,6 +292,37 @@ export interface RepertoireLineStats {
 }
 
 /* =======================================================================
+ *  Engine eval cache
+ * =======================================================================
+ *
+ *  Stockfish results keyed by `(fen, depth)` so repeated positions —
+ *  shared opening prefixes across a month of games, replays of the same
+ *  endgame, etc. — don't re-pay the engine cost. Reads are tolerant of
+ *  *deeper* hits: a depth-20 cached result satisfies a depth-16 query,
+ *  matching the determinism contract documented in CLAUDE.md.
+ *
+ *  This table is intentionally a pure cache — nothing else in the app
+ *  reads it for correctness, so we can wipe it at any time without
+ *  losing user-visible state.
+ */
+export interface EvalCacheEntry {
+  /** `${fen}|${depth}` — primary key. */
+  key: string;
+  /** Position FEN as Stockfish saw it (full FEN including counters). */
+  fen: string;
+  /** Search depth that produced this result. */
+  depth: number;
+  bestMoveUci: string | null;
+  scoreCp: number | null;
+  scoreMate: number | null;
+  /** Principal variation (UCI). Capped to 10 plies on write to keep
+   *  rows small; consumers that want more should re-analyze. */
+  pv: string[];
+  /** Epoch ms — used by future eviction policies; nothing reads it yet. */
+  savedAt: number;
+}
+
+/* =======================================================================
  *  Notes (annotations on positions)
  * =======================================================================
  */
@@ -318,6 +349,7 @@ export class CoachDB extends Dexie {
   repertoireCards!: EntityTable<RepertoireCard, 'id'>;
   repertoireLineStats!: EntityTable<RepertoireLineStats, 'id'>;
   notes!: EntityTable<PositionNote, 'fenKey'>;
+  evalCache!: EntityTable<EvalCacheEntry, 'key'>;
 
   constructor() {
     super('chess-coach');
@@ -366,6 +398,22 @@ export class CoachDB extends Dexie {
       repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',
       repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
       notes: 'fenKey, updatedAt',
+    });
+    // v5: persistent engine eval cache so the analysis queue dedupes
+    // FEN+depth lookups across games (huge for shared opening prefixes).
+    // New empty table — nothing to backfill.
+    this.version(5).stores({
+      games:
+        'id, url, username, endTime, analysisStatus, timeClass, eco, result',
+      analyses: 'gameId, analyzedAt, depth',
+      settings: 'key',
+      puzzles: 'id, gameId, generatedAt, *motifs, *tags, [srs.dueAt+id]',
+      repertoires: 'id, color, updatedAt',
+      repertoireNodes: 'id, repertoireId, fen, parentFen',
+      repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',
+      repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
+      notes: 'fenKey, updatedAt',
+      evalCache: 'key, fen, depth, savedAt',
     });
   }
 }

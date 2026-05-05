@@ -1,5 +1,6 @@
 import { Chess } from 'chess.js';
 import { analysisPool } from './pool';
+import { cachedAnalyze, cacheStats, isBookFen } from './cache';
 import { classifyMove, cpToWinrate, mateToCp, moveAccuracy } from './classify';
 import { detectMotifs } from './motifs';
 import {
@@ -49,34 +50,73 @@ export async function analyzeGamePgn(
   const pool = analysisPool();
   await pool.newGame();
 
-  // Position list: fenBefore for each move, plus the very final position.
-  // Note that fensBefore[i+1] === fenAfter for move i, so we can dedupe
-  // and avoid analysing the same FEN twice. Final FEN is appended once.
-  // Map: FEN string -> Promise<AnalysisResult>. Each unique position is
-  // dispatched to the pool exactly once. The pool itself parallelises
-  // across workers — we just hand it all the work up front.
-  // Progress: report incrementally as POOL tasks finish (roughly tracks
-  // wall-clock progress) rather than as the per-move loop processes
-  // them, so the user sees something move during the long warm-up. We
-  // attribute each completed task to a fake "ply" by counting the order
-  // they finish, divided by 2 (since each move needs ~2 positions).
-  const totalTasks = new Set([...fensBefore, finalFen]).size;
+  // -- Book detection --
+  // A move is "fully in book" iff both its before and after positions
+  // appear in the openings library. Such moves are classified `book`
+  // regardless of engine eval, so we skip the Stockfish call entirely.
+  // We still enqueue engine work for the boundary positions (in-book
+  // FEN that immediately precedes an out-of-book move) because we need
+  // those evals to score the move that leaves prep.
+  //
+  // Concretely we mark `bookMoveIdx[i] = true` iff move i is fully in
+  // book, then a FEN needs an engine eval iff any move that uses it
+  // (either as fenBefore or as fenAfter) is *not* fully in book.
+  const fenBookFlag: boolean[] = fensBefore.map((f) => isBookFen(f));
+  const finalBook = isBookFen(finalFen);
+  const bookMoveIdx: boolean[] = new Array(history.length);
+  for (let i = 0; i < history.length; i++) {
+    const beforeBook = fenBookFlag[i];
+    const afterBook = i + 1 < history.length ? fenBookFlag[i + 1] : finalBook;
+    bookMoveIdx[i] = beforeBook && afterBook;
+  }
+
+  // Set of FENs that genuinely need an engine eval. We start by
+  // assuming none, then mark any FEN used by a non-book move.
+  const needEval = new Set<string>();
+  for (let i = 0; i < history.length; i++) {
+    if (bookMoveIdx[i]) continue;
+    needEval.add(fensBefore[i]);
+    const after = i + 1 < history.length ? fensBefore[i + 1] : finalFen;
+    needEval.add(after);
+  }
+  // The very final position contributes only to the last move's eval —
+  // it's already covered by the loop above when the last move is
+  // non-book; we leave it out otherwise.
+
+  // Progress: count tasks that actually run engine work. Book-only
+  // games would otherwise look stuck at 0% even though they're
+  // finishing instantly.
+  const totalTasks = needEval.size;
   let tasksDone = 0;
-  const evalByFen = new Map<string, ReturnType<typeof pool.analyze>>();
+  const evalByFen = new Map<string, Promise<import('./engine').AnalysisResult>>();
   const enqueue = (fen: string) => {
     if (evalByFen.has(fen)) return;
-    const p = pool.analyze(fen, depth);
+    const p = cachedAnalyze(fen, depth);
     p.then(() => {
       tasksDone++;
-      onProgress?.({
-        ply: Math.min(history.length, Math.round((tasksDone / totalTasks) * history.length)),
-        totalPlies: history.length,
-      });
+      if (totalTasks > 0) {
+        onProgress?.({
+          ply: Math.min(
+            history.length,
+            Math.round((tasksDone / totalTasks) * history.length),
+          ),
+          totalPlies: history.length,
+        });
+      }
     }).catch(() => {});
     evalByFen.set(fen, p);
   };
-  for (const f of fensBefore) enqueue(f);
-  enqueue(finalFen);
+  for (const f of needEval) enqueue(f);
+  // Edge case: 100% book game. Report progress so the queue UI doesn't
+  // sit at 0% forever before we synthesize moves below.
+  if (totalTasks === 0 && history.length > 0) {
+    onProgress?.({ ply: history.length, totalPlies: history.length });
+  }
+  // Reference `pool` so that the var is recognized as used even when
+  // every call goes through `cachedAnalyze` (which dispatches via the
+  // pool internally). Keeps the explicit `await pool.newGame()` above
+  // visible without a lint complaint.
+  void pool;
 
   const moves: MoveEval[] = [];
   for (let i = 0; i < history.length; i++) {
@@ -86,6 +126,35 @@ export async function analyzeGamePgn(
     const fenBefore = fensBefore[i];
     const fenAfter = i + 1 < history.length ? fensBefore[i + 1] : finalFen;
     const sideToMove: 'w' | 'b' = fenBefore.split(' ')[1] as 'w' | 'b';
+    const playedUci = move.from + move.to + (move.promotion ?? '');
+    const phase = detectPhase(fenBefore);
+
+    // -- Fully-in-book fast path --
+    // Both endpoints are in the openings library, so the move is
+    // canonical theory. Synthesize a minimal MoveEval with eval = 0
+    // and skip the engine call. The classifier never overrides `book`
+    // for in-book plies, and the eval graph treats opening flat-zero
+    // as expected (matches chess.com's review behaviour).
+    if (bookMoveIdx[i]) {
+      cacheStats.bookSkips++;
+      moves.push({
+        ply: i + 1,
+        san: move.san,
+        uci: playedUci,
+        fenBefore,
+        fenAfter,
+        evalCpBefore: 0,
+        evalCpAfter: 0,
+        winrateBefore: 0.5,
+        winrateAfter: 0.5,
+        classification: 'book',
+        depth,
+        phase,
+        clockAfter: clocksAfter[i],
+        timeSpent: timeSpentPerPly[i],
+      });
+      continue;
+    }
 
     const [beforeRes, afterRes] = await Promise.all([
       evalByFen.get(fenBefore)!,
@@ -109,7 +178,6 @@ export async function analyzeGamePgn(
     const moverBeforeWinrate = cpToWinrate(sideToMove === 'w' ? beforeCpWhite : -beforeCpWhite);
     const moverAfterWinrate = cpToWinrate(sideToMove === 'w' ? afterCpWhite : -afterCpWhite);
 
-    const playedUci = move.from + move.to + (move.promotion ?? '');
     const bestUci = beforeRes.bestMoveUci ?? '';
     const isBest = bestUci === playedUci;
 
@@ -122,6 +190,7 @@ export async function analyzeGamePgn(
       ply: i + 1,
       inBookPhase: hasOpening,
       fenBefore,
+      fenAfter,
       playedUci,
       prevMoveToSquare,
     });
@@ -162,8 +231,6 @@ export async function analyzeGamePgn(
           mateInAfter: afterRes.scoreMate ?? undefined,
         })
       : undefined;
-
-    const phase = detectPhase(fenBefore);
 
     moves.push({
       ply: i + 1,

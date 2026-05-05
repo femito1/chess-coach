@@ -59,25 +59,60 @@ function fmtDate(t: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/** `'all'` keeps every time class as a separate series (the original
+ *  behaviour); any other value filters the rating trend down to a single
+ *  Chess.com `timeClass` so the user can isolate e.g. blitz progress
+ *  without rapid/bullet noise on top. */
+type ModeKey = 'all' | string;
+
+/** Display order for time-class chips. We only render entries the user
+ *  actually has data for, but we want a stable left-to-right order. */
+const MODE_ORDER = ['rapid', 'blitz', 'bullet', 'daily', 'classical', 'other'];
+
+function modeLabel(m: string): string {
+  return m.charAt(0).toUpperCase() + m.slice(1);
+}
+
 export function ProgressCharts({ games }: { games: Game[] }) {
   // Independent time-window selectors per chart so the user can zoom one
   // without losing context in the other (e.g. last-7-days rating spike
   // vs. all-time accuracy trend).
   const [ratingRange, setRatingRange] = useState<RangeKey>('all');
+  const [ratingMode, setRatingMode] = useState<ModeKey>('all');
   const [accuracyRange, setAccuracyRange] = useState<RangeKey>('all');
 
   const ratingsAll = useMemo(() => ratingTrend(games), [games]);
   const accuracyAll = useMemo(() => accuracyTrend(games), [games]);
   const openings = useMemo(() => winRateByOpening(games, 10), [games]);
 
-  const ratings = useMemo(
-    () =>
-      withinRange(
-        ratingsAll,
-        RANGE_OPTIONS.find((r) => r.key === ratingRange)?.days ?? null,
-      ),
-    [ratingsAll, ratingRange],
-  );
+  // Time classes that actually appear in the rating data, sorted by our
+  // canonical order with any unknown classes appended at the end.
+  const availableModes = useMemo(() => {
+    const present = new Set(ratingsAll.map((r) => r.timeClass));
+    const ordered = MODE_ORDER.filter((m) => present.has(m));
+    for (const m of present) {
+      if (!ordered.includes(m)) ordered.push(m);
+    }
+    return ordered;
+  }, [ratingsAll]);
+
+  // If the currently-selected mode disappears (e.g. data filtered out by
+  // an upstream change), fall back to 'all' so we don't render an empty
+  // chart with a stale chip selected.
+  const effectiveMode: ModeKey =
+    ratingMode === 'all' || availableModes.includes(ratingMode)
+      ? ratingMode
+      : 'all';
+
+  const ratings = useMemo(() => {
+    const inRange = withinRange(
+      ratingsAll,
+      RANGE_OPTIONS.find((r) => r.key === ratingRange)?.days ?? null,
+    );
+    return effectiveMode === 'all'
+      ? inRange
+      : inRange.filter((r) => r.timeClass === effectiveMode);
+  }, [ratingsAll, ratingRange, effectiveMode]);
   const accuracy = useMemo(
     () =>
       withinRange(
@@ -108,14 +143,29 @@ export function ProgressCharts({ games }: { games: Game[] }) {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <div className="card p-3">
-          <div className="flex items-center justify-between mb-1 gap-2">
+          <div className="flex flex-wrap items-center justify-between mb-1 gap-2">
             <div className="text-xs uppercase tracking-wide text-text-muted">
               Rating trend
             </div>
-            <RangePicker value={ratingRange} onChange={setRatingRange} />
+            <div className="flex items-center gap-2 flex-wrap">
+              {availableModes.length > 1 && (
+                <ModePicker
+                  value={effectiveMode}
+                  modes={availableModes}
+                  onChange={setRatingMode}
+                />
+              )}
+              <RangePicker value={ratingRange} onChange={setRatingRange} />
+            </div>
           </div>
           {ratingByClass.rows.length === 0 ? (
-            <EmptyChart text="No rating data in this range." />
+            <EmptyChart
+              text={
+                effectiveMode !== 'all'
+                  ? `No ${modeLabel(effectiveMode)} games in this range.`
+                  : 'No rating data in this range.'
+              }
+            />
           ) : (
             <div className="w-full h-56">
               <ResponsiveContainer>
@@ -329,6 +379,61 @@ function RangePicker({
                 : 'text-text-muted hover:text-text'
             }`}
           >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Pill-style segmented control for picking which Chess.com time class
+ *  to show on the rating trend. Mirrors `RangePicker` so the two
+ *  controls visually pair up. The "All" chip keeps the original
+ *  multi-series behaviour. */
+function ModePicker({
+  value,
+  modes,
+  onChange,
+}: {
+  value: ModeKey;
+  modes: string[];
+  onChange: (next: ModeKey) => void;
+}) {
+  const options: { key: ModeKey; label: string }[] = [
+    { key: 'all', label: 'All' },
+    ...modes.map((m) => ({ key: m, label: modeLabel(m) })),
+  ];
+  return (
+    <div
+      className="flex gap-0.5 text-[11px] rounded-md border border-border bg-bg-raised/40 p-0.5"
+      role="tablist"
+      aria-label="Time class"
+    >
+      {options.map((o) => {
+        const active = o.key === value;
+        const dotColor =
+          o.key === 'all' ? null : (TIME_CLASS_COLOR[o.key] ?? AXIS_COLOR);
+        return (
+          <button
+            key={o.key}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(o.key)}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded transition-colors ${
+              active
+                ? 'bg-accent/20 text-accent'
+                : 'text-text-muted hover:text-text'
+            }`}
+          >
+            {dotColor && (
+              <span
+                aria-hidden
+                className="inline-block w-1.5 h-1.5 rounded-full"
+                style={{ background: dotColor }}
+              />
+            )}
             {o.label}
           </button>
         );

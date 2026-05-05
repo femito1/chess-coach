@@ -1,5 +1,6 @@
 import { Chess, type Square } from 'chess.js';
 import type { Classification } from '@/db/schema';
+import { isBookFen } from './book';
 
 /**
  * Convert a centipawn evaluation (from the side-to-move perspective)
@@ -202,6 +203,11 @@ export interface ClassifyInput {
   inBookPhase: boolean;
   /** FEN before the move. */
   fenBefore: string;
+  /** FEN after the move. Optional for backwards compat with older
+   *  call-sites; supplying it enables FEN-based book detection (any
+   *  move whose endpoints are both in the openings library is `book`,
+   *  regardless of whether the engine considered it #1). */
+  fenAfter?: string;
   /** UCI of the played move. */
   playedUci: string;
   /** Destination square of the previous move (for recapture detection). */
@@ -228,16 +234,23 @@ export function classifyMove(input: ClassifyInput): Classification {
     ply,
     inBookPhase,
     fenBefore,
+    fenAfter,
     playedUci,
     prevMoveToSquare,
   } = input;
 
   const drop = Math.max(0, moverWinrateBefore - moverWinrateAfter);
 
-  // Book: only if the player actually stayed on the engine's top move in
-  // early opening theory. A different "best" existed ⇒ the player left
-  // theory, and we classify the move on its merits instead of hiding it
-  // behind a book label.
+  // Book (FEN-based): if both the before and after positions are in the
+  // openings library, the move is canonical theory by definition. This
+  // takes precedence over the engine's top-move check because the
+  // analyzer's fast path skips engine evaluation for fully-in-book
+  // moves — `isBest` will be false for those, but they're still book.
+  if (fenAfter && isBookFen(fenBefore) && isBookFen(fenAfter)) return 'book';
+
+  // Book (engine-based, legacy): the player stayed on the engine's #1
+  // move early in a recognized opening line. Kept as a fallback for
+  // games whose openings aren't in the library.
   if (isBest && inBookPhase && ply <= 10) return 'book';
 
   if (isBest) {
