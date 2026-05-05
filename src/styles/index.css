@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-bg text-text antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/60;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium
+           bg-bg-raised border border-border text-text hover:border-accent/60 hover:text-accent
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-accent/20 border-accent/40 text-accent hover:bg-accent/30;
+  }
+  .input {
+    @apply w-full rounded-md bg-bg-soft border border-border px-3 py-1.5 text-sm
+           focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/30;
+  }
+  .card {
+    @apply bg-bg-soft border border-border rounded-lg;
+  }
+}
+
+.cg-wrap {
+  width: 100%;
+  height: 100%;
+}
+
+/* Slim, dark-themed scrollbar for any element marked .scrollable. The
+   default OS scrollbar otherwise paints a wide opaque strip on top of
+   list rows (esp. on Linux/Chromium), eating the right edge of long
+   names. We pair this with a small `pr-*` on the list to keep text from
+   tucking under the thumb. Firefox honours the `scrollbar-*` shorthands;
+   Chromium uses the `::-webkit-scrollbar*` pseudo-elements. */
+.scrollable {
+  scrollbar-width: thin;
+  scrollbar-color: #3a4252 transparent;
+}
+.scrollable::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollable::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollable::-webkit-scrollbar-thumb {
+  background-color: #3a4252;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.scrollable::-webkit-scrollbar-thumb:hover {
+  background-color: #4a5366;
+  background-clip: padding-box;
+}
+
+.move-cell.blunder {
+  @apply text-blunder;
+}
+.move-cell.mistake {
+  @apply text-mistake;
+}
+.move-cell.inaccuracy {
+  @apply text-inaccuracy;
+}
+.move-cell.best {
+  @apply text-good;
+}
+.move-cell.current {
+  @apply bg-accent/20 rounded;
+}

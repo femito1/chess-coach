@@ -1,0 +1,172 @@
+import { useEffect } from 'react';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '@/db/schema';
+import { requeueGame } from '@/db/queries';
+import { Board } from '@/components/Board';
+import { EvalGraph } from '@/components/EvalGraph';
+import { MoveList } from '@/components/MoveList';
+import type { MoveEval } from '@/db/schema';
+import { useReviewState } from './useReviewState';
+import { useLiveEval, formatCp } from './LiveEval';
+import { AccuracyPanel } from './AccuracyPanel';
+import { MoveInsight } from './MoveInsight';
+
+export function ReviewPage() {
+  const { id } = useParams<{ id: string }>();
+  const game = useLiveQuery(() => (id ? db.games.get(id) : undefined), [id]);
+  const analysis = useLiveQuery(() => (id ? db.analyses.get(id) : undefined), [id]);
+
+  const rs = useReviewState(game);
+  const [searchParams] = useSearchParams();
+
+  // Deep-link support: /review/:id?ply=N jumps to that ply. Runs only once
+  // per game load, and only if the target is within the mainline.
+  useEffect(() => {
+    const p = Number(searchParams.get('ply'));
+    if (!Number.isFinite(p) || p < 1) return;
+    if (rs.mainlineFens.length === 0) return;
+    rs.goToMainlinePly(Math.min(p, rs.mainlineFens.length - 1));
+    // intentionally depends on length only so we don't re-jump when the user navigates
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game?.id, rs.mainlineFens.length]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      if (e.key === 'ArrowRight') rs.step(1);
+      else if (e.key === 'ArrowLeft') rs.step(-1);
+      else if (e.key === 'Home') rs.goToMainlinePly(0);
+      else if (e.key === 'End') rs.goToMainlinePly(rs.mainlineFens.length - 1);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [rs]);
+
+  const liveEval = useLiveEval(rs.isExploring ? rs.currentFen : '', 14);
+
+  if (!id) return <div>Missing id.</div>;
+  if (game === undefined) return <div className="text-text-muted">Loading…</div>;
+  if (!game) return <div className="text-text-muted">Game not found.</div>;
+
+  const currentMoveEval: MoveEval | undefined =
+    !rs.isExploring && rs.mainlinePly > 0 ? analysis?.moves[rs.mainlinePly - 1] : undefined;
+  const moverColorLabel: 'White' | 'Black' =
+    rs.mainlinePly > 0 && rs.mainlinePly % 2 === 1 ? 'White' : 'Black';
+
+  // Use the dedicated `engineBest` brush so the engine's recommendation
+  // arrow keeps its classic green look even though the chessground
+  // `green` brush has been remapped to chess.com red for user-drawn
+  // shapes.
+  const arrows =
+    !rs.isExploring && currentMoveEval?.bestMoveUci && currentMoveEval.classification !== 'best'
+      ? [{ from: currentMoveEval.bestMoveUci.slice(0, 2), to: currentMoveEval.bestMoveUci.slice(2, 4), brush: 'engineBest' as const }]
+      : rs.isExploring && liveEval?.bestMoveUci
+        ? [{ from: liveEval.bestMoveUci.slice(0, 2), to: liveEval.bestMoveUci.slice(2, 4), brush: 'blue' as const }]
+        : [];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Link to="/games" className="btn text-xs">← Back</Link>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-lg font-semibold truncate">
+            {game.username} <span className="text-text-muted">vs</span> {game.opponent}
+          </h1>
+          <div className="text-xs text-text-muted truncate">
+            {game.opening ?? 'Unknown opening'} · {new Date(game.endTime).toLocaleString()} · {game.timeClass}
+          </div>
+        </div>
+        <a href={game.url} target="_blank" rel="noreferrer" className="btn text-xs">Chess.com ↗</a>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-4 items-start">
+        <div className="space-y-3">
+          <Board
+            fen={rs.currentFen}
+            orientation={game.userColor}
+            lastMoveUci={rs.lastUci}
+            lastMoveClassification={!rs.isExploring ? currentMoveEval?.classification : undefined}
+            arrows={arrows}
+            viewOnly={false}
+            onMove={(m) => rs.tryPlay(m)}
+          />
+
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <div className="flex gap-1">
+              <button className="btn" onClick={() => rs.goToMainlinePly(0)}>⏮</button>
+              <button className="btn" onClick={() => rs.step(-1)}>◀</button>
+              <button className="btn" onClick={() => rs.step(1)}>▶</button>
+              <button className="btn" onClick={() => rs.goToMainlinePly(rs.mainlineFens.length - 1)}>⏭</button>
+              {rs.isExploring && (
+                <button type="button" className="btn-primary ml-2" onClick={() => rs.resetExploration()}>
+                  Return to game
+                </button>
+              )}
+            </div>
+            <div className="text-text-muted text-xs">
+              {rs.isExploring
+                ? `Exploring (+${rs.explorationMoves.length} move${rs.explorationMoves.length === 1 ? '' : 's'})`
+                : `Ply ${rs.mainlinePly}/${rs.mainlineFens.length - 1}`}
+              {' · ← / → keys'}
+            </div>
+          </div>
+
+          {rs.isExploring ? (
+            <div className="card p-3 text-sm border-accent/40 bg-accent/5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs uppercase tracking-wide text-accent">
+                  Engine (depth {liveEval?.depth ?? '…'})
+                </div>
+                <div className="font-mono text-sm">
+                  {liveEval ? formatCp(liveEval.cpWhite, liveEval.mate) : 'thinking…'}
+                </div>
+              </div>
+              <div className="text-xs text-text-muted mt-1">
+                {liveEval?.bestMoveSan
+                  ? <>Best: <span className="font-mono text-good">{liveEval.bestMoveSan}</span></>
+                  : 'Calculating best move…'}
+              </div>
+              <div className="text-xs text-text-muted mt-1">
+                You moved pieces off the original game. Press ← or "Return to game" to go back.
+              </div>
+            </div>
+          ) : analysis ? (
+            <EvalGraph moves={analysis.moves} currentPly={rs.mainlinePly} onJump={rs.goToMainlinePly} />
+          ) : game.analysisStatus === 'error' ? (
+            <div className="card p-4 text-sm border-blunder/40 bg-blunder/5">
+              <div className="font-medium text-blunder mb-1">Analysis failed</div>
+              <div className="text-xs text-text-muted font-mono break-words">
+                {game.analysisError ?? 'unknown error'}
+              </div>
+              <button type="button" className="btn mt-3 text-xs" onClick={() => void requeueGame(game.id)}>
+                Retry analysis
+              </button>
+            </div>
+          ) : (
+            <div className="card p-4 text-sm text-text-muted">
+              {game.analysisStatus === 'running'
+                ? 'Analyzing this game now…'
+                : 'Analysis pending. It will start automatically.'}
+            </div>
+          )}
+
+          {!rs.isExploring && currentMoveEval && (
+            <MoveInsight move={currentMoveEval} moverColor={moverColorLabel} />
+          )}
+        </div>
+
+        <aside className="space-y-3">
+          <AccuracyPanel game={game} />
+          <MoveList
+            moves={analysis?.moves ?? []}
+            currentPly={rs.isExploring ? -1 : rs.mainlinePly}
+            onSelect={rs.goToMainlinePly}
+            explorationFromPly={rs.isExploring ? rs.mainlinePly : null}
+          />
+        </aside>
+      </div>
+    </div>
+  );
+}

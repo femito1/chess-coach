@@ -1,0 +1,310 @@
+export interface InfoLine {
+  depth?: number;
+  seldepth?: number;
+  multipv?: number;
+  scoreCp?: number;
+  scoreMate?: number;
+  nodes?: number;
+  nps?: number;
+  time?: number;
+  pv?: string[];
+}
+
+export interface AnalysisResult {
+  depth: number;
+  bestMoveUci: string | null;
+  scoreCp: number | null;
+  scoreMate: number | null;
+  pv: string[];
+}
+
+type Listener = (line: string) => void;
+
+/**
+ * One Stockfish worker. Owns its UCI handshake and runs at most one
+ * analysis at a time — calling `analyze` while a prior analysis is in
+ * flight cancels the prior one. Multiple instances can be created in
+ * parallel (see `analysisPool`); they don't share state.
+ */
+export class EngineWorker {
+  private worker: Worker | null = null;
+  private ready: Promise<void> | null = null;
+  private listeners = new Set<Listener>();
+  private currentJob: { cancel: () => void } | null = null;
+
+  private async init(): Promise<void> {
+    if (this.ready) return this.ready;
+
+    // Prefer the threaded build only when the page is cross-origin isolated;
+    // otherwise SharedArrayBuffer exists but postMessage of wasm memory still fails.
+    const canThread =
+      typeof SharedArrayBuffer !== 'undefined' &&
+      typeof crossOriginIsolated !== 'undefined' &&
+      crossOriginIsolated === true;
+
+    const candidates = canThread
+      ? ['stockfish-nnue-16.js', 'stockfish-nnue-16-single.js']
+      : ['stockfish-nnue-16-single.js'];
+
+    let lastError: unknown = null;
+    for (const file of candidates) {
+      try {
+        this.worker = await this.startWorker(file);
+        this.ready = this.handshake();
+        return this.ready;
+      } catch (e) {
+        lastError = e;
+        if (this.worker) {
+          this.worker.terminate();
+          this.worker = null;
+        }
+      }
+    }
+    throw new Error(
+      `Stockfish worker failed to start (${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      })`,
+    );
+  }
+
+  private startWorker(file: string): Promise<Worker> {
+    return new Promise<Worker>((resolve, reject) => {
+      const url = `${import.meta.env.BASE_URL}stockfish/${file}`;
+      let worker: Worker;
+      try {
+        worker = new Worker(url);
+      } catch (e) {
+        reject(e instanceof Error ? e : new Error(String(e)));
+        return;
+      }
+
+      let settled = false;
+      const onError = (ev: ErrorEvent) => {
+        if (settled) return;
+        settled = true;
+        const msg =
+          [ev.message, ev.filename, ev.lineno ? `line ${ev.lineno}` : '']
+            .filter(Boolean)
+            .join(' @ ') || 'worker error';
+        reject(new Error(msg));
+      };
+      const onMessageError = () => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('worker messageerror'));
+      };
+      const onFirstMessage = () => {
+        if (settled) return;
+        settled = true;
+        worker.removeEventListener('error', onError);
+        worker.removeEventListener('messageerror', onMessageError);
+        // Keep the error listener for runtime errors.
+        worker.addEventListener('error', (e) =>
+          console.error('[stockfish] runtime error', e),
+        );
+        // Re-forward messages to the engine's listener set.
+        worker.addEventListener('message', (ev: MessageEvent) => {
+          const line = typeof ev.data === 'string' ? ev.data : String(ev.data);
+          for (const l of this.listeners) l(line);
+        });
+        // Forward the first message we just saw (don't drop it).
+        // (It's listened below before resolve.)
+        resolve(worker);
+      };
+
+      worker.addEventListener('error', onError);
+      worker.addEventListener('messageerror', onMessageError);
+
+      // The first message from the worker indicates the script is alive.
+      // Capture it and also forward to listeners.
+      const firstMsg = (ev: MessageEvent) => {
+        worker.removeEventListener('message', firstMsg);
+        const line = typeof ev.data === 'string' ? ev.data : String(ev.data);
+        for (const l of this.listeners) l(line);
+        onFirstMessage();
+      };
+      worker.addEventListener('message', firstMsg);
+
+      // If nothing happens in 8 seconds, assume it's stuck.
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          reject(new Error(`timeout loading ${file}`));
+        }
+      }, 8000);
+
+      // Poke it: some builds only start producing output after the first command.
+      // Sending "uci" is always safe once the worker exists; if the script isn't
+      // ready yet, the Worker buffers postMessage and delivers when onmessage is set.
+      try {
+        worker.postMessage('uci');
+      } catch {
+        // Worker not ready yet; ignore. The startup will produce messages anyway.
+      }
+    });
+  }
+
+  private handshake(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      if (!this.worker) return reject(new Error('no worker'));
+      const timer = setTimeout(() => {
+        offReady();
+        reject(new Error('UCI handshake timeout'));
+      }, 10000);
+      const offReady = this.onLine((line) => {
+        if (line === 'readyok') {
+          clearTimeout(timer);
+          offReady();
+          resolve();
+        }
+      });
+      this.send('uci');
+      this.send('setoption name UCI_AnalyseMode value true');
+      this.send('setoption name Threads value 1');
+      this.send('setoption name Hash value 64');
+      this.send('isready');
+    });
+  }
+
+  private send(cmd: string): void {
+    this.worker?.postMessage(cmd);
+  }
+
+  private onLine(cb: Listener): () => void {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
+  }
+
+  async newGame(): Promise<void> {
+    await this.init();
+    this.send('ucinewgame');
+    await this.waitReady();
+  }
+
+  private waitReady(): Promise<void> {
+    return new Promise((resolve) => {
+      const off = this.onLine((line) => {
+        if (line === 'readyok') {
+          off();
+          resolve();
+        }
+      });
+      this.send('isready');
+    });
+  }
+
+  /**
+   * Analyze a single position to given depth. Returns best move and eval.
+   * Only one analysis may run at a time; calling again cancels the previous.
+   */
+  async analyze(fen: string, depth: number): Promise<AnalysisResult> {
+    await this.init();
+    if (this.currentJob) this.currentJob.cancel();
+
+    return new Promise<AnalysisResult>((resolve, reject) => {
+      let cancelled = false;
+      let lastInfo: InfoLine = {};
+
+      const off = this.onLine((line) => {
+        if (cancelled) return;
+        if (line.startsWith('info ')) {
+          const parsed = parseInfo(line);
+          // We want the latest info with a PV and the requested depth.
+          if (parsed.pv && parsed.pv.length > 0) {
+            lastInfo = { ...lastInfo, ...parsed };
+          }
+        } else if (line.startsWith('bestmove ')) {
+          off();
+          this.currentJob = null;
+          const bestMove = line.split(/\s+/)[1] ?? null;
+          resolve({
+            depth: lastInfo.depth ?? depth,
+            bestMoveUci: bestMove === '(none)' ? null : bestMove,
+            scoreCp: lastInfo.scoreCp ?? null,
+            scoreMate: lastInfo.scoreMate ?? null,
+            pv: lastInfo.pv ?? [],
+          });
+        }
+      });
+
+      this.currentJob = {
+        cancel: () => {
+          cancelled = true;
+          off();
+          this.send('stop');
+          reject(new Error('cancelled'));
+        },
+      };
+
+      this.send(`position fen ${fen}`);
+      this.send(`go depth ${depth}`);
+    });
+  }
+
+  terminate(): void {
+    this.worker?.terminate();
+    this.worker = null;
+    this.ready = null;
+    this.listeners.clear();
+    this.currentJob = null;
+  }
+
+  /** Whether this worker is currently running an analysis. Used by the
+   *  pool to pick a free worker, and to know when to wait. */
+  isBusy(): boolean {
+    return this.currentJob !== null;
+  }
+}
+
+/** Singleton worker used by single-position consumers (live eval in the
+ *  review screen). Keeps the original "cancel previous" semantics: a new
+ *  `analyze()` call cancels any in-flight one on the same worker. */
+export const engine = new EngineWorker();
+
+function parseInfo(line: string): InfoLine {
+  const info: InfoLine = {};
+  const tokens = line.split(/\s+/);
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    const next = tokens[i + 1];
+    switch (t) {
+      case 'depth':
+        info.depth = Number(next);
+        i++;
+        break;
+      case 'seldepth':
+        info.seldepth = Number(next);
+        i++;
+        break;
+      case 'multipv':
+        info.multipv = Number(next);
+        i++;
+        break;
+      case 'nodes':
+        info.nodes = Number(next);
+        i++;
+        break;
+      case 'nps':
+        info.nps = Number(next);
+        i++;
+        break;
+      case 'time':
+        info.time = Number(next);
+        i++;
+        break;
+      case 'score': {
+        const kind = tokens[i + 1];
+        const val = Number(tokens[i + 2]);
+        if (kind === 'cp') info.scoreCp = val;
+        else if (kind === 'mate') info.scoreMate = val;
+        i += 2;
+        break;
+      }
+      case 'pv':
+        info.pv = tokens.slice(i + 1);
+        i = tokens.length;
+        break;
+    }
+  }
+  return info;
+}
