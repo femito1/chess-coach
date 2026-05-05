@@ -29,14 +29,44 @@ function releaseLiveEval(): void {
   }
 }
 
-interface LiveEvalData {
+export interface LiveEvalData {
   depth: number;
   cpWhite: number;
   mate?: number;
   bestMoveUci?: string;
   bestMoveSan?: string;
   winrateWhite: number;
+  /** Side-to-move's winrate at this position (for classification, which
+   *  is always expressed from the mover's perspective). */
+  winrateStm: number;
   running: boolean;
+}
+
+/**
+ * In-memory cache of completed live evals keyed by FEN. The review page
+ * uses this to look up the "before" position's eval after the user has
+ * made an off-mainline move (the active `useLiveEval` will then be
+ * crunching the *new* "after" position; we'd have lost the previous
+ * result without a stash like this).
+ *
+ * Bounded so very long exploration sessions can't grow it unboundedly.
+ */
+const LIVE_EVAL_CACHE_MAX = 64;
+const liveEvalCache = new Map<string, LiveEvalData>();
+
+function rememberLiveEval(fen: string, data: LiveEvalData): void {
+  // Map insertion order = LRU; bump on update by deleting first.
+  liveEvalCache.delete(fen);
+  liveEvalCache.set(fen, data);
+  while (liveEvalCache.size > LIVE_EVAL_CACHE_MAX) {
+    const oldest = liveEvalCache.keys().next().value;
+    if (oldest === undefined) break;
+    liveEvalCache.delete(oldest);
+  }
+}
+
+export function getCachedLiveEval(fen: string): LiveEvalData | undefined {
+  return liveEvalCache.get(fen);
 }
 
 /**
@@ -81,15 +111,18 @@ export function useLiveEval(fen: string, depth = 14): LiveEvalData | null {
             bestMoveSan = undefined;
           }
         }
-        setData({
+        const next: LiveEvalData = {
           depth: res.depth,
           cpWhite,
           mate: res.scoreMate ?? undefined,
           bestMoveUci: res.bestMoveUci ?? undefined,
           bestMoveSan,
           winrateWhite: stm === 'w' ? winrateStm : 1 - winrateStm,
+          winrateStm,
           running: false,
-        });
+        };
+        rememberLiveEval(fen, next);
+        setData(next);
       } catch (e) {
         if ((e as Error).message !== 'cancelled' && !cancelled) {
           setData(null);

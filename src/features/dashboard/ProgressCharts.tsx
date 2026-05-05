@@ -80,9 +80,13 @@ export function ProgressCharts({ games }: { games: Game[] }) {
   const [ratingRange, setRatingRange] = useState<RangeKey>('all');
   const [ratingMode, setRatingMode] = useState<ModeKey>('all');
   const [accuracyRange, setAccuracyRange] = useState<RangeKey>('all');
+  const [accuracyMode, setAccuracyMode] = useState<ModeKey>('all');
 
   const ratingsAll = useMemo(() => ratingTrend(games), [games]);
-  const accuracyAll = useMemo(() => accuracyTrend(games), [games]);
+  // We deliberately compute the unfiltered series first to feed the
+  // mode picker (which needs to know what classes are available); the
+  // filtered version is computed below once we know the effective mode.
+  const accuracyAllNoFilter = useMemo(() => accuracyTrend(games, 'all'), [games]);
   const openings = useMemo(() => winRateByOpening(games, 10), [games]);
 
   // Time classes that actually appear in the rating data, sorted by our
@@ -96,12 +100,28 @@ export function ProgressCharts({ games }: { games: Game[] }) {
     return ordered;
   }, [ratingsAll]);
 
+  // Time classes that actually have *accuracy* data (analyzed games).
+  // Different from `availableModes` because rating data exists for every
+  // imported game whereas accuracy only exists once analysis finishes.
+  const availableAccuracyModes = useMemo(() => {
+    const present = new Set(accuracyAllNoFilter.map((r) => r.timeClass));
+    const ordered = MODE_ORDER.filter((m) => present.has(m));
+    for (const m of present) {
+      if (!ordered.includes(m)) ordered.push(m);
+    }
+    return ordered;
+  }, [accuracyAllNoFilter]);
+
   // If the currently-selected mode disappears (e.g. data filtered out by
   // an upstream change), fall back to 'all' so we don't render an empty
   // chart with a stale chip selected.
   const effectiveMode: ModeKey =
     ratingMode === 'all' || availableModes.includes(ratingMode)
       ? ratingMode
+      : 'all';
+  const effectiveAccuracyMode: ModeKey =
+    accuracyMode === 'all' || availableAccuracyModes.includes(accuracyMode)
+      ? accuracyMode
       : 'all';
 
   const ratings = useMemo(() => {
@@ -113,13 +133,24 @@ export function ProgressCharts({ games }: { games: Game[] }) {
       ? inRange
       : inRange.filter((r) => r.timeClass === effectiveMode);
   }, [ratingsAll, ratingRange, effectiveMode]);
+
+  // The accuracy series is recomputed (not just filtered) when the mode
+  // changes, so the rolling mean follows only that mode's points instead
+  // of being polluted by other classes' accuracy.
+  const accuracyAllForMode = useMemo(
+    () =>
+      effectiveAccuracyMode === 'all'
+        ? accuracyAllNoFilter
+        : accuracyTrend(games, effectiveAccuracyMode),
+    [games, effectiveAccuracyMode, accuracyAllNoFilter],
+  );
   const accuracy = useMemo(
     () =>
       withinRange(
-        accuracyAll,
+        accuracyAllForMode,
         RANGE_OPTIONS.find((r) => r.key === accuracyRange)?.days ?? null,
       ),
-    [accuracyAll, accuracyRange],
+    [accuracyAllForMode, accuracyRange],
   );
 
   // Pivot rating points so each time class is its own series (recharts
@@ -211,18 +242,29 @@ export function ProgressCharts({ games }: { games: Game[] }) {
         </div>
 
         <div className="card p-3">
-          <div className="flex items-center justify-between mb-1 gap-2">
+          <div className="flex flex-wrap items-center justify-between mb-1 gap-2">
             <div className="text-xs uppercase tracking-wide text-text-muted">
               Accuracy over time
             </div>
-            <RangePicker value={accuracyRange} onChange={setAccuracyRange} />
+            <div className="flex items-center gap-2 flex-wrap">
+              {availableAccuracyModes.length > 1 && (
+                <ModePicker
+                  value={effectiveAccuracyMode}
+                  modes={availableAccuracyModes}
+                  onChange={setAccuracyMode}
+                />
+              )}
+              <RangePicker value={accuracyRange} onChange={setAccuracyRange} />
+            </div>
           </div>
           {accuracy.length === 0 ? (
             <EmptyChart
               text={
-                accuracyAll.length === 0
+                accuracyAllNoFilter.length === 0
                   ? 'Waiting on analyzed games.'
-                  : 'No analyzed games in this range.'
+                  : effectiveAccuracyMode !== 'all'
+                    ? `No analyzed ${modeLabel(effectiveAccuracyMode)} games in this range.`
+                    : 'No analyzed games in this range.'
               }
             />
           ) : (

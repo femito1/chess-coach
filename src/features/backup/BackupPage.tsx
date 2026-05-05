@@ -109,11 +109,26 @@ export function BackupPage() {
   async function handlePersist() {
     const granted = await requestPersistentStorage();
     setInfo((prev) => (prev ? { ...prev, persistent: granted } : prev));
-    setMessage(
-      granted
-        ? 'Persistent storage granted — the browser will not evict your data.'
-        : 'Browser declined persistent storage. Your data is still saved, but may be evicted under pressure.',
-    );
+    if (granted) {
+      setMessage('Persistent storage granted — the browser will not evict your data.');
+      setError(null);
+    } else {
+      // Chromium-based browsers (Chrome, Edge, Brave, Arc) auto-grant
+      // this only when the site looks "engaged" — bookmarked, installed
+      // as a PWA, frequently visited, granted notifications, etc.
+      // Firefox shows a permission prompt on the first call. Safari may
+      // silently auto-deny. None of these failure modes mean the data
+      // is gone — IndexedDB still works the same — they just mean the
+      // browser is allowed to evict under disk pressure.
+      setMessage(null);
+      setError(
+        "The browser declined the persistence request. Your data is still saved, " +
+          "but the browser is allowed to evict it under heavy disk pressure. " +
+          "Chrome/Edge usually auto-grant this once you bookmark the site, install it " +
+          "as a PWA, or visit it a few more times. Firefox shows a prompt the first " +
+          "time. Until then, exporting backups is the safety net.",
+      );
+    }
   }
 
   const usagePct = info && info.quota > 0 ? Math.min(100, (info.usage / info.quota) * 100) : 0;

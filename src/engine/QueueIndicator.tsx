@@ -1,6 +1,7 @@
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useEffect, useState } from 'react';
 import { countByStatus } from '@/db/queries';
 import { useQueueStore } from './queue';
+import type { AnalysisStatus } from '@/db/schema';
 
 /**
  * Floating analysis-queue status pill in the bottom-right of the
@@ -11,10 +12,51 @@ import { useQueueStore } from './queue';
  *
  * Hidden completely when there's nothing to communicate (no games at
  * all, or every game finished without errors and the queue is idle).
+ *
+ * Performance note: we deliberately do NOT use `useLiveQuery` here.
+ * `countByStatus` reads the `games` table; with `useLiveQuery`, every
+ * single per-move write the analyzer makes (and there are *thousands*
+ * during a queue run) would re-fire all four indexed counts AND
+ * re-render the always-mounted layout. Instead we poll on a slow
+ * interval when the queue is running and only re-count on queue
+ * state transitions (start / stop / current-game-change) plus the
+ * initial mount. That's enough to keep the pill accurate without
+ * making the rest of the app feel glued to the engine.
  */
+const POLL_RUNNING_MS = 1500;
+const POLL_IDLE_MS = 5000;
+
 export function QueueIndicator() {
-  const counts = useLiveQuery(() => countByStatus(), []);
-  const { running, currentPly, currentTotal, paused, setPaused } = useQueueStore();
+  const { running, currentPly, currentTotal, currentGameId, paused, setPaused } =
+    useQueueStore();
+  const [counts, setCounts] = useState<Record<AnalysisStatus, number> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const next = await countByStatus();
+        if (!cancelled) setCounts(next);
+      } catch {
+        /* ignore — UI-only signal */
+      }
+      if (cancelled) return;
+      timer = setTimeout(tick, running ? POLL_RUNNING_MS : POLL_IDLE_MS);
+    };
+
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // We re-establish the polling loop whenever the queue's "running"
+    // state flips OR the current game changes. That way new imports show
+    // up promptly in the pill without us watching every single move
+    // write through Dexie's table-change firehose.
+  }, [running, currentGameId]);
 
   if (!counts) return null;
   const pending = counts.pending + counts.running;
@@ -23,7 +65,6 @@ export function QueueIndicator() {
   const total = pending + done + errors;
 
   if (total === 0) return null;
-  // Idle + everything analyzed cleanly: no signal to surface.
   if (!running && pending === 0 && errors === 0) return null;
 
   return (

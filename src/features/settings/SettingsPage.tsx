@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { getSettings, updateSettings, db, type TimeClassFilter } from '@/db/schema';
 import { requeueGamesByScope, type RequeueScope } from '@/db/queries';
 import { TimeClassFilterSelect } from '@/components/TimeClassFilter';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 
 export function SettingsPage() {
   const [username, setUsername] = useState('');
@@ -13,7 +13,10 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [requeueStatus, setRequeueStatus] = useState<string | null>(null);
-  const games = useLiveQuery(() => db.games.toArray(), []);
+  // Settings only uses `games` to populate the time-class filter dropdown
+  // — staleness of a few seconds is invisible. Throttled for the same
+  // reason as the dashboard / weaknesses pages.
+  const games = useThrottledLiveQuery(() => db.games.toArray(), [], 1500);
 
   useEffect(() => {
     void getSettings().then((s) => {

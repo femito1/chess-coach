@@ -1,27 +1,50 @@
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { countByStatus, listGames, requeueAllErrors } from '@/db/queries';
 import { db } from '@/db/schema';
 import { isDue } from '@/srs/sm2';
 import { ProgressCharts } from './ProgressCharts';
 import { StorageBanner } from './StorageBanner';
+import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
+import { totalSecondsPlayed } from './progress';
 
 export function DashboardPage() {
-  const counts = useLiveQuery(() => countByStatus(), []);
-  const games = useLiveQuery(() => listGames(), []);
-  const duePuzzles = useLiveQuery(async () => {
-    const ps = await db.puzzles.toArray();
-    return ps.filter((p) => isDue(p.srs)).length;
-  }, []);
-  const dueRepCards = useLiveQuery(async () => {
-    const cs = await db.repertoireCards.toArray();
-    return cs.filter((c) => isDue(c.srs)).length;
-  }, []);
+  // Throttled to 1.5 s. These four queries together pull every game
+  // (with PGN!), every puzzle, and every repertoire card on each Dexie
+  // change event. While the analyzer is running, that fires hundreds of
+  // times per minute and makes the dashboard feel glued to the engine.
+  // 1.5 s of staleness on aggregate counters is invisible to the user.
+  const counts = useThrottledLiveQuery(() => countByStatus(), [], 1500);
+  const games = useThrottledLiveQuery(() => listGames(), [], 1500);
+  const duePuzzles = useThrottledLiveQuery(
+    async () => {
+      const ps = await db.puzzles.toArray();
+      return ps.filter((p) => isDue(p.srs)).length;
+    },
+    [],
+    1500,
+  );
+  const dueRepCards = useThrottledLiveQuery(
+    async () => {
+      const cs = await db.repertoireCards.toArray();
+      return cs.filter((c) => isDue(c.srs)).length;
+    },
+    [],
+    1500,
+  );
 
   const total = games?.length ?? 0;
   const wins = games?.filter((g) => g.result === 'win').length ?? 0;
   const losses = games?.filter((g) => g.result === 'loss').length ?? 0;
   const draws = games?.filter((g) => g.result === 'draw').length ?? 0;
+
+  // Memoised because `totalSecondsPlayed` parses every PGN to extract
+  // clocks. With a 1 k-game library that's non-trivial CPU; we don't
+  // want to re-run on every dashboard re-render.
+  const hoursPlayed = useMemo(
+    () => totalSecondsPlayed(games ?? []) / 3600,
+    [games],
+  );
 
   const recent = games?.slice(0, 5) ?? [];
 
@@ -51,6 +74,10 @@ export function DashboardPage() {
         <Stat label="Queued" value={(counts?.pending ?? 0) + (counts?.running ?? 0)} />
         <Stat label="Errors" value={counts?.error ?? 0} tone={counts?.error ? 'bad' : undefined} />
         <Stat label="Avg accuracy" value={avgAccuracy(games ?? [])} suffix="%" />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Stat label="Hours played" value={formatHours(hoursPlayed)} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -173,4 +200,15 @@ function avgAccuracy(games: { accuracy?: { white: number; black: number }; userC
   if (withAcc.length === 0) return '—';
   const sum = withAcc.reduce((acc, g) => acc + (g.userColor === 'white' ? g.accuracy!.white : g.accuracy!.black), 0);
   return (sum / withAcc.length).toFixed(1);
+}
+
+/** Compact hours-played formatter. Below an hour we show minutes; below
+ *  ten hours we keep one decimal of precision (so 6.4 h doesn't round to
+ *  6 h on a few short sessions); past that we show whole hours since
+ *  the decimal is just noise. */
+function formatHours(h: number): string {
+  if (!Number.isFinite(h) || h <= 0) return '—';
+  if (h < 1) return `${Math.round(h * 60)} min`;
+  if (h < 10) return `${h.toFixed(1)} h`;
+  return `${Math.round(h)} h`;
 }

@@ -1,16 +1,18 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { Chess } from 'chess.js';
 import { db } from '@/db/schema';
 import { requeueGame } from '@/db/queries';
 import { Board } from '@/components/Board';
 import { EvalGraph } from '@/components/EvalGraph';
 import { MoveList } from '@/components/MoveList';
-import type { MoveEval } from '@/db/schema';
+import type { Classification, MoveEval } from '@/db/schema';
 import { useReviewState } from './useReviewState';
-import { useLiveEval, formatCp } from './LiveEval';
+import { useLiveEval, formatCp, getCachedLiveEval } from './LiveEval';
 import { AccuracyPanel } from './AccuracyPanel';
 import { MoveInsight } from './MoveInsight';
+import { classifyMove, CLASSIFICATION_LABEL } from '@/engine/classify';
 
 export function ReviewPage() {
   const { id } = useParams<{ id: string }>();
@@ -45,6 +47,127 @@ export function ReviewPage() {
   }, [rs]);
 
   const liveEval = useLiveEval(rs.isExploring ? rs.currentFen : '', 14);
+
+  // Off-mainline classification + insight data:
+  // When the user has played at least one exploration move, classify
+  // the most recent one using the cached eval of the position *before*
+  // the move (`prevFen`) and the live eval of the position *after*
+  // (`rs.currentFen`). Uses the same `classifyMove` heuristic the
+  // analyzer applies to mainline moves so the badge matches what the
+  // user is used to seeing on real game moves.
+  //
+  // We also surface the SAN of the played move and the SAN of what the
+  // engine actually wanted from the *before* position — without the
+  // latter, the user gets a confusing UI where the badge says "best /
+  // brilliant" but the engine panel below shows a different move (which
+  // is the engine's preferred *response* to their move, not the
+  // alternative they should have played).
+  const explorationInsight = useMemo<
+    | {
+        classification: Classification;
+        moverColor: 'White' | 'Black';
+        playedSan: string;
+        engineWantedSan?: string;
+        engineWantedWasPlayed: boolean;
+        evalAfterCpWhite: number;
+        mateAfter?: number;
+      }
+    | undefined
+  >(() => {
+    if (!rs.isExploring) return undefined;
+    if (rs.explorationMoves.length === 0) return undefined;
+    if (!liveEval || liveEval.running) return undefined;
+
+    const last = rs.explorationMoves[rs.explorationMoves.length - 1];
+    const prevFen =
+      rs.explorationMoves.length >= 2
+        ? rs.explorationMoves[rs.explorationMoves.length - 2].fen
+        : rs.mainlineFens[rs.mainlinePly];
+    if (!prevFen) return undefined;
+
+    // "Before" eval. Two sources, in priority order:
+    //   1. Live cache — populated as soon as `useLiveEval` resolves a
+    //      position. Covers every pos beyond the first exploration move.
+    //   2. Mainline analysis fallback — for the very first off-mainline
+    //      move, `prevFen` is `mainlineFens[mainlinePly]`. We don't have
+    //      a live eval for it (we only kick the engine off in
+    //      exploration), but we DO have the stored mainline `MoveEval`
+    //      whose `winrateBefore` is exactly the side-to-move winrate at
+    //      that fen, and whose `bestMoveUci` is the engine's #1 there.
+    let moverWinrateBefore: number | undefined;
+    let bestUciBefore: string | undefined;
+    const cached = getCachedLiveEval(prevFen);
+    if (cached) {
+      moverWinrateBefore = cached.winrateStm;
+      bestUciBefore = cached.bestMoveUci;
+    } else if (
+      rs.explorationMoves.length === 1 &&
+      analysis &&
+      analysis.moves[rs.mainlinePly]
+    ) {
+      const branchPoint = analysis.moves[rs.mainlinePly];
+      moverWinrateBefore = branchPoint.winrateBefore;
+      bestUciBefore = branchPoint.bestMoveUci;
+    }
+    if (moverWinrateBefore == null) return undefined;
+
+    // Mover's winrate at `currentFen` = `1 - side-to-move-at-currentFen
+    // winrate`, because the side-to-move has flipped since the mover
+    // played their move.
+    const moverWinrateAfter = 1 - liveEval.winrateStm;
+    const isBest = bestUciBefore != null && bestUciBefore === last.uci;
+
+    const classification = classifyMove({
+      moverWinrateBefore,
+      moverWinrateAfter,
+      isBest,
+      // We don't know the original ply; pass a high number so we don't
+      // trip the early-game `book` shortcut for any non-book exploration.
+      ply: 99,
+      inBookPhase: false,
+      fenBefore: prevFen,
+      fenAfter: rs.currentFen,
+      playedUci: last.uci,
+      prevMoveToSquare: undefined,
+    });
+
+    const moverColor: 'White' | 'Black' =
+      prevFen.split(' ')[1] === 'w' ? 'White' : 'Black';
+
+    let engineWantedSan: string | undefined;
+    if (bestUciBefore) {
+      try {
+        const c = new Chess(prevFen);
+        const m = c.move({
+          from: bestUciBefore.slice(0, 2),
+          to: bestUciBefore.slice(2, 4),
+          promotion: bestUciBefore.slice(4, 5) || undefined,
+        });
+        engineWantedSan = m?.san;
+      } catch {
+        engineWantedSan = undefined;
+      }
+    }
+
+    return {
+      classification,
+      moverColor,
+      playedSan: last.san,
+      engineWantedSan,
+      engineWantedWasPlayed: isBest,
+      evalAfterCpWhite: liveEval.cpWhite,
+      mateAfter: liveEval.mate,
+    };
+  }, [
+    rs.isExploring,
+    rs.explorationMoves,
+    rs.mainlineFens,
+    rs.mainlinePly,
+    rs.currentFen,
+    liveEval,
+    analysis,
+  ]);
+  const explorationClassification = explorationInsight?.classification;
 
   if (!id) return <div>Missing id.</div>;
   if (game === undefined) return <div className="text-text-muted">Loading…</div>;
@@ -87,7 +210,11 @@ export function ReviewPage() {
             fen={rs.currentFen}
             orientation={game.userColor}
             lastMoveUci={rs.lastUci}
-            lastMoveClassification={!rs.isExploring ? currentMoveEval?.classification : undefined}
+            lastMoveClassification={
+              rs.isExploring
+                ? explorationClassification
+                : currentMoveEval?.classification
+            }
             arrows={arrows}
             viewOnly={false}
             onMove={(m) => rs.tryPlay(m)}
@@ -114,24 +241,34 @@ export function ReviewPage() {
           </div>
 
           {rs.isExploring ? (
-            <div className="card p-3 text-sm border-accent/40 bg-accent/5">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-xs uppercase tracking-wide text-accent">
-                  Engine (depth {liveEval?.depth ?? '…'})
+            <>
+              {explorationInsight && (
+                <ExplorationMoveInsight insight={explorationInsight} />
+              )}
+              <div className="card p-3 text-sm border-accent/40 bg-accent/5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs uppercase tracking-wide text-accent">
+                    Engine (depth {liveEval?.depth ?? '…'})
+                  </div>
+                  <div className="font-mono text-sm">
+                    {liveEval ? formatCp(liveEval.cpWhite, liveEval.mate) : 'thinking…'}
+                  </div>
                 </div>
-                <div className="font-mono text-sm">
-                  {liveEval ? formatCp(liveEval.cpWhite, liveEval.mate) : 'thinking…'}
+                <div className="text-xs text-text-muted mt-1">
+                  {liveEval?.bestMoveSan ? (
+                    <>
+                      Best response from this position:{' '}
+                      <span className="font-mono text-good">{liveEval.bestMoveSan}</span>
+                    </>
+                  ) : (
+                    'Calculating best response…'
+                  )}
+                </div>
+                <div className="text-xs text-text-muted mt-1">
+                  You moved pieces off the original game. Press ← or "Return to game" to go back.
                 </div>
               </div>
-              <div className="text-xs text-text-muted mt-1">
-                {liveEval?.bestMoveSan
-                  ? <>Best: <span className="font-mono text-good">{liveEval.bestMoveSan}</span></>
-                  : 'Calculating best move…'}
-              </div>
-              <div className="text-xs text-text-muted mt-1">
-                You moved pieces off the original game. Press ← or "Return to game" to go back.
-              </div>
-            </div>
+            </>
           ) : analysis ? (
             <EvalGraph moves={analysis.moves} currentPly={rs.mainlinePly} onJump={rs.goToMainlinePly} />
           ) : game.analysisStatus === 'error' ? (
@@ -167,6 +304,77 @@ export function ReviewPage() {
           />
         </aside>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Mirrors `MoveInsight` for off-mainline moves. We can't reuse the
+ * mainline component directly because it's typed against `MoveEval`
+ * (which is the analyzer's stored shape, not the live-eval shape).
+ *
+ * Crucially, this component shows BOTH the user's played move + its
+ * classification AND what the engine actually wanted from the position
+ * before the move. Without that second line, a user who sees the `!!`
+ * (Brilliant) badge on a move and then sees a *different* move labelled
+ * "Best:" in the panel below assumes the badge is wrong — when in fact
+ * the panel was showing the engine's preferred *response* to their move
+ * (the live eval is for the *new* position with side-to-move flipped).
+ */
+function ExplorationMoveInsight({
+  insight,
+}: {
+  insight: {
+    classification: Classification;
+    moverColor: 'White' | 'Black';
+    playedSan: string;
+    engineWantedSan?: string;
+    engineWantedWasPlayed: boolean;
+    evalAfterCpWhite: number;
+    mateAfter?: number;
+  };
+}) {
+  const label = CLASSIFICATION_LABEL[insight.classification];
+  const tone =
+    insight.classification === 'blunder'
+      ? 'border-blunder/60 bg-blunder/10'
+      : insight.classification === 'mistake'
+        ? 'border-mistake/60 bg-mistake/10'
+        : insight.classification === 'miss'
+          ? 'border-miss/60 bg-miss/10'
+          : insight.classification === 'inaccuracy'
+            ? 'border-inaccuracy/60 bg-inaccuracy/10'
+            : insight.classification === 'brilliant'
+              ? 'border-brilliant/60 bg-brilliant/10'
+              : insight.classification === 'best' || insight.classification === 'excellent'
+                ? 'border-good/60 bg-good/10'
+                : 'border-border bg-bg-soft';
+
+  const evalAfter = formatCp(insight.evalAfterCpWhite, insight.mateAfter);
+
+  return (
+    <div className={`card p-3 border ${tone}`}>
+      <div className="text-xs uppercase tracking-wide text-text-muted">{label}</div>
+      <div className="text-sm">
+        {insight.moverColor} played{' '}
+        <span className="font-mono font-semibold">{insight.playedSan}</span>.
+        {insight.engineWantedSan && (
+          insight.engineWantedWasPlayed ? (
+            <>
+              {' '}The engine had it as the top move.
+            </>
+          ) : (
+            <>
+              {' '}Engine preferred{' '}
+              <span className="font-mono text-good font-semibold">
+                {insight.engineWantedSan}
+              </span>
+              .
+            </>
+          )
+        )}
+      </div>
+      <div className="text-xs text-text-muted mt-1">Eval after: {evalAfter}</div>
     </div>
   );
 }

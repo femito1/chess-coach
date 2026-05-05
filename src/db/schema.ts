@@ -139,6 +139,19 @@ export interface Settings {
   puzzleMinSwingCp?: number;
   /** Default time-class filter applied to weaknesses + puzzles pages. */
   timeClassFilter?: TimeClassFilter;
+  /** Last version of the boot-time `recomputeClassificationsAndAccuracies`
+   *  pass that ran successfully against this DB. We bump
+   *  `RECOMPUTE_VERSION` in `src/db/queries.ts` whenever the classification
+   *  / accuracy / motif rules change; if the stored version matches the
+   *  current one, the pass is skipped on boot. This is the single biggest
+   *  startup-time win for libraries with thousands of analyzed games — a
+   *  full pass over 5 k games can take many seconds, and re-running it on
+   *  every page reload was making the app feel frozen for the first few
+   *  seconds after navigation. */
+  lastRecomputeVersion?: number;
+  /** Same idea for the boot-time opening-metadata refresh. Bumped only
+   *  when `reparseOpeningFromPgn` changes its output for existing PGNs. */
+  lastOpeningRefreshVersion?: number;
 }
 
 /* =======================================================================

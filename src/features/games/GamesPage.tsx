@@ -1,14 +1,17 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { listGames, requeueGame } from '@/db/queries';
 import type { AnalysisStatus, GameResult } from '@/db/schema';
+import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 
 type ResultFilter = 'all' | GameResult;
 type StatusFilter = 'all' | AnalysisStatus;
 
 export function GamesPage() {
-  const games = useLiveQuery(() => listGames(), []);
+  // Throttled — `listGames()` pulls every game (with PGN). Without
+  // throttling the analyzer's per-move writes refetch the whole table on
+  // each move, which is the dominant cause of lag while the queue runs.
+  const games = useThrottledLiveQuery(() => listGames(), [], 1000);
   const [query, setQuery] = useState('');
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');

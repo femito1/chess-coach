@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { db, getSettings, updateSettings } from '@/db/schema';
 import type { Analysis, TimeClassFilter } from '@/db/schema';
 import { aggregateMistakes } from './aggregate';
 import { MOTIF_LABEL } from '@/engine/motifs';
 import { TimeClassFilterSelect } from '@/components/TimeClassFilter';
 import { gameMatchesFilter, labelFor } from '@/lib/timeClass';
+import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 
 export function WeaknessesPage() {
-  const games = useLiveQuery(() => db.games.toArray(), []);
+  // Throttled to 1 s: the analyzer can fire hundreds of `db.games`
+  // writes per minute during a queue run. Re-running this page's two
+  // heavy aggregations on every one of those writes makes the whole app
+  // feel laggy. One-second staleness is invisible on an aggregate page.
+  const games = useThrottledLiveQuery(() => db.games.toArray(), [], 1000);
   const [filter, setFilter] = useState<TimeClassFilter>('rapid');
 
   // Load saved filter preference once.
@@ -28,12 +32,16 @@ export function WeaknessesPage() {
   // filter. Each Analysis carries the full move list (often 40-100
   // entries × hundreds of bytes each), so bypassing irrelevant
   // analyses is a meaningful RAM saving on a multi-time-class library.
-  const analyses = useLiveQuery(async () => {
-    if (filteredGames.length === 0) return [] as Analysis[];
-    const ids = filteredGames.map((g) => g.id);
-    const rows = await db.analyses.bulkGet(ids);
-    return rows.filter((a): a is Analysis => Boolean(a));
-  }, [filteredGames]);
+  const analyses = useThrottledLiveQuery(
+    async () => {
+      if (filteredGames.length === 0) return [] as Analysis[];
+      const ids = filteredGames.map((g) => g.id);
+      const rows = await db.analyses.bulkGet(ids);
+      return rows.filter((a): a is Analysis => Boolean(a));
+    },
+    [filteredGames],
+    1000,
+  );
 
   const agg = useMemo(() => {
     if (!analyses) return null;

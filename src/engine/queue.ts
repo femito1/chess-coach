@@ -47,6 +47,34 @@ export const useQueueStore = create<QueueState>((set) => ({
   setPaused: (paused) => set({ paused }),
 }));
 
+/**
+ * Boot pipeline state. This is separate from the queue's running state
+ * because the *housekeeping* passes (recompute / opening refresh) can
+ * be slow on large libraries, and we want a global UI signal — a
+ * spinner / progress overlay — for the user to know "the app is busy
+ * fixing up old data, hang on" rather than thinking it's hung.
+ *
+ * `phase` is the human-readable label of the slowest in-flight pass.
+ * `null` means boot housekeeping is fully done.
+ */
+interface BootState {
+  /** Human label of the in-flight pass, or null when idle. */
+  phase: string | null;
+  /** Whether the slow housekeeping has actually started. We delay
+   *  surfacing the overlay until this is true, so fast boots (skipped
+   *  passes thanks to the version stamp) never flash a spinner. */
+  started: boolean;
+  setPhase: (phase: string | null) => void;
+  setStarted: (started: boolean) => void;
+}
+
+export const useBootStore = create<BootState>((set) => ({
+  phase: null,
+  started: false,
+  setPhase: (phase) => set({ phase }),
+  setStarted: (started) => set({ started }),
+}));
+
 let started = false;
 
 /**
@@ -85,6 +113,20 @@ export async function startAnalysisQueue(): Promise<void> {
   // them sequentially in the background so they don't compete with the
   // engine workers.
   void (async () => {
+    const boot = useBootStore.getState();
+
+    // We delay surfacing the boot banner so warm boots — where every
+    // pass either has nothing to do or short-circuits via its version
+    // stamp — never flash a spinner. The banner is only shown if the
+    // overall housekeeping work is still going past `BOOT_BANNER_DELAY_MS`.
+    const BOOT_BANNER_DELAY_MS = 400;
+    const bannerTimer = setTimeout(() => {
+      // If we're still here after the grace period, we have real work;
+      // surface the banner.
+      boot.setStarted(true);
+    }, BOOT_BANNER_DELAY_MS);
+
+    boot.setPhase('Healing stale errors…');
     await bootStep('requeueStaleErrors', async () => {
       const healed = await requeueStaleErrors();
       if (healed > 0) {
@@ -93,6 +135,8 @@ export async function startAnalysisQueue(): Promise<void> {
         );
       }
     });
+
+    boot.setPhase('Refreshing opening metadata…');
     await bootStep('refreshOpeningMetadata', async () => {
       const reopened = await refreshOpeningMetadata();
       if (reopened > 0) {
@@ -101,6 +145,8 @@ export async function startAnalysisQueue(): Promise<void> {
         );
       }
     });
+
+    boot.setPhase('Recomputing classifications & accuracy…');
     // Re-classify moves and refresh accuracy with the current rules,
     // without re-running Stockfish. Slow on large libraries (~10s+ for
     // hundreds of games), which is why it lives off the critical path.
@@ -112,6 +158,10 @@ export async function startAnalysisQueue(): Promise<void> {
         );
       }
     });
+
+    clearTimeout(bannerTimer);
+    boot.setPhase(null);
+    boot.setStarted(false);
   })();
 }
 

@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { QueueIndicator } from '@/engine/QueueIndicator';
+import { BootBanner } from '@/engine/BootBanner';
 import { useEffect } from 'react';
 import { startAnalysisQueue } from '@/engine/queue';
 import { ProfileChip } from './ProfileChip';
@@ -42,6 +43,9 @@ export function AppLayout() {
       {/* Floating queue status — outside the header flex so its width
           changes can never reflow the nav or profile chip. */}
       <QueueIndicator />
+      {/* Boot-time housekeeping spinner. Self-hides when the slow
+          passes are done (or never appears at all on warm boots). */}
+      <BootBanner />
     </div>
   );
 }
