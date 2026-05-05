@@ -10,7 +10,6 @@ import { gameMatchesFilter, labelFor } from '@/lib/timeClass';
 
 export function WeaknessesPage() {
   const games = useLiveQuery(() => db.games.toArray(), []);
-  const analyses = useLiveQuery(() => db.analyses.toArray(), []);
   const [filter, setFilter] = useState<TimeClassFilter>('rapid');
 
   // Load saved filter preference once.
@@ -24,6 +23,17 @@ export function WeaknessesPage() {
     () => (games ?? []).filter((g) => gameMatchesFilter(g, filter)),
     [games, filter],
   );
+
+  // Only fetch analyses for the games that survive the time-class
+  // filter. Each Analysis carries the full move list (often 40-100
+  // entries × hundreds of bytes each), so bypassing irrelevant
+  // analyses is a meaningful RAM saving on a multi-time-class library.
+  const analyses = useLiveQuery(async () => {
+    if (filteredGames.length === 0) return [] as Analysis[];
+    const ids = filteredGames.map((g) => g.id);
+    const rows = await db.analyses.bulkGet(ids);
+    return rows.filter((a): a is Analysis => Boolean(a));
+  }, [filteredGames]);
 
   const agg = useMemo(() => {
     if (!analyses) return null;

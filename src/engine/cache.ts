@@ -45,13 +45,31 @@ export const cacheStats = {
   misses: 0,
   inflightCoalesced: 0,
   bookSkips: 0,
+  evictions: 0,
   reset(): void {
     this.hits = 0;
     this.misses = 0;
     this.inflightCoalesced = 0;
     this.bookSkips = 0;
+    this.evictions = 0;
   },
 };
+
+/** Hard cap on persistent rows. Each row is small (a couple of hundred
+ *  bytes) but unbounded growth still matters: IndexedDB usage
+ *  contributes to the per-origin quota, and very large tables slow
+ *  Dexie's first-load index hydration. Past this cap we evict the
+ *  oldest rows (by `savedAt`) down to `EVAL_CACHE_TARGET_ROWS`. */
+const EVAL_CACHE_MAX_ROWS = 50_000;
+const EVAL_CACHE_TARGET_ROWS = 40_000;
+/** Eviction is amortised: we only check the row count once every
+ *  N writes to keep the steady-state cost negligible. */
+const EVAL_CACHE_CHECK_INTERVAL = 200;
+/** Touch-on-access: a hit refreshes its `savedAt` so the cache behaves
+ *  as LRU instead of FIFO. We skip the write if the entry is younger
+ *  than this threshold, so re-analysis of the same game during a
+ *  session doesn't generate a write per FEN. */
+const EVAL_CACHE_TOUCH_AFTER_MS = 60 * 60 * 1000;
 
 function entryToResult(e: EvalCacheEntry): AnalysisResult {
   return {
@@ -77,14 +95,34 @@ async function lookup(
   depth: number,
 ): Promise<AnalysisResult | null> {
   const exact = await db.evalCache.get(cacheKey(fen, depth));
-  if (exact) return entryToResult(exact);
+  if (exact) {
+    void touchSavedAt(exact);
+    return entryToResult(exact);
+  }
   // Look for a deeper cached result for the same FEN.
   const deeper = await db.evalCache
     .where('fen')
     .equals(fen)
     .filter((e) => e.depth > depth)
     .first();
-  return deeper ? entryToResult(deeper) : null;
+  if (deeper) {
+    void touchSavedAt(deeper);
+    return entryToResult(deeper);
+  }
+  return null;
+}
+
+/** Bump `savedAt` on a hit so the entry is preserved by LRU eviction.
+ *  Throttled so a session that re-reads the same row repeatedly doesn't
+ *  spam IDB writes. Best-effort — failures here are silent. */
+async function touchSavedAt(entry: EvalCacheEntry): Promise<void> {
+  const now = Date.now();
+  if (now - entry.savedAt < EVAL_CACHE_TOUCH_AFTER_MS) return;
+  try {
+    await db.evalCache.update(entry.key, { savedAt: now });
+  } catch {
+    /* ignore — touch-on-access is purely a hint to the evictor */
+  }
 }
 
 async function writeBack(
@@ -107,6 +145,11 @@ async function writeBack(
   };
   try {
     await db.evalCache.put(entry);
+    writesSinceLastEvict++;
+    if (writesSinceLastEvict >= EVAL_CACHE_CHECK_INTERVAL) {
+      writesSinceLastEvict = 0;
+      void maybeEvict();
+    }
   } catch (err) {
     // Cache writes are best-effort; never let a Dexie hiccup take down
     // the analysis pipeline. Log loudly the FIRST time a write fails so
@@ -120,6 +163,37 @@ async function writeBack(
   }
 }
 let writeBackWarned = false;
+let writesSinceLastEvict = 0;
+let evictionInFlight = false;
+
+/** Evict oldest rows by `savedAt` once row count exceeds the hard cap.
+ *  Single-flight: re-entrant calls coalesce so we never queue multiple
+ *  big bulk-deletes. Best-effort — silent on failure. */
+async function maybeEvict(): Promise<void> {
+  if (evictionInFlight) return;
+  evictionInFlight = true;
+  try {
+    const count = await db.evalCache.count();
+    if (count <= EVAL_CACHE_MAX_ROWS) return;
+    const toRemove = count - EVAL_CACHE_TARGET_ROWS;
+    // Pull the oldest rows in one indexed scan (`savedAt` is indexed,
+    // see schema v5) and delete them by primary key in bulk.
+    const oldest = await db.evalCache
+      .orderBy('savedAt')
+      .limit(toRemove)
+      .toArray();
+    const keys = oldest.map((e) => e.key);
+    if (keys.length > 0) {
+      await db.evalCache.bulkDelete(keys);
+      cacheStats.evictions += keys.length;
+    }
+  } catch (err) {
+    // Eviction is non-critical; don't poison the cache pipeline.
+    console.warn('[cache] evalCache eviction failed; cap may be exceeded temporarily', err);
+  } finally {
+    evictionInFlight = false;
+  }
+}
 
 /**
  * Drop-in replacement for `pool.analyze(fen, depth)` that consults the

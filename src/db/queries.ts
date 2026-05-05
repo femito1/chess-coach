@@ -1,4 +1,4 @@
-import { db, type Game, type Analysis, type AnalysisStatus } from './schema';
+import { db, type Game, type Analysis, type AnalysisStatus, type Motif } from './schema';
 import { computeAccuracy } from '@/engine/analyzer';
 import { classifyMove } from '@/engine/classify';
 import { detectMotifs } from '@/engine/motifs';
@@ -8,6 +8,21 @@ import {
   detectPhase,
   extractClocks,
 } from '@/engine/phase';
+
+/** Order-sensitive equality on two motif arrays. Cheap shortcut used
+ *  by `recomputeClassificationsAndAccuracies` instead of a per-move
+ *  `JSON.stringify` comparison (which on a 5,000-game library
+ *  serialises millions of tiny arrays). */
+function sameMotifs(a: Motif[] | undefined, b: Motif[] | undefined): boolean {
+  const al = a?.length ?? 0;
+  const bl = b?.length ?? 0;
+  if (al !== bl) return false;
+  if (al === 0) return true;
+  for (let i = 0; i < al; i++) {
+    if (a![i] !== b![i]) return false;
+  }
+  return true;
+}
 
 export async function upsertGame(game: Game): Promise<void> {
   const existing = await db.games.get(game.id);
@@ -68,15 +83,18 @@ export async function nextPendingGame(): Promise<Game | undefined> {
 }
 
 export async function countByStatus(): Promise<Record<AnalysisStatus, number>> {
-  const all = await db.games.toArray();
-  const counts: Record<AnalysisStatus, number> = {
-    pending: 0,
-    running: 0,
-    done: 0,
-    error: 0,
-  };
-  for (const g of all) counts[g.analysisStatus]++;
-  return counts;
+  // `analysisStatus` is indexed (schema.ts) so per-status counts go
+  // through Dexie's `count()` rather than pulling every Game (with its
+  // multi-KB PGN string) into JS memory just to bump four counters.
+  // On a 5,000-game library this drops peak RAM for the dashboard from
+  // tens of MB down to ~kB.
+  const [pending, running, done, errored] = await Promise.all([
+    db.games.where('analysisStatus').equals('pending').count(),
+    db.games.where('analysisStatus').equals('running').count(),
+    db.games.where('analysisStatus').equals('done').count(),
+    db.games.where('analysisStatus').equals('error').count(),
+  ]);
+  return { pending, running, done, error: errored };
 }
 
 export async function resetRunningToPending(): Promise<void> {
@@ -127,9 +145,19 @@ export async function requeueStaleErrors(): Promise<number> {
  * Returns the number of games whose classifications or accuracy changed.
  */
 export async function recomputeClassificationsAndAccuracies(): Promise<number> {
-  const done = await db.games.where('analysisStatus').equals('done').toArray();
+  // Pull only primary keys to avoid holding every game (PGN included)
+  // in memory at once. Each iteration then loads exactly one game +
+  // one analysis, so peak RAM is O(single game) rather than O(all
+  // done games). On a 5,000-game library the difference is meaningful
+  // (the PGN strings alone can total tens of MB).
+  const doneIds = (await db.games
+    .where('analysisStatus')
+    .equals('done')
+    .primaryKeys()) as string[];
   let updated = 0;
-  for (const g of done) {
+  for (const id of doneIds) {
+    const g = await db.games.get(id);
+    if (!g) continue;
     const a = await db.analyses.get(g.id);
     if (!a || a.moves.length === 0) continue;
 
@@ -195,7 +223,7 @@ export async function recomputeClassificationsAndAccuracies(): Promise<number> {
         phase !== m.phase ||
         clockAfter !== m.clockAfter ||
         timeSpentVal !== m.timeSpent ||
-        JSON.stringify(motifs ?? []) !== JSON.stringify(m.motifs ?? [])
+        !sameMotifs(motifs, m.motifs)
       ) {
         changed = true;
       }
@@ -226,10 +254,13 @@ export const recomputeAllAccuracies = recomputeClassificationsAndAccuracies;
  * a bug fix in the importer. Requires no Stockfish.
  */
 export async function refreshOpeningMetadata(): Promise<number> {
-  const games = await db.games.toArray();
+  // Stream over IDs so we don't materialise every PGN string at once.
+  const ids = (await db.games.toCollection().primaryKeys()) as string[];
   let updated = 0;
   const { reparseOpeningFromPgn } = await import('@/import/importer');
-  for (const g of games) {
+  for (const id of ids) {
+    const g = await db.games.get(id);
+    if (!g) continue;
     const patch = reparseOpeningFromPgn(g.pgn);
     if (!patch) continue;
     const changed = patch.opening !== g.opening || patch.eco !== g.eco;

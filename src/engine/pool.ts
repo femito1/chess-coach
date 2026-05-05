@@ -30,6 +30,10 @@ const DEFAULT_POOL_SIZE = (() => {
 
 export class EnginePool {
   private workers: EngineWorker[];
+  /** Maximum number of workers this pool will spin up on demand. We keep
+   *  this around even after `terminate()` so the pool can self-rehydrate
+   *  when a new analyze() call comes in. */
+  private readonly maxWorkers: number;
   /** FIFO of pending tasks waiting for a free worker. */
   private queue: Array<{
     fen: string;
@@ -42,18 +46,38 @@ export class EnginePool {
   private busy: boolean[];
 
   constructor(size: number = DEFAULT_POOL_SIZE) {
-    this.workers = Array.from({ length: size }, () => new EngineWorker());
-    this.busy = this.workers.map(() => false);
+    this.maxWorkers = size;
+    // Workers are created lazily — `EngineWorker` is cheap to construct
+    // (no Worker spawned until the first `analyze` / `newGame`), but
+    // there's no reason to even hold the wrapper objects when nothing
+    // is running. The pool starts empty and grows on demand inside
+    // `pump()` up to `maxWorkers`.
+    this.workers = [];
+    this.busy = [];
   }
 
-  /** Number of underlying workers. */
+  /** Number of underlying workers currently held (may be 0 if the pool
+   *  was torn down by `terminate()` and no analyze() has hit it since). */
   get size(): number {
     return this.workers.length;
+  }
+
+  /** Maximum size this pool will grow to on demand. */
+  get capacity(): number {
+    return this.maxWorkers;
+  }
+
+  /** Whether the pool currently has no in-flight tasks AND no queued
+   *  ones. Idle pools are safe to `terminate()` — see queue.ts which
+   *  calls this opportunistically. */
+  isIdle(): boolean {
+    return this.queue.length === 0 && this.busy.every((b) => !b);
   }
 
   /** Reset every worker for a fresh game. Done in parallel so the cost
    *  is the slowest single worker, not the sum. */
   async newGame(): Promise<void> {
+    if (this.workers.length === 0) return;
     await Promise.all(this.workers.map((w) => w.newGame()));
   }
 
@@ -79,25 +103,49 @@ export class EnginePool {
   }
 
   /** Try to dispatch as many queued tasks as there are free workers.
-   *  Called whenever a task is enqueued or finishes. */
+   *  Called whenever a task is enqueued or finishes. Lazily grows the
+   *  pool up to `maxWorkers` so torn-down pools (post-idle teardown)
+   *  rehydrate transparently on the next analyze() call. */
   private pump(): void {
     while (this.queue.length > 0) {
-      const idx = this.busy.indexOf(false);
-      if (idx === -1) return;
+      let idx = this.busy.indexOf(false);
+      if (idx === -1) {
+        // No free worker — try to spin up a new one if we're under cap.
+        if (this.workers.length < this.maxWorkers) {
+          this.workers.push(new EngineWorker());
+          this.busy.push(false);
+          idx = this.workers.length - 1;
+        } else {
+          return;
+        }
+      }
       const task = this.queue.shift()!;
       this.busy[idx] = true;
       const worker = this.workers[idx];
-      worker
-        .analyze(task.fen, task.depth)
-        .then((res) => task.resolve(res))
-        .catch((err) => task.reject(err))
-        .finally(() => {
+      worker.analyze(task.fen, task.depth).then(
+        (res) => {
+          // Flip `busy` before resolving so that any awaiter checking
+          // `pool.isIdle()` immediately after `await pool.analyze()`
+          // sees the post-completion state. (Resolving the task first
+          // would let the awaiter's microtask run before the finally
+          // hook had a chance to clear the slot.)
           this.busy[idx] = false;
+          task.resolve(res);
           this.pump();
-        });
+        },
+        (err) => {
+          this.busy[idx] = false;
+          task.reject(err);
+          this.pump();
+        },
+      );
     }
   }
 
+  /** Tear down every worker. Used both by `terminate()` (called from
+   *  test cleanup) and by the queue's idle-teardown path (releases the
+   *  ~30 MB / worker WASM heap when there's nothing to analyze). The
+   *  pool transparently rehydrates on the next `analyze()` call. */
   terminate(): void {
     for (const w of this.workers) w.terminate();
     this.workers = [];
@@ -105,6 +153,16 @@ export class EnginePool {
     // Reject any stragglers so callers don't await forever.
     for (const t of this.queue) t.reject(new Error('pool terminated'));
     this.queue = [];
+  }
+
+  /** Shut down workers if (and only if) the pool is idle. No-op
+   *  otherwise. Returns true if workers were actually freed. */
+  terminateIfIdle(): boolean {
+    if (!this.isIdle() || this.workers.length === 0) return false;
+    for (const w of this.workers) w.terminate();
+    this.workers = [];
+    this.busy = [];
+    return true;
   }
 }
 

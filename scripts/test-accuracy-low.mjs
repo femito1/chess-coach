@@ -3,7 +3,7 @@
 
 import { chromium } from 'playwright';
 
-const URL = process.env.URL || 'http://localhost:5174/';
+const URL = process.env.URL || 'http://localhost:5173/';
 const TARGET_URLS = [
   'https://www.chess.com/game/live/146284294300',
   'https://www.chess.com/game/live/146313888396',

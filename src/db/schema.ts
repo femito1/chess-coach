@@ -323,6 +323,39 @@ export interface EvalCacheEntry {
 }
 
 /* =======================================================================
+ *  Import records (per-archive sync metadata)
+ * =======================================================================
+ *
+ *  One row per (username, archive URL) pair. Lets the Import page show
+ *  "✓ imported, 45 games, 3 days ago" next to each Chess.com month and
+ *  drives the "Sync newest" one-click that auto-imports any month newer
+ *  than the latest record for the current username.
+ *
+ *  Records are upserted at the end of each successful per-archive import.
+ *  Source is kept open ('chesscom' today; 'lichess'/'pgn' later) so the
+ *  same table works once we add other importers.
+ */
+export interface ImportRecord {
+  /** Composite key: `${source}:${username}:${archiveUrl}`. */
+  id: string;
+  source: 'chesscom' | 'lichess' | 'pgn';
+  username: string;
+  /** Provider archive URL (e.g. Chess.com /pub/player/u/games/YYYY/MM). */
+  archiveUrl: string;
+  /** Year/month for sorting + display. */
+  year: number;
+  month: number;
+  /** Last time this archive was pulled. */
+  importedAt: number;
+  /** Games returned by the API on the last pull. */
+  gameCount: number;
+  /** Of those, how many were new (added) on the last pull. */
+  added: number;
+  /** Of those, how many were already in the DB (skipped). */
+  skipped: number;
+}
+
+/* =======================================================================
  *  Notes (annotations on positions)
  * =======================================================================
  */
@@ -350,6 +383,7 @@ export class CoachDB extends Dexie {
   repertoireLineStats!: EntityTable<RepertoireLineStats, 'id'>;
   notes!: EntityTable<PositionNote, 'fenKey'>;
   evalCache!: EntityTable<EvalCacheEntry, 'key'>;
+  importRecords!: EntityTable<ImportRecord, 'id'>;
 
   constructor() {
     super('chess-coach');
@@ -414,6 +448,24 @@ export class CoachDB extends Dexie {
       repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
       notes: 'fenKey, updatedAt',
       evalCache: 'key, fen, depth, savedAt',
+    });
+    // v6: per-archive import metadata so the Import page can show what's
+    // already been pulled and offer a one-click "Sync newest". New empty
+    // table — nothing to backfill (older imports just look "never synced"
+    // until the user re-clicks them, which is an idempotent no-op).
+    this.version(6).stores({
+      games:
+        'id, url, username, endTime, analysisStatus, timeClass, eco, result',
+      analyses: 'gameId, analyzedAt, depth',
+      settings: 'key',
+      puzzles: 'id, gameId, generatedAt, *motifs, *tags, [srs.dueAt+id]',
+      repertoires: 'id, color, updatedAt',
+      repertoireNodes: 'id, repertoireId, fen, parentFen',
+      repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',
+      repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
+      notes: 'fenKey, updatedAt',
+      evalCache: 'key, fen, depth, savedAt',
+      importRecords: 'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
     });
   }
 }

@@ -13,6 +13,15 @@ import {
   saveAnalysis,
   setAnalysisStatus,
 } from '@/db/queries';
+import { analysisPool } from './pool';
+
+/** How long the queue has to be idle (no pending games found) before we
+ *  tear down the engine pool. The pool transparently rehydrates on the
+ *  next analyze() call, so freeing workers between bursts of imports is
+ *  pure win — each worker holds ~30 MB of WASM heap (NNUE net + hash
+ *  table) that we don't need while the user is, e.g., browsing the
+ *  dashboard or studying a repertoire. */
+const IDLE_TEARDOWN_MS = 8000;
 
 interface QueueState {
   running: boolean;
@@ -108,6 +117,9 @@ export async function startAnalysisQueue(): Promise<void> {
 
 async function runLoop(): Promise<void> {
   const store = useQueueStore.getState;
+  // Track when we first noticed the queue was empty so we can free the
+  // engine pool's workers after a grace period (see IDLE_TEARDOWN_MS).
+  let idleSince: number | null = null;
   // Outer guard: any unhandled throw from a single iteration (DB hiccup,
   // module-load failure during HMR, etc.) used to kill the loop forever
   // — the page would have to be reloaded to re-arm analysis. We now wrap
@@ -128,9 +140,28 @@ async function runLoop(): Promise<void> {
           currentPly: 0,
           currentTotal: 0,
         });
-        await sleep(2000);
+        // Idle: opportunistically tear down the engine pool once we've
+        // been idle for IDLE_TEARDOWN_MS. Each Stockfish worker holds
+        // ~30 MB of resident WASM memory; freeing them between import
+        // bursts is a meaningful RAM win and the pool transparently
+        // rehydrates on the next analyze() call.
+        const now = Date.now();
+        if (idleSince === null) idleSince = now;
+        if (now - idleSince >= IDLE_TEARDOWN_MS) {
+          const pool = analysisPool();
+          if (pool.terminateIfIdle()) {
+            console.info('[queue] idle — released engine workers');
+          }
+          // Stretch the polling cadence once we've torn down. We're not
+          // expecting work; checking every 4s is plenty.
+          await sleep(4000);
+        } else {
+          await sleep(2000);
+        }
         continue;
       }
+      // We have work — reset the idle clock.
+      idleSince = null;
 
       useQueueStore.setState({
         running: true,

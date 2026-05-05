@@ -261,6 +261,23 @@ export class EngineWorker {
  *  `analyze()` call cancels any in-flight one on the same worker. */
 export const engine = new EngineWorker();
 
+/**
+ * Tear down the singleton `engine` worker if it hasn't been used for
+ * `idleMs`. The worker rehydrates lazily on the next `analyze()` call
+ * via `init()`, so this is invisible to consumers and frees the WASM
+ * heap (~30 MB / NNUE net) while the user isn't on the review screen.
+ *
+ * Returns true if the worker was actually terminated.
+ */
+export function terminateEngineIfIdle(): boolean {
+  if (engine.isBusy()) return false;
+  // We can't tell from here whether the worker was ever started, but
+  // calling terminate() on a never-started worker is a cheap no-op
+  // (`this.worker?.terminate()` short-circuits on null).
+  engine.terminate();
+  return true;
+}
+
 function parseInfo(line: string): InfoLine {
   const info: InfoLine = {};
   const tokens = line.split(/\s+/);

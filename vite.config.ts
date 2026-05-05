@@ -31,6 +31,17 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src'),
     },
   },
+  // IndexedDB is keyed by origin. If Vite silently moves to :5174 because
+  // :5173 is occupied, the new origin starts with an empty database and
+  // the user thinks their imported games "vanished". Fail loudly instead.
+  server: {
+    port: 5173,
+    strictPort: true,
+  },
+  preview: {
+    port: 5173,
+    strictPort: true,
+  },
   worker: {
     format: 'es',
   },

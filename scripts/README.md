@@ -28,7 +28,7 @@ node scripts/test-full-queue.mjs
 node scripts/test-heal.mjs
 
 # Live: hits Chess.com API, imports 3 real games, runs full analysis.
-#   URL=http://localhost:5174/ USER_CC=magnuscarlsen node scripts/test-live-chesscom.mjs
+#   URL=http://localhost:5173/ USER_CC=magnuscarlsen node scripts/test-live-chesscom.mjs
 node scripts/test-live-chesscom.mjs
 ```
 

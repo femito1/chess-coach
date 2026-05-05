@@ -4,7 +4,7 @@
 
 import { chromium } from 'playwright';
 
-const URL = process.env.URL || 'http://localhost:5174/';
+const URL = process.env.URL || 'http://localhost:5173/';
 const USER_CC = process.env.USER_CC || 'magnuscarlsen';
 const ARCHIVE = process.env.ARCHIVE || 'https://api.chess.com/pub/player/magnuscarlsen/games/2024/01';
 const SAMPLE_SIZE = Number(process.env.SAMPLE || '5');

@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet } from 'react-router-dom';
 import { QueueIndicator } from '@/engine/QueueIndicator';
 import { useEffect } from 'react';
 import { startAnalysisQueue } from '@/engine/queue';
+import { ProfileChip } from './ProfileChip';
 
 export function AppLayout() {
   useEffect(() => {
@@ -11,10 +12,10 @@ export function AppLayout() {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b border-border bg-bg-soft/60 backdrop-blur sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto flex items-center gap-6 px-6 h-14">
+        <div className="max-w-7xl mx-auto flex items-center gap-4 px-6 h-14">
           <Link
             to="/dashboard"
-            className="font-semibold tracking-tight hover:text-accent transition-colors"
+            className="font-semibold tracking-tight hover:text-accent transition-colors whitespace-nowrap shrink-0"
           >
             <span className="text-accent">♞</span> Chess Coach
           </Link>
@@ -28,8 +29,8 @@ export function AppLayout() {
             <NavItem to="/openings">Openings</NavItem>
             <NavItem to="/settings">Settings</NavItem>
           </nav>
-          <div className="ml-auto">
-            <QueueIndicator />
+          <div className="ml-auto shrink-0">
+            <ProfileChip />
           </div>
         </div>
       </header>
@@ -38,6 +39,9 @@ export function AppLayout() {
           <Outlet />
         </div>
       </main>
+      {/* Floating queue status — outside the header flex so its width
+          changes can never reflow the nav or profile chip. */}
+      <QueueIndicator />
     </div>
   );
 }

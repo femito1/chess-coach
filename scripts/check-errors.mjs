@@ -1,11 +1,11 @@
 // Quick diagnostic: connect to a running Chrome via Playwright, snapshot the
 // IndexedDB games, and report status counts + a sample of error messages.
 //
-//   URL=http://localhost:5174/ node scripts/check-errors.mjs
+//   URL=http://localhost:5173/ node scripts/check-errors.mjs
 
 import { chromium } from 'playwright';
 
-const URL = process.env.URL || 'http://localhost:5174/';
+const URL = process.env.URL || 'http://localhost:5173/';
 
 const browser = await chromium.launch({ headless: true });
 const ctx = await browser.newContext();

@@ -15,11 +15,11 @@
 // either, because they never call cachedAnalyze for that FEN.
 //
 // Run with the dev server up:
-//   URL=http://localhost:5174/ node scripts/test-eval-cache.mjs
+//   URL=http://localhost:5173/ node scripts/test-eval-cache.mjs
 
 import { chromium } from 'playwright';
 
-const URL = process.env.URL || 'http://localhost:5174/';
+const URL = process.env.URL || 'http://localhost:5173/';
 
 // Game 1: short Italian-flavored game. Opening prefix is in book.
 const PGN_A = `[Event "Test A"]

@@ -93,24 +93,23 @@ export function PuzzlesPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-end justify-between gap-4 flex-wrap">
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Puzzles</h1>
-          <p className="text-sm text-text-muted">
-            Generated from your own blunders, mistakes, and misses. Solve them, space them out.
+          <h1 className="text-xl font-semibold tracking-tight">Puzzles</h1>
+          <p className="text-xs text-text-muted">
+            Generated from your own blunders, mistakes, and misses.
           </p>
         </div>
-        <div className="flex gap-2">
-          <button type="button" className="btn" onClick={onGenerate} disabled={generating}>
+        <div className="flex items-center gap-3">
+          {generateMsg && <span className="text-xs text-text-muted">{generateMsg}</span>}
+          <button type="button" className="btn text-xs" onClick={onGenerate} disabled={generating}>
             {generating ? 'Generating…' : 'Regenerate'}
           </button>
         </div>
       </div>
 
-      {generateMsg && <div className="text-xs text-text-muted">{generateMsg}</div>}
-
-      <div className="card p-3 flex flex-wrap gap-2 text-sm">
+      <div className="card p-2 flex flex-wrap gap-2 text-sm">
         <TimeClassFilterSelect
           value={timeClassFilter}
           onChange={onTimeClassChange}
@@ -176,6 +175,12 @@ function PuzzleSolver({
   const [attempts, setAttempts] = useState(0);
   const [showSolution, setShowSolution] = useState(false);
   const [lastUci, setLastUci] = useState<string | undefined>(undefined);
+  /** Hint-state. `hintShown` controls whether the from-square ring is
+   *  visible right now; it auto-clears when the user moves. `hintUsed`
+   *  is sticky for the puzzle's lifetime and gates the "Easy" SRS grade
+   *  so a hint-assisted solve can't inflate the schedule. */
+  const [hintShown, setHintShown] = useState(false);
+  const [hintUsed, setHintUsed] = useState(false);
 
   useEffect(() => {
     setFen(puzzle.fen);
@@ -184,6 +189,8 @@ function PuzzleSolver({
     setAttempts(0);
     setShowSolution(false);
     setLastUci(undefined);
+    setHintShown(false);
+    setHintUsed(false);
   }, [puzzle.id]);
 
   const solverColor = puzzle.fen.split(' ')[1] === 'w' ? 'white' : 'black';
@@ -195,6 +202,9 @@ function PuzzleSolver({
     const uci = m.from + m.to + (m.promotion ?? '');
     const expectedNoProm = expected.slice(0, 4);
     const match = uci.slice(0, 4) === expectedNoProm;
+    // Either way, the user has now committed to a move — hide any
+    // currently-displayed hint ring. (`hintUsed` stays sticky.)
+    setHintShown(false);
     if (!match) {
       setAttempts((n) => n + 1);
       setStatus('wrong');
@@ -256,48 +266,89 @@ function PuzzleSolver({
     setSolvedIdx(0);
     setStatus('solving');
     setLastUci(undefined);
+    setHintShown(false);
+  }
+
+  function showHint() {
+    setHintShown(true);
+    setHintUsed(true);
+    // The 'wrong' state stops the user from interacting with the board.
+    // Returning to 'solving' (without resetting fen / solvedIdx, since
+    // a wrong attempt never advances them) lets them act on the hint.
+    if (status === 'wrong') setStatus('solving');
   }
 
   function revealAndFail() {
     setShowSolution(true);
     setStatus('wrong');
+    setHintShown(false);
   }
 
+  // Highlight the from-square of the next expected move when the user
+  // asks for a hint. Cleared the moment a move is attempted (see onMove).
+  const nextExpected = puzzle.solutionUci[solvedIdx];
+  const hintSquares =
+    hintShown && status === 'solving' && nextExpected
+      ? [{ square: nextExpected.slice(0, 2), color: 'hint' as const }]
+      : [];
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-4 items-start">
-      <div className="space-y-3">
-        <Board
-          fen={fen}
-          orientation={solverColor}
-          lastMoveUci={lastUci}
-          viewOnly={status === 'solved' || status === 'wrong'}
-          onMove={(m) => onMove(m)}
-        />
-        <div className="flex items-center justify-between">
-          <div className="text-sm">
+    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
+      <div className="space-y-2">
+        {/* Cap the board so the whole solver fits the viewport without
+            page scroll. Subtracts the layout chrome above + below
+            (header, padding, page header, filters, status row, action
+            buttons). Stays at most 560px on tall screens. */}
+        <div className="mx-auto w-full" style={{ maxWidth: 'min(560px, calc(100vh - 280px))' }}>
+          <Board
+            fen={fen}
+            orientation={solverColor}
+            lastMoveUci={lastUci}
+            viewOnly={status === 'solved' || status === 'wrong'}
+            onMove={(m) => onMove(m)}
+            highlightSquares={hintSquares}
+          />
+        </div>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-sm min-h-[1.25rem]">
             {status === 'solving' && (
               <span className="text-text-muted">
                 {solverColor === 'white' ? 'White' : 'Black'} to move. Find the best line.
+                {hintShown && (
+                  <span className="ml-2 text-accent">· Hint: move the highlighted piece</span>
+                )}
                 {attempts > 0 && <span className="text-blunder"> · {attempts} wrong so far</span>}
               </span>
             )}
             {status === 'wrong' && (
               <span className="text-blunder">
-                Not quite. {showSolution ? 'Full solution shown on the right.' : 'Try again or reveal.'}
+                Not quite. {showSolution ? 'Full solution shown on the right.' : 'Try again, hint, or reveal.'}
               </span>
             )}
-            {status === 'solved' && <span className="text-good">Solved!</span>}
+            {status === 'solved' && (
+              <span className="text-good">
+                Solved!
+                {hintUsed && (
+                  <span className="ml-2 text-text-muted text-xs">(with a hint)</span>
+                )}
+              </span>
+            )}
           </div>
           <div className="flex gap-1">
             {status === 'wrong' && !showSolution && (
-              <>
-                <button type="button" className="btn text-xs" onClick={retry}>
-                  Retry
-                </button>
-                <button type="button" className="btn text-xs" onClick={revealAndFail}>
-                  Reveal
-                </button>
-              </>
+              <button type="button" className="btn text-xs" onClick={retry}>
+                Retry
+              </button>
+            )}
+            {(status === 'solving' || (status === 'wrong' && !showSolution)) && !hintShown && (
+              <button type="button" className="btn text-xs" onClick={showHint}>
+                Hint
+              </button>
+            )}
+            {status === 'wrong' && !showSolution && (
+              <button type="button" className="btn text-xs" onClick={revealAndFail}>
+                Reveal
+              </button>
             )}
           </div>
         </div>
@@ -355,12 +406,19 @@ function PuzzleSolver({
         {status === 'solved' && (
           <div className="card p-3 space-y-2">
             <div className="text-xs uppercase tracking-wide text-text-muted">How well did you know it?</div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className={`grid gap-2 ${hintUsed ? 'grid-cols-3' : 'grid-cols-2'}`}>
               <GradeButton label="Again" grade="again" onGrade={grade} tone="bad" />
               <GradeButton label="Hard" grade="hard" onGrade={grade} />
               <GradeButton label="Good" grade="good" onGrade={grade} />
-              <GradeButton label="Easy" grade="easy" onGrade={grade} tone="good" />
+              {!hintUsed && (
+                <GradeButton label="Easy" grade="easy" onGrade={grade} tone="good" />
+              )}
             </div>
+            {hintUsed && (
+              <div className="text-[11px] text-text-muted">
+                &ldquo;Easy&rdquo; is hidden because you used a hint.
+              </div>
+            )}
           </div>
         )}
         {status === 'wrong' && showSolution && (

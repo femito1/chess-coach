@@ -4,6 +4,7 @@ import { countByStatus, listGames, requeueAllErrors } from '@/db/queries';
 import { db } from '@/db/schema';
 import { isDue } from '@/srs/sm2';
 import { ProgressCharts } from './ProgressCharts';
+import { StorageBanner } from './StorageBanner';
 
 export function DashboardPage() {
   const counts = useLiveQuery(() => countByStatus(), []);
@@ -79,6 +80,8 @@ export function DashboardPage() {
           </div>
         </Link>
       </div>
+
+      <StorageBanner />
 
       {(counts?.error ?? 0) > 0 && (
         <div className="card p-3 flex items-center gap-3 border-blunder/40">

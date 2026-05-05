@@ -2,11 +2,11 @@
 // verifies motifs/phase/clocks land in the Analysis record, and exercises
 // the aggregator + puzzle generator + repertoire store.
 //
-// Requires: dev server running on URL (default http://localhost:5174/).
+// Requires: dev server running on URL (default http://localhost:5173/).
 
 import { chromium } from 'playwright';
 
-const URL = process.env.URL || 'http://localhost:5174/';
+const URL = process.env.URL || 'http://localhost:5173/';
 const PGN = `[Event "Test"]
 [Site "?"]
 [Date "2024.01.01"]

@@ -322,12 +322,17 @@ export function Board({
           white: { key: 'white', color: 'white', opacity: 1, lineWidth: 12 },
         },
         onChange: (shapes) => {
-          // We don't rewrite brushes in onChange any more — chessground's
-          // toggle relies on stored brush == event brush. We DO swap
-          // knight arrows over to the `invisible` brush so chessground
-          // stops drawing them, and mirror them into a separate React
-          // state for the L-path overlay (whose color is recovered from
-          // the user's original brush via `knightOriginalBrushRef`).
+          // Knight arrows are tricky: chessground only renders straight
+          // lines, so we (a) hide their straight rendering by swapping
+          // the brush to `invisible`, and (b) draw an L-shaped overlay
+          // ourselves in <KnightArrowOverlay>. The catch is that
+          // chessground's redraw-toggle logic compares the *stored*
+          // brush against the *incoming* brush — once we've stored
+          // `invisible`, a redraw with the same colour is treated as a
+          // brush change and the arrow is replaced (never toggles off).
+          // We restore the chess.com behaviour ("redraw same arrow ->
+          // arrow disappears") by detecting that case here and dropping
+          // the shape ourselves.
           const overlayKnights: DrawShape[] = [];
           const next: DrawShape[] = [];
           let mutated = false;
@@ -335,21 +340,36 @@ export function Board({
             const isArrow = !!s.dest && s.orig !== s.dest;
             if (isArrow && isKnightJump(s.orig, s.dest!)) {
               const key = `${s.orig}-${s.dest}`;
-              // Remember the colour the user actually drew with. After
-              // we rewrite the chessground entry to brush='invisible',
-              // we'd otherwise lose that signal forever.
-              if (s.brush && s.brush !== 'invisible') {
-                knightOriginalBrushRef.current.set(key, s.brush);
-              }
-              const realBrush =
-                knightOriginalBrushRef.current.get(key) ?? 'green';
-              overlayKnights.push({ ...s, brush: realBrush });
-              if (s.brush !== 'invisible') {
+              const incomingBrush = s.brush;
+              const remembered = knightOriginalBrushRef.current.get(key);
+
+              // User just drew (incoming brush is the real colour, not
+              // our stand-in `invisible`).
+              if (incomingBrush && incomingBrush !== 'invisible') {
+                // Redraw of the *same* colour on the *same* squares
+                // means the user wants to erase it. Drop the shape
+                // entirely instead of re-hiding it.
+                if (remembered === incomingBrush) {
+                  knightOriginalBrushRef.current.delete(key);
+                  mutated = true;
+                  continue;
+                }
+                // Otherwise it's either a brand-new arrow or a colour
+                // change. Remember the new colour and store the hidden
+                // proxy so chessground stops drawing the straight line.
+                knightOriginalBrushRef.current.set(key, incomingBrush);
+                overlayKnights.push({ ...s, brush: incomingBrush });
                 next.push({ ...s, brush: 'invisible' });
                 mutated = true;
-              } else {
-                next.push(s);
+                continue;
               }
+
+              // Brush is already `invisible` (or missing): this entry
+              // came from a previous setShapes call. Keep it as-is and
+              // re-emit the overlay using the remembered colour.
+              const realBrush = remembered ?? 'green';
+              overlayKnights.push({ ...s, brush: realBrush });
+              next.push(s);
               continue;
             }
             next.push(s);

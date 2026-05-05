@@ -1,7 +1,33 @@
 import { useEffect, useState } from 'react';
-import { engine } from '@/engine/engine';
+import { engine, terminateEngineIfIdle } from '@/engine/engine';
 import { cpToWinrate, mateToCp } from '@/engine/classify';
 import { Chess } from 'chess.js';
+
+/** Shared idle-teardown timer for the singleton review engine. We
+ *  schedule a teardown when the last `useLiveEval` consumer unmounts;
+ *  if a new consumer mounts before the timer fires (e.g. the user
+ *  navigates from one review back into another), we cancel it. */
+let liveEvalTeardownTimer: ReturnType<typeof setTimeout> | null = null;
+let liveEvalConsumers = 0;
+const LIVE_EVAL_IDLE_MS = 5000;
+
+function acquireLiveEval(): void {
+  liveEvalConsumers++;
+  if (liveEvalTeardownTimer) {
+    clearTimeout(liveEvalTeardownTimer);
+    liveEvalTeardownTimer = null;
+  }
+}
+
+function releaseLiveEval(): void {
+  liveEvalConsumers = Math.max(0, liveEvalConsumers - 1);
+  if (liveEvalConsumers === 0 && liveEvalTeardownTimer === null) {
+    liveEvalTeardownTimer = setTimeout(() => {
+      liveEvalTeardownTimer = null;
+      if (liveEvalConsumers === 0) terminateEngineIfIdle();
+    }, LIVE_EVAL_IDLE_MS);
+  }
+}
 
 interface LiveEvalData {
   depth: number;
@@ -20,6 +46,12 @@ interface LiveEvalData {
  */
 export function useLiveEval(fen: string, depth = 14): LiveEvalData | null {
   const [data, setData] = useState<LiveEvalData | null>(null);
+
+  // Reference-count consumers so we know when to release the worker.
+  useEffect(() => {
+    acquireLiveEval();
+    return () => releaseLiveEval();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

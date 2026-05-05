@@ -3,7 +3,7 @@
 
 import { chromium } from 'playwright';
 
-const URL = process.env.URL || 'http://localhost:5174/';
+const URL = process.env.URL || 'http://localhost:5173/';
 const USERNAME = process.env.CHESSCOM_USER || 'hikaru';
 
 const browser = await chromium.launch({ headless: true });
