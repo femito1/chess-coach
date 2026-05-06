@@ -14,35 +14,18 @@
 //
 // Run: URL=http://localhost:5173/ node scripts/test-knight-arrow-toggle.mjs
 
-import { chromium } from 'playwright';
+import { runBrowserTest, expect, DEFAULT_URL } from '../harness.mjs';
 
-const URL = process.env.URL || 'http://localhost:5173/';
+await runBrowserTest({
+  name: 'knight-arrow-toggle',
+  viewport: { width: 1200, height: 900 },
+  async run({ page }) {
+    // The openings route just gives us a page with chessground available
+    // in node_modules. We then drive chessground's API directly from
+    // page.evaluate — see the long comment below.
+    await page.goto(`${DEFAULT_URL}#/openings`, { waitUntil: 'networkidle' });
 
-const browser = await chromium.launch({ headless: true });
-const page = await (
-  await browser.newContext({ viewport: { width: 1200, height: 900 } })
-).newPage();
-
-page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-page.on('console', (m) => {
-  if (m.type() === 'error') console.error('[console.error]', m.text());
-});
-
-await page.goto(URL, { waitUntil: 'networkidle' });
-
-// We need a Board instance on screen; the Repertoire trainer mounts a board
-// from a fresh repertoire. Easiest: navigate to the openings library which
-// renders a preview board for the first family.
-// Even easier: render a dedicated sandbox board by creating a repertoire
-// entry. To keep this test self-contained, navigate to /openings which the
-// route defines.
-await page.goto(URL + '#/openings', { waitUntil: 'networkidle' });
-// The openings page may not always render a board. Fall back: open any
-// route that has a Board. The review page is gated on having an analyzed
-// game; the puzzles page generally does too. The simplest approach is to
-// directly drive the chessground API ourselves using a tiny scratch host.
-
-const result = await page.evaluate(async () => {
+    const result = await page.evaluate(async () => {
   // Spin up a Board-equivalent test rig: we can't import Board.tsx into
   // page-evaluate because it expects a React tree. Instead we exercise
   // chessground directly with the SAME draw config the Board sets up
@@ -186,41 +169,28 @@ const result = await page.evaluate(async () => {
   return { log };
 });
 
-console.log('=== Knight arrow toggle log ===');
-console.log(JSON.stringify(result.log, null, 2));
+    console.log('=== Knight arrow toggle log ===');
+    console.log(JSON.stringify(result.log, null, 2));
 
-let failed = false;
-const fail = (msg) => {
-  console.error(`FAIL: ${msg}`);
-  failed = true;
-};
+    const expectations = [
+      { idx: 0, overlay: 1, label: 'first green draw' },
+      { idx: 1, overlay: 0, label: 'redraw same green should toggle off' },
+      { idx: 2, overlay: 1, brush: 'blue', label: 'blue draw' },
+      { idx: 3, overlay: 0, label: 'redraw same blue should toggle off' },
+      { idx: 4, overlay: 1, label: 'green redraw after clear' },
+      { idx: 5, overlay: 1, brush: 'red', label: 'color change green -> red keeps arrow' },
+      { idx: 6, overlay: 0, label: 'redraw same red should toggle off' },
+    ];
 
-const expectations = [
-  { idx: 0, overlay: 1, label: 'first green draw' },
-  { idx: 1, overlay: 0, label: 'redraw same green should toggle off' },
-  { idx: 2, overlay: 1, brush: 'blue', label: 'blue draw' },
-  { idx: 3, overlay: 0, label: 'redraw same blue should toggle off' },
-  { idx: 4, overlay: 1, label: 'green redraw after clear' },
-  { idx: 5, overlay: 1, brush: 'red', label: 'color change green -> red keeps arrow' },
-  { idx: 6, overlay: 0, label: 'redraw same red should toggle off' },
-];
+    for (const e of expectations) {
+      const r = result.log[e.idx];
+      expect(r, `step ${e.idx} (${e.label}) exists`).toBeTruthy();
+      expect(r.overlay, `${e.label}: overlay count`).toBe(e.overlay);
+      if (e.brush) {
+        expect(r.overlayBrush, `${e.label}: overlay brush`).toBe(e.brush);
+      }
+    }
 
-for (const e of expectations) {
-  const r = result.log[e.idx];
-  if (!r) {
-    fail(`missing step ${e.idx} (${e.label})`);
-    continue;
-  }
-  if (r.overlay !== e.overlay) {
-    fail(`${e.label}: expected overlay=${e.overlay}, got ${r.overlay}`);
-  }
-  if (e.brush && r.overlayBrush !== e.brush) {
-    fail(`${e.label}: expected overlay brush=${e.brush}, got ${r.overlayBrush}`);
-  }
-}
-
-await browser.close();
-
-if (failed) process.exit(1);
-console.log('PASS: knight-arrow toggle handles redraw-as-erase + color-change correctly');
-process.exit(0);
+    console.log('PASS: knight-arrow toggle handles redraw-as-erase + color-change correctly');
+  },
+});

@@ -3,22 +3,16 @@
 //   - clicking pieces to play a move branches into exploration
 //   - live eval appears in exploration
 //   - "Return to game" button restores mainline
+//
+// Currently primarily an observation script — exploration-classification.mjs
+// has the strict assertions for the off-mainline badge.
 
-import { chromium } from 'playwright';
+import { runBrowserTest, expect, sleep, DEFAULT_URL } from '../harness.mjs';
 
-const URL = process.env.URL || 'http://localhost:5173/';
-
-const browser = await chromium.launch({ headless: true });
-const page = await (await browser.newContext()).newPage();
-page.on('pageerror', (e) => console.log('[pageerror]', e.message));
-page.on('console', (m) => {
-  if (m.type() === 'error') console.log('[console.error]', m.text());
-});
-
-await page.goto(URL, { waitUntil: 'networkidle' });
-
-// Import a small game and wait for analysis.
-const id = await page.evaluate(async () => {
+await runBrowserTest({
+  name: 'review-ui',
+  async run({ page }) {
+    const id = await page.evaluate(async () => {
   const { db } = await import('/src/db/schema.ts');
   const g = {
     id: 'ui-test-001',
@@ -37,25 +31,23 @@ const id = await page.evaluate(async () => {
     importedAt: Date.now(),
     analysisStatus: 'pending',
   };
-  await db.games.put(g);
-  return g.id;
-});
+      await db.games.put(g);
+      return g.id;
+    });
 
-// Wait for it to be analyzed.
-const start = Date.now();
-while (Date.now() - start < 60000) {
-  const st = await page.evaluate(async (id) => {
-    const { db } = await import('/src/db/schema.ts');
-    return (await db.games.get(id))?.analysisStatus;
-  }, id);
-  if (st === 'done') break;
-  await new Promise((r) => setTimeout(r, 500));
-}
-console.log('Analysis done.');
+    const start = Date.now();
+    while (Date.now() - start < 60_000) {
+      const st = await page.evaluate(async (id) => {
+        const { db } = await import('/src/db/schema.ts');
+        return (await db.games.get(id))?.analysisStatus;
+      }, id);
+      if (st === 'done') break;
+      await sleep(500);
+    }
+    console.log('Analysis done.');
 
-// Navigate to the review page.
-await page.goto(`${URL}#/review/${id}`, { waitUntil: 'networkidle' });
-await page.waitForTimeout(1000);
+    await page.goto(`${DEFAULT_URL}#/review/${id}`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1000);
 
 // Step through 4 moves via ArrowRight to get to a position where white has played 3 moves.
 for (let i = 0; i < 4; i++) {
@@ -115,14 +107,15 @@ if (boardBox) {
 const exploring = await page.evaluate(() => document.body.innerText.includes('Exploring') || document.body.innerText.includes('Return to game'));
 console.log('\nIs exploring after off-mainline move:', exploring);
 
-if (exploring) {
-  // Wait for live eval.
-  await page.waitForTimeout(3000);
-  const liveText = await page.evaluate(() => {
-    const m = document.body.innerText.match(/Engine \(depth [\d…]+\)[\s\S]{0,120}/);
-    return m?.[0];
-  });
-  console.log('Live eval text:', liveText);
-}
+    if (exploring) {
+      await page.waitForTimeout(3000);
+      const liveText = await page.evaluate(() => {
+        const m = document.body.innerText.match(/Engine \(depth [\d…]+\)[\s\S]{0,120}/);
+        return m?.[0];
+      });
+      console.log('Live eval text:', liveText);
+    }
 
-await browser.close();
+    expect(piecesSel, 'pieces rendered on board').toBeGreaterThan(0);
+  },
+});

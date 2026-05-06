@@ -8,3 +8,4 @@ dist
 !.env.example
 PROJECT_STATUS.md
 CLAUDE.md
+TESTING.md

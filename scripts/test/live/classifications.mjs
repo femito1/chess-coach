@@ -1,33 +1,18 @@
 // Drive a real browser session, import a few real Chess.com games, wait for
 // them to analyze, and report per-move classification distribution plus any
 // suspicious tags (brilliant, miss, book with non-best, unclassified moves).
-//
-// Run with:
-//   URL=http://localhost:5176/ node scripts/test-classifications.mjs
 
-import { chromium } from 'playwright';
+import { runBrowserTest, expect, sleep } from '../harness.mjs';
 
-const URL = process.env.URL || 'http://localhost:5176/';
 const USER_CC = process.env.USER_CC || 'magnuscarlsen';
 const ARCHIVE =
   process.env.ARCHIVE || 'https://api.chess.com/pub/player/magnuscarlsen/games/2024/01';
 const SAMPLE = Number(process.env.SAMPLE || '3');
 
-const browser = await chromium.launch({ headless: true });
-const ctx = await browser.newContext();
-const page = await ctx.newPage();
-
-const pageErrors = [];
-page.on('pageerror', (e) => pageErrors.push(`[pageerror] ${e.message}`));
-page.on('console', (m) => {
-  const t = m.text();
-  if (m.type() === 'error') pageErrors.push(`[console.error] ${t}`);
-});
-
-await page.goto(URL, { waitUntil: 'networkidle' });
-
-// Wipe any prior test data to start clean, then import SAMPLE real games.
-const ids = await page.evaluate(
+await runBrowserTest({
+  name: 'classifications',
+  async run({ page, errors }) {
+    const ids = await page.evaluate(
   async ({ username, archive, sample }) => {
     const { fetchMonth } = await import('/src/api/chesscom.ts');
     const { chessComGameToGame } = await import('/src/import/importer.ts');
@@ -49,34 +34,30 @@ const ids = await page.evaluate(
     }
     return out;
   },
-  { username: USER_CC, archive: ARCHIVE, sample: SAMPLE },
-);
+      { username: USER_CC, archive: ARCHIVE, sample: SAMPLE },
+    );
 
-console.log(`Imported ${ids.length} games, waiting for analysis…`);
-if (ids.length === 0) {
-  console.error('Nothing to analyze.');
-  await browser.close();
-  process.exit(2);
-}
+    console.log(`Imported ${ids.length} games, waiting for analysis…`);
+    expect(ids.length, 'imported at least one Chess.com game').toBeGreaterThan(0);
 
-const start = Date.now();
-let last = '';
-while (Date.now() - start < 15 * 60 * 1000) {
-  const statuses = await page.evaluate(async (ids) => {
-    const { db } = await import('/src/db/schema.ts');
-    const rows = await Promise.all(ids.map((id) => db.games.get(id)));
-    return rows.map((g) => g?.analysisStatus ?? 'missing');
-  }, ids);
-  const key = statuses.join(',');
-  if (key !== last) {
-    console.log(new Date().toISOString(), key);
-    last = key;
-  }
-  if (statuses.every((s) => s === 'done' || s === 'error')) break;
-  await new Promise((r) => setTimeout(r, 2500));
-}
+    const start = Date.now();
+    let last = '';
+    while (Date.now() - start < 15 * 60 * 1000) {
+      const statuses = await page.evaluate(async (ids) => {
+        const { db } = await import('/src/db/schema.ts');
+        const rows = await Promise.all(ids.map((id) => db.games.get(id)));
+        return rows.map((g) => g?.analysisStatus ?? 'missing');
+      }, ids);
+      const key = statuses.join(',');
+      if (key !== last) {
+        console.log(new Date().toISOString(), key);
+        last = key;
+      }
+      if (statuses.every((s) => s === 'done' || s === 'error')) break;
+      await sleep(2500);
+    }
 
-const reports = await page.evaluate(async (ids) => {
+    const reports = await page.evaluate(async (ids) => {
   const { db } = await import('/src/db/schema.ts');
   const out = [];
   for (const id of ids) {
@@ -139,15 +120,21 @@ const reports = await page.evaluate(async (ids) => {
   return out;
 }, ids);
 
-console.log('\n=== Report ===\n');
-for (const r of reports) {
-  console.log(JSON.stringify(r, null, 2));
-  console.log('---');
-}
+    console.log('\n=== Report ===\n');
+    for (const r of reports) {
+      console.log(JSON.stringify(r, null, 2));
+      console.log('---');
+    }
 
-if (pageErrors.length) {
-  console.log('\n=== Browser errors ===');
-  pageErrors.forEach((e) => console.log(e));
-}
+    if (errors.length) {
+      console.log('\n=== Browser errors ===');
+      for (const e of errors) console.log(e);
+    }
 
-await browser.close();
+    // Sanity: every analyzed game should have classified moves.
+    for (const r of reports) {
+      if (r.missing) continue;
+      expect(r.unclassified, `${r.id}: unclassified move count`).toBe(0);
+    }
+  },
+});

@@ -1,13 +1,14 @@
-import { chromium } from 'playwright';
-const URL = process.env.URL || 'http://localhost:5173/';
-const browser = await chromium.launch({ headless: true });
-const page = await (await browser.newContext()).newPage();
-page.on('pageerror', (e) => console.log('[pageerror]', e.message));
-page.on('console', (m) => {
-  if (m.type() === 'error') console.log('[console.error]', m.text());
-});
-await page.goto(URL, { waitUntil: 'networkidle' });
-const id = await page.evaluate(async () => {
+// E2E smoke for the review-page exploration mode. Imports a tiny game,
+// waits for it to analyze, opens it in the review UI, and tries an
+// off-mainline move via simulated mouse drags. Best read alongside
+// exploration-classification.mjs which asserts on the badge.
+
+import { runBrowserTest, DEFAULT_URL, sleep } from '../harness.mjs';
+
+await runBrowserTest({
+  name: 'exploration',
+  async run({ page }) {
+    const id = await page.evaluate(async () => {
   const { db } = await import('/src/db/schema.ts');
   const g = {
     id: 'explore-test-001',
@@ -21,15 +22,18 @@ const id = await page.evaluate(async () => {
   return g.id;
 });
 
-const start = Date.now();
-while (Date.now() - start < 60000) {
-  const st = await page.evaluate(async (id) => (await (await import('/src/db/schema.ts')).db.games.get(id))?.analysisStatus, id);
-  if (st === 'done') break;
-  await new Promise(r => setTimeout(r, 500));
-}
+    const start = Date.now();
+    while (Date.now() - start < 60_000) {
+      const st = await page.evaluate(
+        async (id) => (await (await import('/src/db/schema.ts')).db.games.get(id))?.analysisStatus,
+        id,
+      );
+      if (st === 'done') break;
+      await sleep(500);
+    }
 
-await page.goto(`${URL}#/review/${id}`, { waitUntil: 'networkidle' });
-await page.waitForTimeout(1200);
+    await page.goto(`${DEFAULT_URL}#/review/${id}`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1200);
 
 // Skip to initial position. Try to play 1. e4 as white.
 const info = await page.evaluate(() => {
@@ -95,11 +99,13 @@ if (box && afterPly?.ply === 1) {
   await page.waitForTimeout(2000);
 }
 
-const finalState = await page.evaluate(() => ({
-  exploring: document.body.innerText.includes('Return to game'),
-  text: document.body.innerText.slice(0, 700),
-}));
-console.log('\nfinal:');
-console.log(JSON.stringify(finalState, null, 2));
-
-await browser.close();
+    const finalState = await page.evaluate(() => ({
+      exploring: document.body.innerText.includes('Return to game'),
+      text: document.body.innerText.slice(0, 700),
+    }));
+    console.log('\nfinal:');
+    console.log(JSON.stringify(finalState, null, 2));
+    // This script is a smoke / observation harness — it logs but does
+    // not assert. Use exploration-classification.mjs for the real check.
+  },
+});

@@ -1,9 +1,8 @@
 // Full end-to-end test: import a known PGN into IndexedDB, let the analysis
 // queue run against the live dev server, and verify per-move evals land in DB.
 
-import { chromium } from 'playwright';
+import { runBrowserTest, expect } from '../harness.mjs';
 
-const URL = process.env.URL || 'http://localhost:5173/';
 const PGN = `[Event "Test"]
 [Site "?"]
 [Date "2024.01.01"]
@@ -18,21 +17,11 @@ const PGN = `[Event "Test"]
 1. e4 e5 2. Qh5 Nc6 3. Bc4 Nf6 4. Qxf7# 1-0
 `;
 
-const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext();
-const page = await context.newPage();
-
-const logs = [];
-page.on('console', (msg) => logs.push(`[${msg.type()}] ${msg.text()}`));
-page.on('pageerror', (err) =>
-  logs.push(`[pageerror] ${err.message}\n${err.stack}`),
-);
-
-console.log(`→ Loading ${URL}`);
-await page.goto(URL, { waitUntil: 'networkidle' });
-
-// Insert a game directly into IndexedDB and trigger a manual analysis.
-const result = await page.evaluate(async (pgn) => {
+await runBrowserTest({
+  name: 'analyze',
+  captureAllConsole: true,
+  async run({ page, logs }) {
+    const result = await page.evaluate(async (pgn) => {
   const log = [];
   try {
     const { db } = await import('/src/db/schema.ts');
@@ -101,11 +90,15 @@ const result = await page.evaluate(async (pgn) => {
   }
 }, PGN);
 
-console.log('\n=== Result ===');
-console.log(JSON.stringify(result, null, 2));
+    console.log('\n=== Result ===');
+    console.log(JSON.stringify(result, null, 2));
 
-console.log('\n=== Console ===');
-for (const l of logs) console.log(l);
+    if (logs.length) {
+      console.log('\n=== Console ===');
+      for (const l of logs) console.log(l);
+    }
 
-await browser.close();
-process.exit(result?.ok ? 0 : 1);
+    expect(result.ok, `analyze stage=${result.stage ?? 'ok'}`).toBeTruthy();
+    expect(result.movesCount, 'movesCount').toBeGreaterThan(0);
+  },
+});

@@ -1,12 +1,9 @@
 // Phase-2 smoke test: pushes a PGN with %clk through the full analyzer,
 // verifies motifs/phase/clocks land in the Analysis record, and exercises
 // the aggregator + puzzle generator + repertoire store.
-//
-// Requires: dev server running on URL (default http://localhost:5173/).
 
-import { chromium } from 'playwright';
+import { runBrowserTest, expect } from '../harness.mjs';
 
-const URL = process.env.URL || 'http://localhost:5173/';
 const PGN = `[Event "Test"]
 [Site "?"]
 [Date "2024.01.01"]
@@ -21,20 +18,11 @@ const PGN = `[Event "Test"]
 1. e4 {[%clk 0:03:00]} e5 {[%clk 0:03:00]} 2. Qh5 {[%clk 0:02:55]} Nc6 {[%clk 0:02:52]} 3. Bc4 {[%clk 0:02:50]} Nf6 {[%clk 0:02:40]} 4. Qxf7# {[%clk 0:02:47]} 1-0
 `;
 
-const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext();
-const page = await context.newPage();
-
-const logs = [];
-page.on('console', (msg) => logs.push(`[${msg.type()}] ${msg.text()}`));
-page.on('pageerror', (err) =>
-  logs.push(`[pageerror] ${err.message}\n${err.stack}`),
-);
-
-console.log(`→ Loading ${URL}`);
-await page.goto(URL, { waitUntil: 'networkidle' });
-
-const result = await page.evaluate(async (pgn) => {
+await runBrowserTest({
+  name: 'phase2',
+  captureAllConsole: true,
+  async run({ page, logs }) {
+    const result = await page.evaluate(async (pgn) => {
   const log = [];
   try {
     const { db } = await import('/src/db/schema.ts');
@@ -165,13 +153,16 @@ const result = await page.evaluate(async (pgn) => {
   }
 }, PGN);
 
-console.log('\n=== Result ===');
-console.log(JSON.stringify(result, null, 2));
+    console.log('\n=== Result ===');
+    console.log(JSON.stringify(result, null, 2));
 
-if (!result?.ok) {
-  console.log('\n=== Console ===');
-  for (const l of logs) console.log(l);
-}
+    if (!result?.ok) {
+      console.log('\n=== Console ===');
+      for (const l of logs) console.log(l);
+    }
 
-await browser.close();
-process.exit(result?.ok ? 0 : 1);
+    expect(result.ok, `phase2 evaluate (error=${result.error})`).toBeTruthy();
+    expect(result.movesCount, 'analysis moves').toBeGreaterThan(0);
+    expect(result.repertoire.rootChildren.length, 'repertoire root has at least one child').toBeAtLeast(1);
+  },
+});

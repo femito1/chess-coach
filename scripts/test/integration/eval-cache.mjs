@@ -15,11 +15,9 @@
 // either, because they never call cachedAnalyze for that FEN.
 //
 // Run with the dev server up:
-//   URL=http://localhost:5173/ node scripts/test-eval-cache.mjs
+//   node scripts/run-tests.mjs --only=eval-cache
 
-import { chromium } from 'playwright';
-
-const URL = process.env.URL || 'http://localhost:5173/';
+import { runBrowserTest, expect } from '../harness.mjs';
 
 // Game 1: short Italian-flavored game. Opening prefix is in book.
 const PGN_A = `[Event "Test A"]
@@ -51,18 +49,11 @@ const PGN_B = `[Event "Test B"]
 1. e4 e5 2. Nf3 d6 3. Bc4 Nf6 4. d3 Be7 5. O-O O-O 0-1
 `;
 
-const browser = await chromium.launch({ headless: true });
-const ctx = await browser.newContext();
-const page = await ctx.newPage();
-
-const logs = [];
-page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
-page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
-
-console.log(`-> Loading ${URL}`);
-await page.goto(URL, { waitUntil: 'networkidle' });
-
-const result = await page.evaluate(
+await runBrowserTest({
+  name: 'eval-cache',
+  captureAllConsole: true,
+  async run({ page, logs }) {
+    const result = await page.evaluate(
   async ({ pgnA, pgnB }) => {
     const out = { steps: [] };
     const log = (s) => out.steps.push(s);
@@ -152,64 +143,32 @@ const result = await page.evaluate(
       };
     }
   },
-  { pgnA: PGN_A, pgnB: PGN_B },
-);
+      { pgnA: PGN_A, pgnB: PGN_B },
+    );
 
-console.log('\n=== Result ===');
-console.log(JSON.stringify(result, null, 2));
+    console.log('\n=== Result ===');
+    console.log(JSON.stringify(result, null, 2));
+    console.log('\n=== Console (last 40) ===');
+    for (const l of logs.slice(-40)) console.log(l);
 
-console.log('\n=== Console (last 40) ===');
-for (const l of logs.slice(-40)) console.log(l);
+    expect(result.ok, `evaluate returned ok (error=${result.error})`).toBeTruthy();
+    expect(result.warmHitRatio, 'warm-run hit ratio').toBeAtLeast(0.99);
+    expect(result.warmStats.misses, 'warm-run engine misses').toBe(0);
+    expect(result.warmMs < result.coldMs, 'warm run faster than cold').toBeTruthy();
+    expect(result.bookSkippedA, 'cold run had at least one book skip').toBeTruthy();
+    expect(result.bookMovesA, 'game A book-classified moves').toBeGreaterThan(0);
+    // Game B's overlap with game A is *all in book* in our test PGNs (both
+    // stay in book through 1.e4 e5), so the shared prefix hits the book-skip
+    // path rather than the cache. Assert the book-skip path fired instead.
+    expect(result.overlapStats.bookSkips, 'overlap B book skips').toBeGreaterThan(0);
+    expect(result.evalCacheRowCount, 'evalCache rows after analysis').toBeGreaterThan(0);
 
-await browser.close();
-
-if (!result?.ok) {
-  process.exit(1);
-}
-
-// Assertions.
-let failed = false;
-const fail = (msg) => {
-  console.error(`FAIL: ${msg}`);
-  failed = true;
-};
-
-if (result.warmHitRatio < 0.99) {
-  fail(`warm-run hit ratio ${result.warmHitRatio.toFixed(2)} < 0.99`);
-}
-if (result.warmStats.misses !== 0) {
-  fail(`warm-run had ${result.warmStats.misses} engine misses (expected 0)`);
-}
-if (result.warmMs >= result.coldMs) {
-  fail(
-    `warm run (${result.warmMs.toFixed(0)}ms) was not faster than cold (${result.coldMs.toFixed(0)}ms)`,
-  );
-}
-if (!result.bookSkippedA) {
-  fail(`expected at least one book-skip on cold run of game A`);
-}
-if (result.bookMovesA === 0) {
-  fail(`game A had no moves classified as "book"`);
-}
-// Game B's overlap with game A is *all in book* in our test PGNs (both
-// stay in book through 1.e4 e5), so the shared prefix hits the book-skip
-// path rather than the cache. We assert the book-skip path fired
-// instead.
-if (result.overlapStats.bookSkips === 0) {
-  fail(`overlapping game B had 0 book skips — expected ≥ shared book prefix`);
-}
-if (result.evalCacheRowCount === 0) {
-  fail(`evalCache table is empty after analysis — writes failed`);
-}
-
-if (failed) {
-  process.exit(1);
-}
-console.log(
-  `\nPASS: cold=${result.coldMs.toFixed(0)}ms warm=${result.warmMs.toFixed(0)}ms ` +
-    `(speedup ${(result.coldMs / Math.max(1, result.warmMs)).toFixed(1)}x), ` +
-    `warm hits=${result.warmStats.hits}/0 misses, ` +
-    `book skips on cold=${result.coldStats.bookSkips}, ` +
-    `overlap B hits=${result.overlapStats.hits}/${result.overlapStats.misses}`,
-);
-process.exit(0);
+    console.log(
+      `\nPASS: cold=${result.coldMs.toFixed(0)}ms warm=${result.warmMs.toFixed(0)}ms ` +
+        `(speedup ${(result.coldMs / Math.max(1, result.warmMs)).toFixed(1)}x), ` +
+        `warm hits=${result.warmStats.hits}/0 misses, ` +
+        `book skips on cold=${result.coldStats.bookSkips}, ` +
+        `overlap B hits=${result.overlapStats.hits}/${result.overlapStats.misses}`,
+    );
+  },
+});
