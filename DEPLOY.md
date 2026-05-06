@@ -158,23 +158,43 @@ Two workflows ship with this repo:
   occasionally rate-limits or has transient outages, and we don't want
   that flake to page anyone or block a deploy.
 
-### Dummy CI env vars (why)
+### CI env vars (why real values, not dummies)
 
-Both workflows set:
+Both workflows read three GitHub Actions secrets:
 
 ```yaml
-VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci-dummy-key-not-used-at-runtime
-VITE_SUPABASE_URL: https://ci-dummy.supabase.co
-VITE_SUPABASE_ANON_KEY: ci-dummy-anon-key-not-used-at-runtime
+VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 ```
 
-These are required because `src/lib/env.ts` throws at module load if they
-are missing or malformed (the `pk_` prefix and `https://` checks are
-real). The auth-bypass query flag (`?e2e_auth_bypass=1`) replaces the
-runtime auth path with a synthetic identity + an in-memory Supabase
-stub, so no real Clerk / Supabase backend is ever contacted during CI.
-The dummy values just satisfy the format validators so `<ClerkProvider>`
-can mount.
+These need to be set as **repository secrets** at
+`https://github.com/<owner>/chess-coach/settings/secrets/actions`. Copy
+the values from your local `.env.local`.
+
+Why real values, not dummies: `<ClerkProvider>` mounts at the router
+root in `src/lib/clerk.tsx` regardless of the auth-bypass flag — the
+bypass replaces the auth *hooks* (`useAuth` / `useUser`), not the
+provider. Clerk's provider eagerly validates the publishable key on
+mount; not just the prefix check we do in `src/lib/env.ts`, but a
+deeper decode of the embedded Frontend API URL. A made-up `pk_test_…`
+string passes our prefix check and then crashes inside
+`ClerkProviderBase`, which takes down the React tree, which means
+`<AppLayout>` never mounts, which means `startAnalysisQueue()` never
+fires — and tests like `full-queue` / `heal` time out waiting for
+games to be analyzed.
+
+These values are public-by-design (they already ship in every user's
+browser bundle in production). Putting them in repo secrets is
+operational hygiene, not a security boundary, and lets us rotate keys
+without a workflow edit.
+
+If this ever breaks because someone forgets to add the secrets, the
+canary failure pattern is: `auth-bypass` fails the
+`AppLayout header rendered: expected true, got false` assertion, with
+`@clerk/clerk-react: The publishableKey passed to Clerk is invalid` in
+the page-error log on every failed test that depends on the React tree
+mounting.
 
 ### Branch protection (the gating step)
 

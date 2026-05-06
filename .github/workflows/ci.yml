@@ -19,15 +19,26 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Required because src/lib/env.ts throws at module load if these are
-  # missing or malformed. The auth-bypass query flag (?e2e_auth_bypass=1)
-  # short-circuits the *runtime* auth path, but Vite still bundles
-  # ClerkProvider, which reads these at import time. None of these values
-  # are ever sent to a real Clerk/Supabase backend during CI -- the bypass
-  # uses an in-memory Supabase stub and synthetic auth hooks.
-  VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci-dummy-key-not-used-at-runtime
-  VITE_SUPABASE_URL: https://ci-dummy.supabase.co
-  VITE_SUPABASE_ANON_KEY: ci-dummy-anon-key-not-used-at-runtime
+  # Real Clerk + Supabase config from repo secrets.
+  #
+  # Why we need real values, not dummies: <ClerkProvider> mounts at the
+  # router root regardless of the auth-bypass flag (the bypass replaces
+  # the *hooks*, not the provider). Clerk's provider eagerly validates
+  # the publishable key on mount -- not just the format-prefix check we
+  # do in src/lib/env.ts, but a deeper decode of the embedded Frontend
+  # API URL. A made-up "pk_test_..." string passes our prefix check and
+  # then crashes inside ClerkProviderBase, which crashes the React tree,
+  # which means <AppLayout> never mounts, which means
+  # startAnalysisQueue() never fires, which means tests like full-queue
+  # and heal time out waiting for games to be analyzed.
+  #
+  # These values are public-by-design (they already ship in every user's
+  # browser bundle in production). The repo secrets are operational
+  # hygiene -- not a security boundary -- and let us rotate without a
+  # workflow edit if we ever need to.
+  VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+  VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+  VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
 jobs:
   unit:

@@ -18,9 +18,10 @@ on:
   workflow_dispatch:
 
 env:
-  VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci-dummy-key-not-used-at-runtime
-  VITE_SUPABASE_URL: https://ci-dummy.supabase.co
-  VITE_SUPABASE_ANON_KEY: ci-dummy-anon-key-not-used-at-runtime
+  # See ci.yml for why we need real values rather than dummies.
+  VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+  VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+  VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
 jobs:
   live:
