@@ -17,6 +17,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@clerk/clerk-react": "^5.61.6",
+    "@supabase/supabase-js": "^2.105.3",
     "chess.js": "^1.4.0",
     "chessground": "^9.2.1",
     "dexie": "^4.4.2",

@@ -37,6 +37,8 @@ export function DashboardPage() {
   const wins = games?.filter((g) => g.result === 'win').length ?? 0;
   const losses = games?.filter((g) => g.result === 'loss').length ?? 0;
   const draws = games?.filter((g) => g.result === 'draw').length ?? 0;
+  const decisive = wins + losses + draws;
+  const winPct = decisive > 0 ? Math.round((wins / decisive) * 100) : 0;
 
   // Memoised because `totalSecondsPlayed` parses every PGN to extract
   // clocks. With a 1 k-game library that's non-trivial CPU; we don't
@@ -45,6 +47,15 @@ export function DashboardPage() {
     () => totalSecondsPlayed(games ?? []) / 3600,
     [games],
   );
+
+  // Analysis status is operational, not a KPI. We only surface it in
+  // the dashboard grid when there's something the user might act on:
+  // games actively queued/running, errored, or sitting unanalyzed.
+  // The QueueIndicator pill handles the live-progress affordance.
+  const analyzed = counts?.done ?? 0;
+  const queued = (counts?.pending ?? 0) + (counts?.running ?? 0);
+  const errored = counts?.error ?? 0;
+  const unanalyzed = Math.max(0, total - analyzed - queued - errored);
 
   const recent = games?.slice(0, 5) ?? [];
 
@@ -64,21 +75,23 @@ export function DashboardPage() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat label="Games" value={total} />
-        <Stat label="Wins" value={wins} tone="good" />
-        <Stat label="Losses" value={losses} tone="bad" />
-        <Stat label="Draws" value={draws} />
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Analyzed" value={counts?.done ?? 0} />
-        <Stat label="Queued" value={(counts?.pending ?? 0) + (counts?.running ?? 0)} />
-        <Stat label="Errors" value={counts?.error ?? 0} tone={counts?.error ? 'bad' : undefined} />
-        <Stat label="Avg accuracy" value={avgAccuracy(games ?? [])} suffix="%" />
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <RecordStat wins={wins} draws={draws} losses={losses} winPct={winPct} />
+        <Stat
+          label="Avg accuracy"
+          value={avgAccuracy(games ?? [])}
+          suffix={avgAccuracy(games ?? []) === '—' ? '' : '%'}
+        />
         <Stat label="Hours played" value={formatHours(hoursPlayed)} />
       </div>
+
+      <AnalysisStatus
+        total={total}
+        analyzed={analyzed}
+        queued={queued}
+        unanalyzed={unanalyzed}
+        errored={errored}
+        onRetryErrors={() => void requeueAllErrors()}
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <Link to="/weaknesses" className="card p-4 hover:border-accent/60 transition-colors">
@@ -109,21 +122,6 @@ export function DashboardPage() {
       </div>
 
       <StorageBanner />
-
-      {(counts?.error ?? 0) > 0 && (
-        <div className="card p-3 flex items-center gap-3 border-blunder/40">
-          <span className="text-sm text-blunder">
-            {counts!.error} game{counts!.error === 1 ? '' : 's'} errored during analysis.
-          </span>
-          <button
-            type="button"
-            className="btn text-xs"
-            onClick={() => void requeueAllErrors()}
-          >
-            Retry all
-          </button>
-        </div>
-      )}
 
       <ProgressCharts games={games ?? []} />
 
@@ -191,6 +189,106 @@ function Stat({
         {value}
         {suffix}
       </div>
+    </div>
+  );
+}
+
+/** Combined W/D/L stat. Shows the win-rate as the headline number and a
+ *  chess.com-style stacked bar with W·D·L counts beneath it, so a single
+ *  tile carries the full record without losing the per-bucket detail. */
+function RecordStat({
+  wins,
+  draws,
+  losses,
+  winPct,
+}: {
+  wins: number;
+  draws: number;
+  losses: number;
+  winPct: number;
+}) {
+  const total = wins + draws + losses;
+  const winW = total > 0 ? (wins / total) * 100 : 0;
+  const drawW = total > 0 ? (draws / total) * 100 : 0;
+  const lossW = total > 0 ? (losses / total) * 100 : 0;
+  return (
+    <div className="card p-4 flex flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="text-xs text-text-muted">Record</div>
+        <div className="text-xs text-text-muted tabular-nums">
+          <span className="text-good">{wins}W</span>
+          <span> · </span>
+          <span>{draws}D</span>
+          <span> · </span>
+          <span className="text-blunder">{losses}L</span>
+        </div>
+      </div>
+      <div className="text-2xl font-semibold tabular-nums">
+        {total > 0 ? `${winPct}%` : '—'}
+      </div>
+      <div
+        className="h-1.5 w-full rounded-full bg-bg-raised overflow-hidden flex"
+        role="img"
+        aria-label={`${wins} wins, ${draws} draws, ${losses} losses`}
+      >
+        {winW > 0 && <div className="h-full bg-good" style={{ width: `${winW}%` }} />}
+        {drawW > 0 && <div className="h-full bg-text-muted/60" style={{ width: `${drawW}%` }} />}
+        {lossW > 0 && <div className="h-full bg-blunder" style={{ width: `${lossW}%` }} />}
+      </div>
+    </div>
+  );
+}
+
+/** Single conditional banner for analysis state. Renders nothing in the
+ *  steady state (everything analyzed, nothing queued, no errors) so the
+ *  dashboard isn't cluttered with three tiles that are almost always
+ *  zero. Surfaces actionable state otherwise:
+ *    - errors → red, with retry-all
+ *    - queued → accent, "analyzing N games"
+ *    - unanalyzed-but-idle → muted, with a hint that import / requeue
+ *      will pick them up
+ */
+function AnalysisStatus({
+  total,
+  analyzed,
+  queued,
+  unanalyzed,
+  errored,
+  onRetryErrors,
+}: {
+  total: number;
+  analyzed: number;
+  queued: number;
+  unanalyzed: number;
+  errored: number;
+  onRetryErrors: () => void;
+}) {
+  if (total === 0) return null;
+  if (queued === 0 && errored === 0 && unanalyzed === 0) return null;
+
+  return (
+    <div className="card p-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+      <span className="text-sm text-text-muted">
+        Analysis: <span className="text-text">{analyzed}</span> / {total} analyzed
+      </span>
+      {queued > 0 && (
+        <span className="text-sm text-accent">
+          {queued} {queued === 1 ? 'game' : 'games'} in queue
+        </span>
+      )}
+      {unanalyzed > 0 && queued === 0 && (
+        <span className="text-sm text-text-muted">
+          {unanalyzed} pending
+        </span>
+      )}
+      {errored > 0 && (
+        <span className="text-sm text-blunder flex items-center gap-2">
+          {errored} {errored === 1 ? 'game' : 'games'} errored
+          <button type="button" className="btn text-xs" onClick={onRetryErrors}>
+            Retry all
+          </button>
+        </span>
+      )}
     </div>
   );
 }

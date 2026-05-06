@@ -32,8 +32,9 @@ export class EnginePool {
   private workers: EngineWorker[];
   /** Maximum number of workers this pool will spin up on demand. We keep
    *  this around even after `terminate()` so the pool can self-rehydrate
-   *  when a new analyze() call comes in. */
-  private readonly maxWorkers: number;
+   *  when a new analyze() call comes in. Mutable so the queue can shrink
+   *  the pool when the tab goes hidden — see `setMaxWorkers`. */
+  private maxWorkers: number;
   /** FIFO of pending tasks waiting for a free worker. */
   private queue: Array<{
     fen: string;
@@ -65,6 +66,40 @@ export class EnginePool {
   /** Maximum size this pool will grow to on demand. */
   get capacity(): number {
     return this.maxWorkers;
+  }
+
+  /**
+   * Resize the pool's worker cap. Used by the tab-visibility throttle:
+   * when `document.visibilityState === 'hidden'` we shrink to 1 to keep
+   * the tab cool / save battery, and restore the prior size when the
+   * user comes back.
+   *
+   * Behaviour:
+   *  - Cap is clamped to >= 1 (a 0-sized pool would deadlock `pump`).
+   *  - If the new cap is *smaller* than the current spawned-worker
+   *    count, idle workers above the cap are terminated immediately.
+   *    Busy workers keep running their current task and are released
+   *    on the next `pump()` cycle (we can't safely cancel mid-analyze
+   *    without leaving the FEN/PV state in `lastInfo` partially-parsed).
+   *  - If the new cap is *larger*, nothing happens until the next
+   *    `pump()` — workers are spawned lazily.
+   *
+   * Idempotent. No-op if the cap doesn't actually change.
+   */
+  setMaxWorkers(n: number): void {
+    const next = Math.max(1, Math.floor(n));
+    if (next === this.maxWorkers) return;
+    this.maxWorkers = next;
+    if (this.workers.length <= next) return;
+    // Terminate idle workers down to the new cap. Busy ones get
+    // released by `pump()` after their current job lands.
+    for (let i = this.workers.length - 1; i >= next; i--) {
+      if (!this.busy[i]) {
+        this.workers[i].terminate();
+        this.workers.splice(i, 1);
+        this.busy.splice(i, 1);
+      }
+    }
   }
 
   /** Whether the pool currently has no in-flight tasks AND no queued
@@ -167,9 +202,19 @@ export class EnginePool {
 }
 
 /** Default pool used by the analysis queue. Lazy-initialized on first
- *  use so the workers don't spin up just because the bundle loaded. */
-let _defaultPool: EnginePool | null = null;
+ *  use so the workers don't spin up just because the bundle loaded.
+ *
+ *  Stored on `globalThis` rather than module-scoped so that even if
+ *  Vite / HMR / divergent import paths instantiate this module more
+ *  than once at runtime, every consumer agrees on a single pool. The
+ *  singleton invariant matters: the analysis queue calls
+ *  `setMaxWorkers(1)` from a visibility listener and the live-eval
+ *  consumers grab the same pool via `analysisPool()`, so two pools
+ *  would mean visibility throttling silently doesn't work. */
+const POOL_KEY = '__chessCoachAnalysisPool';
+type GlobalThisWithPool = typeof globalThis & { [POOL_KEY]?: EnginePool };
 export function analysisPool(): EnginePool {
-  if (!_defaultPool) _defaultPool = new EnginePool();
-  return _defaultPool;
+  const g = globalThis as GlobalThisWithPool;
+  if (!g[POOL_KEY]) g[POOL_KEY] = new EnginePool();
+  return g[POOL_KEY];
 }

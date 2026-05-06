@@ -39,21 +39,44 @@ function cacheKey(fen: string, depth: number): string {
 const inflight = new Map<string, Promise<AnalysisResult>>();
 
 /** Hit/miss counters for the *current* page session. Read by the test
- *  script and could be surfaced in a debug panel later. */
-export const cacheStats = {
-  hits: 0,
-  misses: 0,
-  inflightCoalesced: 0,
-  bookSkips: 0,
-  evictions: 0,
-  reset(): void {
-    this.hits = 0;
-    this.misses = 0;
-    this.inflightCoalesced = 0;
-    this.bookSkips = 0;
-    this.evictions = 0;
-  },
-};
+ *  script and could be surfaced in a debug panel later.
+ *
+ *  Stored on `globalThis` so divergent module instantiations (Vite's
+ *  alias-vs-relative path resolution, HMR re-instantiation, dynamic
+ *  imports from test scripts) all increment the same counters. Without
+ *  this, a test that imports `cacheStats` directly while the analyzer
+ *  imports it via `./cache` could read zeros even though the cache is
+ *  actively being populated — see the eval-cache integration test. */
+interface CacheStats {
+  hits: number;
+  misses: number;
+  inflightCoalesced: number;
+  bookSkips: number;
+  evictions: number;
+  reset(): void;
+}
+const STATS_KEY = '__chessCoachCacheStats';
+function buildStats(): CacheStats {
+  const s: CacheStats = {
+    hits: 0,
+    misses: 0,
+    inflightCoalesced: 0,
+    bookSkips: 0,
+    evictions: 0,
+    reset(): void {
+      s.hits = 0;
+      s.misses = 0;
+      s.inflightCoalesced = 0;
+      s.bookSkips = 0;
+      s.evictions = 0;
+    },
+  };
+  return s;
+}
+type GlobalThisWithStats = typeof globalThis & { [STATS_KEY]?: CacheStats };
+const _g = globalThis as GlobalThisWithStats;
+if (!_g[STATS_KEY]) _g[STATS_KEY] = buildStats();
+export const cacheStats = _g[STATS_KEY];
 
 /** Hard cap on persistent rows. Each row is small (a couple of hundred
  *  bytes) but unbounded growth still matters: IndexedDB usage

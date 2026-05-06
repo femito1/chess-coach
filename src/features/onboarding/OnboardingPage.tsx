@@ -1,0 +1,746 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useEffectiveAuth, useEffectiveUser } from '@/lib/testAuth';
+import { useSupabase } from '@/lib/supabase';
+import {
+  fetchArchives,
+  fetchMonth,
+  parseArchiveUrl,
+} from '@/api/chesscom';
+import { suggestUsernameCandidates, emailLocalPart } from './suggestUsername';
+import {
+  estimateImportTime,
+  FALLBACK_MS_PER_GAME_MULTI,
+  FALLBACK_MS_PER_GAME_SINGLE,
+} from './estimate';
+import { probeDevice } from '@/engine/probe';
+import { importLastNMonths, type AutoImportProgress } from '@/features/import/auto';
+import { getSettings, updateSettings } from '@/db/schema';
+import { runProfileSync } from '@/features/auth/useProfileSync';
+
+/**
+ * First-sign-in onboarding wizard. Three logical steps in one page:
+ *
+ *   1. Confirm Chess.com username (smart-suggested, never silent).
+ *   2. Pick an import preset (last 1 / 3 / 12 / all months).
+ *   3. Progress + redirect to dashboard once the import lands.
+ *
+ * The device probe runs in the background as soon as the page mounts,
+ * so by the time the user reaches step 2 the import-time estimates are
+ * calibrated to their machine. We don't block on it — if the user races
+ * past the username step before the probe finishes, step 2 falls back
+ * to the multi/single-thread constants in `estimate.ts`.
+ *
+ * Mounted at `/onboarding` outside `<AppLayout>` so the nav header /
+ * profile chip don't appear during the focused flow. Per
+ * `PASS4_PLAN.md § Pass 4.5`.
+ */
+export function OnboardingPage() {
+  const navigate = useNavigate();
+  const { userId } = useEffectiveAuth();
+  const { user } = useEffectiveUser();
+  const supabase = useSupabase();
+
+  // Kick the device probe off as soon as the page mounts. The wizard
+  // doesn't await this — we just want the cached value sitting in
+  // Settings.deviceAnalysisMsPerGame by the time step 2 reads it.
+  // Marked best-effort: failures are silently swallowed by probeDevice
+  // itself, which writes a fallback so we don't keep retrying.
+  useEffect(() => {
+    void probeDevice().catch(() => {
+      /* probeDevice never throws, but TS doesn't know that */
+    });
+  }, []);
+
+  type Step = 'username' | 'preset' | 'importing';
+  const [step, setStep] = useState<Step>('username');
+  const [confirmedUsername, setConfirmedUsername] = useState('');
+  const [importResult, setImportResult] = useState<{ added: number; skipped: number } | null>(null);
+
+  /** Finish the wizard: persist `onboardingCompletedAt`, push the
+   *  username up to the cloud profile, then leave the wizard. */
+  async function finish(opts: { username?: string; skipImport?: boolean }) {
+    const u = (opts.username ?? '').trim();
+    await updateSettings({
+      ...(u ? { username: u } : {}),
+      onboardingCompletedAt: Date.now(),
+    });
+    if (u && userId) {
+      // Best-effort: re-run profile-sync so the cloud profile picks up
+      // the new username. The handshake is idempotent so re-running it
+      // is safe even if it fired earlier in the session. We swallow
+      // errors because Supabase being down shouldn't block the user
+      // from reaching the dashboard — they have a working local DB.
+      try {
+        const displayName = buildDisplayName(user);
+        await runProfileSync({ supabase, clerkUserId: userId, displayName });
+      } catch (err) {
+        console.warn('[onboarding] profile sync after username confirmation failed', err);
+      }
+    }
+    if (opts.skipImport) {
+      navigate('/dashboard', { replace: true });
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-bg px-6 py-12">
+      <div className="text-center mb-8">
+        <h1 className="text-3xl font-semibold tracking-tight">
+          <span className="text-accent">♞</span> Chess Coach
+        </h1>
+        <p className="text-sm text-text-muted mt-2">
+          Let&rsquo;s get your games imported and analyzed.
+        </p>
+      </div>
+
+      <div className="w-full max-w-xl">
+        <Stepper current={step} />
+        {step === 'username' && (
+          <UsernameStep
+            onConfirm={async (u) => {
+              setConfirmedUsername(u);
+              await finish({ username: u, skipImport: false });
+              setStep('preset');
+            }}
+            onSkip={async () => {
+              await finish({ skipImport: true });
+            }}
+          />
+        )}
+        {step === 'preset' && (
+          <PresetStep
+            username={confirmedUsername}
+            onStart={async (n) => {
+              setStep('importing');
+              try {
+                const r = await importLastNMonths(confirmedUsername, n);
+                setImportResult({ added: r.added, skipped: r.skipped });
+              } catch (err) {
+                console.error('[onboarding] import failed', err);
+                setImportResult({ added: 0, skipped: 0 });
+              }
+            }}
+            onSkipImport={async () => {
+              await finish({ username: confirmedUsername, skipImport: true });
+            }}
+          />
+        )}
+        {step === 'importing' && (
+          <ImportingStep
+            username={confirmedUsername}
+            done={importResult}
+            onDone={async () => {
+              navigate('/dashboard', { replace: true });
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Stepper({ current }: { current: 'username' | 'preset' | 'importing' }) {
+  const steps: Array<{ id: 'username' | 'preset' | 'importing'; label: string }> = [
+    { id: 'username', label: 'Username' },
+    { id: 'preset', label: 'Choose import' },
+    { id: 'importing', label: 'Import' },
+  ];
+  const currentIdx = steps.findIndex((s) => s.id === current);
+  return (
+    <ol className="flex items-center gap-2 text-xs text-text-muted mb-6 justify-center">
+      {steps.map((s, i) => (
+        <li key={s.id} className="flex items-center gap-2">
+          <span
+            className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] ${
+              i <= currentIdx
+                ? 'bg-accent/20 text-accent border border-accent/40'
+                : 'bg-bg-soft border border-border'
+            }`}
+          >
+            {i + 1}
+          </span>
+          <span className={i === currentIdx ? 'text-text' : ''}>{s.label}</span>
+          {i < steps.length - 1 && <span className="text-border">›</span>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function buildDisplayName(user: ReturnType<typeof useEffectiveUser>['user']): string | undefined {
+  if (!user) return undefined;
+  const full = `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim();
+  if (full.length > 0) return full;
+  if (user.firstName) return user.firstName;
+  const email = user.primaryEmailAddress?.emailAddress;
+  if (email) {
+    const localPart = email.split('@')[0];
+    if (localPart) return localPart;
+  }
+  return undefined;
+}
+
+/* =======================================================================
+ *  Step 1 — Username confirmation
+ * ======================================================================= */
+
+interface ChessComPlayerProfile {
+  username: string;
+  avatar?: string;
+  country?: string;
+  last_online?: number;
+  name?: string;
+}
+
+async function fetchChessComPlayer(handle: string): Promise<ChessComPlayerProfile | null> {
+  try {
+    const res = await fetch(
+      `https://api.chess.com/pub/player/${encodeURIComponent(handle)}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as ChessComPlayerProfile;
+  } catch {
+    return null;
+  }
+}
+
+function UsernameStep({
+  onConfirm,
+  onSkip,
+}: {
+  onConfirm: (u: string) => void | Promise<void>;
+  onSkip: () => void | Promise<void>;
+}) {
+  const { user } = useEffectiveUser();
+  const [suggestion, setSuggestion] = useState<ChessComPlayerProfile | null>(null);
+  const [suggestionPending, setSuggestionPending] = useState(true);
+  const [manual, setManual] = useState('');
+  const [manualResult, setManualResult] = useState<
+    | { kind: 'idle' }
+    | { kind: 'pending' }
+    | { kind: 'found'; profile: ChessComPlayerProfile }
+    | { kind: 'notFound' }
+  >({ kind: 'idle' });
+  const [confirming, setConfirming] = useState(false);
+
+  // Auto-suggest: walk the candidate list (clerk username → first name →
+  // email local part) and surface the first one that resolves to a
+  // real Chess.com profile.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const candidates = suggestUsernameCandidates({
+        username: user?.username ?? null,
+        firstName: user?.firstName ?? null,
+        primaryEmailLocalPart: emailLocalPart(user?.primaryEmailAddress?.emailAddress),
+      });
+      for (const c of candidates) {
+        const p = await fetchChessComPlayer(c);
+        if (cancelled) return;
+        if (p) {
+          setSuggestion(p);
+          setSuggestionPending(false);
+          return;
+        }
+      }
+      if (!cancelled) setSuggestionPending(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.username, user?.firstName, user?.primaryEmailAddress?.emailAddress]);
+
+  // Debounced live lookup of the manual input. 300ms idle settles to a
+  // single fetch — the same UX pattern Chess.com uses.
+  const manualRef = useRef(manual);
+  manualRef.current = manual;
+  useEffect(() => {
+    const handle = manual.trim();
+    if (handle.length < 3) {
+      setManualResult({ kind: 'idle' });
+      return;
+    }
+    setManualResult({ kind: 'pending' });
+    const t = setTimeout(async () => {
+      const p = await fetchChessComPlayer(handle);
+      if (manualRef.current.trim() !== handle) return;
+      setManualResult(p ? { kind: 'found', profile: p } : { kind: 'notFound' });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [manual]);
+
+  async function confirm(handle: string) {
+    if (confirming) return;
+    setConfirming(true);
+    try {
+      await onConfirm(handle);
+    } finally {
+      setConfirming(false);
+    }
+  }
+
+  return (
+    <div className="card p-6 space-y-5">
+      <div>
+        <h2 className="text-lg font-medium">What&rsquo;s your Chess.com username?</h2>
+        <p className="text-sm text-text-muted mt-1">
+          We&rsquo;ll pull your games via the public Chess.com API. Nothing
+          gets posted on your behalf.
+        </p>
+      </div>
+
+      {suggestionPending && (
+        <div className="text-sm text-text-muted">Looking for likely matches…</div>
+      )}
+
+      {!suggestionPending && suggestion && (
+        <PlayerCard
+          profile={suggestion}
+          headline="Is this you?"
+          actionLabel={confirming ? 'Confirming…' : 'Yes, that&rsquo;s me'}
+          onAction={() => confirm(suggestion.username)}
+          disabled={confirming}
+        />
+      )}
+
+      {!suggestionPending && !suggestion && (
+        <div className="text-sm text-text-muted">
+          Couldn&rsquo;t guess your handle. No worries — type it in below.
+        </div>
+      )}
+
+      <div className="border-t border-border pt-4 space-y-3">
+        <label className="block text-sm">
+          <div className="mb-1 text-text-muted">
+            {suggestion ? 'Or enter a different username' : 'Enter your Chess.com username'}
+          </div>
+          <input
+            className="input"
+            value={manual}
+            onChange={(e) => setManual(e.target.value)}
+            placeholder="magnuscarlsen"
+            autoFocus={!suggestion}
+          />
+        </label>
+
+        {manualResult.kind === 'pending' && (
+          <div className="text-xs text-text-muted">Checking…</div>
+        )}
+        {manualResult.kind === 'notFound' && (
+          <div className="text-xs text-blunder">
+            No Chess.com user found with that name.
+          </div>
+        )}
+        {manualResult.kind === 'found' && (
+          <PlayerCard
+            profile={manualResult.profile}
+            headline={`Found "${manualResult.profile.username}"`}
+            actionLabel={confirming ? 'Confirming…' : 'Use this account'}
+            onAction={() => confirm(manualResult.profile.username)}
+            disabled={confirming}
+          />
+        )}
+      </div>
+
+      <div className="flex items-center justify-between border-t border-border pt-4">
+        <button
+          type="button"
+          className="text-xs text-text-muted hover:text-text"
+          onClick={() => void onSkip()}
+        >
+          Skip — I&rsquo;ll do this later
+        </button>
+        <span className="text-xs text-text-muted">Step 1 of 2</span>
+      </div>
+    </div>
+  );
+}
+
+function PlayerCard({
+  profile,
+  headline,
+  actionLabel,
+  onAction,
+  disabled,
+}: {
+  profile: ChessComPlayerProfile;
+  headline: string;
+  actionLabel: string;
+  onAction: () => void;
+  disabled?: boolean;
+}) {
+  const country = profile.country
+    ? profile.country.replace('https://api.chess.com/pub/country/', '')
+    : null;
+  return (
+    <div className="rounded-lg border border-accent/30 bg-accent/5 p-4 flex items-center gap-4">
+      {profile.avatar ? (
+        // chess.com hot-links are public; no auth needed.
+        <img
+          src={profile.avatar}
+          alt=""
+          className="w-12 h-12 rounded-full object-cover bg-bg-raised"
+        />
+      ) : (
+        <div className="w-12 h-12 rounded-full bg-bg-raised flex items-center justify-center text-text-muted text-lg font-semibold">
+          {profile.username.charAt(0).toUpperCase()}
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-text-muted">{headline}</div>
+        <div className="font-medium truncate">{profile.username}</div>
+        <div className="text-xs text-text-muted truncate">
+          {[profile.name, country].filter(Boolean).join(' · ') || 'Chess.com player'}
+        </div>
+      </div>
+      <button
+        type="button"
+        className="btn-primary whitespace-nowrap"
+        onClick={onAction}
+        disabled={disabled}
+      >
+        {actionLabel}
+      </button>
+    </div>
+  );
+}
+
+/* =======================================================================
+ *  Step 2 — Preset chooser
+ * ======================================================================= */
+
+interface PresetOption {
+  id: '1m' | '3m' | '12m' | 'all';
+  label: string;
+  months: number;
+  emphasis?: boolean;
+}
+
+const PRESETS: PresetOption[] = [
+  { id: '1m', label: 'Last month', months: 1, emphasis: true },
+  { id: '3m', label: 'Last 3 months', months: 3 },
+  { id: '12m', label: 'Last 12 months', months: 12 },
+  { id: 'all', label: 'All games', months: Infinity },
+];
+
+interface ArchiveCount {
+  url: string;
+  year: number;
+  month: number;
+  /** Number of games in this archive — populated lazily; null until
+   *  the archive's month endpoint has been fetched. */
+  count: number | null;
+}
+
+function PresetStep({
+  username,
+  onStart,
+  onSkipImport,
+}: {
+  username: string;
+  onStart: (months: number) => void | Promise<void>;
+  onSkipImport: () => void | Promise<void>;
+}) {
+  const [archives, setArchives] = useState<ArchiveCount[] | null>(null);
+  const [archivesError, setArchivesError] = useState<string | null>(null);
+  const [msPerGame, setMsPerGame] = useState<number | null>(null);
+  const [chosen, setChosen] = useState<PresetOption['id']>('1m');
+  const [starting, setStarting] = useState(false);
+
+  // Pull archive list + game counts. The archives endpoint returns just
+  // the URLs; we still need to fetch each month to know how many games
+  // it contains. To keep the wizard responsive, we fetch only the most
+  // recent 12 months eagerly (covers 1m / 3m / 12m presets exactly) and
+  // estimate "all" by extrapolating from the average. Rate limiting on
+  // chess.com isn't aggressive but we're nice anyway.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const urls = await fetchArchives(username);
+        const enriched: ArchiveCount[] = urls
+          .map((url): ArchiveCount | null => {
+            const p = parseArchiveUrl(url);
+            return p ? { url, year: p.year, month: p.month, count: null } : null;
+          })
+          .filter((x): x is ArchiveCount => x !== null)
+          .sort((a, b) => (b.year - a.year) * 12 + (b.month - a.month));
+        if (cancelled) return;
+        setArchives(enriched);
+
+        // Fetch the most-recent up-to-12 months' counts in parallel.
+        const recent = enriched.slice(0, 12);
+        const results = await Promise.all(
+          recent.map(async (a) => {
+            try {
+              const games = await fetchMonth(a.url);
+              return { url: a.url, count: games.length };
+            } catch {
+              return { url: a.url, count: 0 };
+            }
+          }),
+        );
+        if (cancelled) return;
+        setArchives((prev) => {
+          if (!prev) return prev;
+          const byUrl = new Map(results.map((r) => [r.url, r.count]));
+          return prev.map((a) =>
+            byUrl.has(a.url) ? { ...a, count: byUrl.get(a.url)! } : a,
+          );
+        });
+      } catch (e) {
+        if (cancelled) return;
+        setArchivesError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [username]);
+
+  // Pull the device probe result. We don't await `probeDevice()` here
+  // — it's fired from the page-level effect — but we read whatever
+  // value lives in Settings, including the fallback the probe writes
+  // on engine failure. If the probe hasn't completed yet, `msPerGame`
+  // stays null and we use the `crossOriginIsolated`-aware fallback for
+  // labels.
+  useEffect(() => {
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    void (async () => {
+      const tick = async () => {
+        const s = await getSettings();
+        if (cancelled) return;
+        if (typeof s.deviceAnalysisMsPerGame === 'number') {
+          setMsPerGame(s.deviceAnalysisMsPerGame);
+          if (interval) clearInterval(interval);
+        }
+      };
+      await tick();
+      interval = setInterval(tick, 750);
+    })();
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, []);
+
+  const fallbackMs =
+    typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated
+      ? FALLBACK_MS_PER_GAME_MULTI
+      : FALLBACK_MS_PER_GAME_SINGLE;
+  const effectiveMs = msPerGame ?? fallbackMs;
+
+  /** Sum game counts across the most-recent N months. Returns null
+   *  when archives haven't loaded yet; returns a (possibly-extrapolated)
+   *  estimate for `Infinity`. */
+  const counts = useMemo(() => {
+    if (!archives) return null;
+    return computePresetCounts(archives);
+  }, [archives]);
+
+  async function start() {
+    if (starting) return;
+    setStarting(true);
+    try {
+      const preset = PRESETS.find((p) => p.id === chosen)!;
+      await onStart(preset.months);
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  return (
+    <div className="card p-6 space-y-5">
+      <div>
+        <h2 className="text-lg font-medium">How much history should we import?</h2>
+        <p className="text-sm text-text-muted mt-1">
+          Importing for <span className="text-text">{username}</span>. Each
+          game gets analyzed in the background after it lands — you can
+          start using the app right away.
+        </p>
+      </div>
+
+      {archivesError && (
+        <div className="text-sm text-blunder border border-blunder/40 rounded-md p-3 bg-blunder/10">
+          Couldn&rsquo;t load Chess.com archives: {archivesError}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {PRESETS.map((p) => {
+          const isChosen = chosen === p.id;
+          const c = counts?.[p.id] ?? null;
+          const games = c?.games ?? null;
+          const exact = c?.exact ?? false;
+          const estimate = games != null
+            ? estimateImportTime(games, effectiveMs)
+            : null;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setChosen(p.id)}
+              className={`text-left p-4 rounded-lg border transition-colors ${
+                isChosen
+                  ? 'border-accent bg-accent/10 text-text'
+                  : p.emphasis
+                    ? 'border-accent/40 bg-bg-soft hover:border-accent/60'
+                    : 'border-border bg-bg-soft hover:border-accent/40'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{p.label}</span>
+                {p.emphasis && !isChosen && (
+                  <span className="text-[10px] uppercase tracking-wider text-accent">
+                    Recommended
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-text-muted mt-2">
+                {games == null
+                  ? 'Loading…'
+                  : `${exact ? '' : '≈'}${games.toLocaleString()} game${games === 1 ? '' : 's'}`}
+              </div>
+              <div className="text-xs text-text-muted">
+                {estimate ? `Analysis: ${estimate.label}` : ' '}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {msPerGame === null && (
+        <div className="text-[11px] text-text-muted">
+          Calibrating engine speed in the background — estimates may
+          tighten up in a moment.
+        </div>
+      )}
+
+      <div className="flex items-center justify-between border-t border-border pt-4">
+        <button
+          type="button"
+          className="text-xs text-text-muted hover:text-text"
+          onClick={() => void onSkipImport()}
+        >
+          Skip import for now
+        </button>
+        <button
+          type="button"
+          className="btn-primary"
+          disabled={starting || archives === null}
+          onClick={() => void start()}
+        >
+          {starting ? 'Starting…' : 'Start import'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Roll up archive game counts into per-preset totals. For "all" we
+ * sum what we have and *extrapolate* the unknown tail using the
+ * average count across the loaded months — better an estimate than a
+ * spinner that never settles.
+ */
+function computePresetCounts(
+  archives: ArchiveCount[],
+): Record<PresetOption['id'], { games: number; exact: boolean }> {
+  function sumKnown(slice: ArchiveCount[]): { games: number; allKnown: boolean } {
+    let games = 0;
+    let allKnown = true;
+    for (const a of slice) {
+      if (a.count == null) {
+        allKnown = false;
+      } else {
+        games += a.count;
+      }
+    }
+    return { games, allKnown };
+  }
+  const m1 = sumKnown(archives.slice(0, 1));
+  const m3 = sumKnown(archives.slice(0, 3));
+  const m12 = sumKnown(archives.slice(0, 12));
+  const known = archives.filter((a) => a.count != null);
+  const avg = known.length > 0
+    ? known.reduce((a, b) => a + (b.count ?? 0), 0) / known.length
+    : 0;
+  const extrapolatedAll = Math.round(
+    sumKnown(archives).games + (archives.length - known.length) * avg,
+  );
+  return {
+    '1m': { games: m1.games, exact: m1.allKnown },
+    '3m': { games: m3.games, exact: m3.allKnown },
+    '12m': { games: m12.games, exact: m12.allKnown },
+    all: { games: extrapolatedAll, exact: known.length === archives.length },
+  };
+}
+
+/* =======================================================================
+ *  Step 3 — Importing
+ * =======================================================================
+ *
+ *  By the time we reach this step, `importLastNMonths` was already
+ *  kicked off by the parent (the wizard awaits it). We render a simple
+ *  spinner-style status that auto-redirects to the dashboard once the
+ *  import resolves, so step 3 is really just "show progress until
+ *  import resolves, then redirect" — collapsed from the original plan.
+ */
+
+function ImportingStep({
+  username,
+  done,
+  onDone,
+}: {
+  username: string;
+  done: { added: number; skipped: number } | null;
+  onDone: () => void | Promise<void>;
+}) {
+  // Auto-advance once the import wraps. The 600ms delay lets the user
+  // briefly see the success summary instead of being whisked away the
+  // millisecond the last archive lands.
+  useEffect(() => {
+    if (!done) return;
+    const t = setTimeout(() => {
+      void onDone();
+    }, 600);
+    return () => clearTimeout(t);
+  }, [done, onDone]);
+
+  return (
+    <div className="card p-6 space-y-4">
+      <h2 className="text-lg font-medium">
+        {done ? 'Imported!' : 'Importing your games…'}
+      </h2>
+      <p className="text-sm text-text-muted">
+        Pulling games for <span className="text-text">{username}</span> from
+        Chess.com. Analysis will run in the background once this finishes.
+      </p>
+      {!done ? (
+        <div className="flex items-center gap-3 text-sm">
+          <span className="inline-block w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+          <span className="text-text-muted">This usually takes a few seconds.</span>
+        </div>
+      ) : (
+        <div className="text-sm">
+          Added <span className="text-good">{done.added}</span>
+          {done.skipped > 0 && (
+            <>
+              , skipped <span className="text-text-muted">{done.skipped}</span>
+              &nbsp;duplicates
+            </>
+          )}
+          .
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Re-export the `AutoImportProgress` type so callers importing from
+// this module get a single import site even though the type itself
+// lives in the auto-import feature.
+export type { AutoImportProgress };

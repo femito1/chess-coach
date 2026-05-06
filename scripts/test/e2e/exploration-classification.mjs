@@ -5,7 +5,7 @@
 // Regression guard for the "icon does not show next to the piece when
 // I make a move outside the game" report.
 
-import { runBrowserTest, expect, sleep, DEFAULT_URL } from '../harness.mjs';
+import { runBrowserTest, expect, sleep, DEFAULT_URL, appendBypass } from '../harness.mjs';
 
 await runBrowserTest({
   name: 'exploration-classification',
@@ -48,7 +48,7 @@ await runBrowserTest({
     }
     console.log('Analysis done.');
 
-    await page.goto(`${DEFAULT_URL}#/review/${id}`, { waitUntil: 'networkidle' });
+    await page.goto(appendBypass(`${DEFAULT_URL}review/${id}`), { waitUntil: 'networkidle' });
     await page.waitForTimeout(800);
 
     // Don't step through the mainline — go straight to off-mainline from

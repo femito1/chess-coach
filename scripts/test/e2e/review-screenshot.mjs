@@ -45,9 +45,13 @@ await runBrowserTest({
       await page.waitForTimeout(1000);
     }
 
-    // Navigate via hashchange — HashRouter listens to that event.
+    // Navigate to the review page via a real path (we use BrowserRouter,
+    // so pushState / a fresh `goto` is the correct way; the previous
+    // `window.location.hash` approach is a no-op now that hashes don't
+    // encode routes).
     await page.evaluate((id) => {
-      window.location.hash = `#/review/${id}`;
+      window.history.pushState({}, '', `/review/${id}`);
+      window.dispatchEvent(new PopStateEvent('popstate'));
     }, firstId);
     await page.waitForTimeout(3000);
 

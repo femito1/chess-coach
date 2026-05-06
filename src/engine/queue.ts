@@ -75,7 +75,34 @@ export const useBootStore = create<BootState>((set) => ({
   setStarted: (started) => set({ started }),
 }));
 
-let started = false;
+/**
+ * Module-singleton flags stored on `globalThis` rather than as
+ * module-scoped variables so divergent import paths (`'@/engine/queue'`
+ * vs `'/src/engine/queue.ts'` in tests, or HMR re-instantiation) all
+ * see the same boot state. Without this, the queue could start twice
+ * (one boot from AppLayout + one from a test-side import), each with
+ * its own `started=false`, attaching duplicate visibility listeners
+ * and racing two `runLoop` instances.
+ */
+const QUEUE_STATE_KEY = '__chessCoachQueueState';
+interface QueueModuleState {
+  started: boolean;
+  visibilityAttached: boolean;
+  priorMaxWorkers: number | null;
+}
+function queueModuleState(): QueueModuleState {
+  const g = globalThis as typeof globalThis & {
+    [QUEUE_STATE_KEY]?: QueueModuleState;
+  };
+  if (!g[QUEUE_STATE_KEY]) {
+    g[QUEUE_STATE_KEY] = {
+      started: false,
+      visibilityAttached: false,
+      priorMaxWorkers: null,
+    };
+  }
+  return g[QUEUE_STATE_KEY];
+}
 
 /**
  * Run a boot-step in isolation. Any error inside is logged but never
@@ -94,8 +121,11 @@ async function bootStep(label: string, fn: () => Promise<unknown>): Promise<void
 }
 
 export async function startAnalysisQueue(): Promise<void> {
-  if (started) return;
-  started = true;
+  const qstate = queueModuleState();
+  if (qstate.started) return;
+  qstate.started = true;
+
+  attachVisibilityThrottle();
 
   // Step 1 (CRITICAL): recover any games that were mid-analysis on last
   // load. Must run before runLoop so we don't double-pick or starve.
@@ -253,4 +283,54 @@ async function runLoop(): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/* =======================================================================
+ *  Tab-visibility throttle
+ * =======================================================================
+ *
+ *  Background tabs in Chrome/Edge are throttled aggressively (timers
+ *  clamp to ~1 Hz, audio backgrounds, etc.) but Web Workers running
+ *  Stockfish are NOT throttled — a hidden tab can happily peg every CPU
+ *  core analyzing a backlog of games, which in practice means a hot
+ *  laptop and visible battery drain when the user is doing something
+ *  else in another tab.
+ *
+ *  Strategy: when the tab goes hidden, drop the engine pool's worker
+ *  cap to 1 so analysis still progresses (we don't *stop* the queue —
+ *  the user came back to a fresh-import tab specifically to have it
+ *  process in the background) but at a fraction of the heat. When the
+ *  user comes back, restore the prior cap.
+ *
+ *  Idempotent: attaching twice is a no-op (we guard with `attached`).
+ *  Browser-only — `document` is undefined under SSR / vitest jsdom
+ *  configs that don't include it, so we no-op cleanly there.
+ */
+
+function attachVisibilityThrottle(): void {
+  const qstate = queueModuleState();
+  if (qstate.visibilityAttached) return;
+  if (typeof document === 'undefined') return;
+  qstate.visibilityAttached = true;
+
+  const onVisibilityChange = () => {
+    const pool = analysisPool();
+    if (document.hidden) {
+      if (qstate.priorMaxWorkers === null) {
+        qstate.priorMaxWorkers = pool.capacity;
+      }
+      pool.setMaxWorkers(1);
+    } else {
+      if (qstate.priorMaxWorkers !== null) {
+        pool.setMaxWorkers(qstate.priorMaxWorkers);
+        qstate.priorMaxWorkers = null;
+      }
+    }
+  };
+
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  // Apply once on attach in case the tab is already hidden when the
+  // queue boots (e.g. user opens the app, switches tabs, the queue
+  // finally finishes its boot housekeeping in the background).
+  onVisibilityChange();
 }

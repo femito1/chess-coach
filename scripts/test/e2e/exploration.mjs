@@ -3,7 +3,7 @@
 // off-mainline move via simulated mouse drags. Best read alongside
 // exploration-classification.mjs which asserts on the badge.
 
-import { runBrowserTest, DEFAULT_URL, sleep } from '../harness.mjs';
+import { runBrowserTest, DEFAULT_URL, sleep, appendBypass } from '../harness.mjs';
 
 await runBrowserTest({
   name: 'exploration',
@@ -32,7 +32,7 @@ await runBrowserTest({
       await sleep(500);
     }
 
-    await page.goto(`${DEFAULT_URL}#/review/${id}`, { waitUntil: 'networkidle' });
+    await page.goto(appendBypass(`${DEFAULT_URL}review/${id}`), { waitUntil: 'networkidle' });
     await page.waitForTimeout(1200);
 
 // Skip to initial position. Try to play 1. e4 as white.

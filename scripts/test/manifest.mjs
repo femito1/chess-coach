@@ -18,6 +18,9 @@
 // Layout: paths are relative to the repo root.
 
 export const BROWSER_TESTS = [
+  // --- Auth / test-mode infra -------------------------------------
+  { name: 'auth-bypass',                file: 'scripts/test/integration/auth-bypass.mjs',                category: 'integration' },
+
   // --- Engine + queue + cache (core analysis pipeline) -------------
   { name: 'engine',                     file: 'scripts/test/integration/engine.mjs',                     category: 'integration' },
   { name: 'analyze',                    file: 'scripts/test/integration/analyze.mjs',                    category: 'integration' },
@@ -25,6 +28,8 @@ export const BROWSER_TESTS = [
   { name: 'heal',                       file: 'scripts/test/integration/heal.mjs',                       category: 'integration' },
   { name: 'pool-idle-teardown',         file: 'scripts/test/integration/pool-idle-teardown.mjs',         category: 'integration' },
   { name: 'eval-cache',                 file: 'scripts/test/integration/eval-cache.mjs',                 category: 'integration' },
+  { name: 'device-probe',               file: 'scripts/test/integration/device-probe.mjs',               category: 'integration' },
+  { name: 'visibility-throttle',        file: 'scripts/test/integration/visibility-throttle.mjs',        category: 'integration' },
 
   // --- Classification + accuracy + recompute -----------------------
   { name: 'recompute',                  file: 'scripts/test/integration/recompute.mjs',                  category: 'integration' },
@@ -37,6 +42,7 @@ export const BROWSER_TESTS = [
   // --- Importing + persistence ------------------------------------
   { name: 'backup',                     file: 'scripts/test/integration/backup.mjs',                     category: 'integration' },
   { name: 'phase2',                     file: 'scripts/test/integration/phase2.mjs',                     category: 'integration' },
+  { name: 'auto-import',                file: 'scripts/test/integration/auto-import.mjs',                category: 'integration' },
   { name: 'live-chesscom',              file: 'scripts/test/live/live-chesscom.mjs',                     category: 'live' },
 
   // --- UI / review page -------------------------------------------

@@ -152,6 +152,28 @@ export interface Settings {
   /** Same idea for the boot-time opening-metadata refresh. Bumped only
    *  when `reparseOpeningFromPgn` changes its output for existing PGNs. */
   lastOpeningRefreshVersion?: number;
+  /** Clerk user id this local DB is bound to. Set on first successful
+   *  sign-in (Pass 3 of `PROJECT_STATUS.md` §10). When a *different*
+   *  Clerk user signs in on the same browser profile, the profile-sync
+   *  layer refuses to silently merge their data and surfaces a warning
+   *  — without this we'd happily attribute one user's imported games to
+   *  another's profile, which is both privacy-leaky and hard to undo.
+   *  Undefined for anonymous (pre-Phase 2) DBs and for fresh installs
+   *  prior to first sign-in. */
+  boundClerkUserId?: string;
+  /** Epoch ms when the user finished the onboarding wizard
+   *  (`/onboarding`). When unset for a signed-in user, the wizard
+   *  redirect fires and walks them through username confirmation +
+   *  initial import. Reset to undefined when a new Clerk user binds to
+   *  this device (so a fresh sign-in always lands in onboarding). */
+  onboardingCompletedAt?: number;
+  /** Calibrated Stockfish analysis time in milliseconds per *game*
+   *  (averaged across plies) on this device, measured by the device
+   *  probe (`src/engine/probe.ts`) at onboarding. Used to render honest
+   *  time estimates in the import preset chooser ("~12 min") rather
+   *  than guessing. Falls back to a conservative constant if the probe
+   *  ever fails. */
+  deviceAnalysisMsPerGame?: number;
 }
 
 /* =======================================================================
@@ -467,6 +489,51 @@ export class CoachDB extends Dexie {
     // table — nothing to backfill (older imports just look "never synced"
     // until the user re-clicks them, which is an idempotent no-op).
     this.version(6).stores({
+      games:
+        'id, url, username, endTime, analysisStatus, timeClass, eco, result',
+      analyses: 'gameId, analyzedAt, depth',
+      settings: 'key',
+      puzzles: 'id, gameId, generatedAt, *motifs, *tags, [srs.dueAt+id]',
+      repertoires: 'id, color, updatedAt',
+      repertoireNodes: 'id, repertoireId, fen, parentFen',
+      repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',
+      repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
+      notes: 'fenKey, updatedAt',
+      evalCache: 'key, fen, depth, savedAt',
+      importRecords: 'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
+    });
+    // v7: no shape change — added optional `boundClerkUserId` to the
+    // `Settings` row for Phase 2 auth (PROJECT_STATUS.md §10). Dexie
+    // doesn't index that field, so nothing in `.stores(...)` differs
+    // from v6. The version bump exists purely so existing DBs surface
+    // the new field as `undefined` (the type contract) rather than
+    // remaining stuck at the v6 type. Empty `.upgrade()` is fine —
+    // there's nothing to backfill: a missing `boundClerkUserId` is
+    // exactly how we represent "this DB has never seen a sign-in", and
+    // the profile-sync reducer treats that case as the first-sign-in
+    // path.
+    this.version(7).stores({
+      games:
+        'id, url, username, endTime, analysisStatus, timeClass, eco, result',
+      analyses: 'gameId, analyzedAt, depth',
+      settings: 'key',
+      puzzles: 'id, gameId, generatedAt, *motifs, *tags, [srs.dueAt+id]',
+      repertoires: 'id, color, updatedAt',
+      repertoireNodes: 'id, repertoireId, fen, parentFen',
+      repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',
+      repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
+      notes: 'fenKey, updatedAt',
+      evalCache: 'key, fen, depth, savedAt',
+      importRecords: 'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
+    });
+    // v8: same story as v7 — added `onboardingCompletedAt` and
+    // `deviceAnalysisMsPerGame` to `Settings`. Neither is indexed, so
+    // `.stores(...)` is unchanged. Existing DBs surface the new fields
+    // as undefined; the onboarding gate treats that as "user has not
+    // completed onboarding yet" and redirects them through the wizard,
+    // which is the desired behaviour for users who upgraded across the
+    // Phase 2 boundary.
+    this.version(8).stores({
       games:
         'id, url, username, endTime, analysisStatus, timeClass, eco, result',
       analyses: 'gameId, analyzedAt, depth',

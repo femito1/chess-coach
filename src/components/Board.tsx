@@ -103,44 +103,25 @@ function isKnightJump(from: string, to: string): boolean {
   return (df === 1 && dr === 2) || (df === 2 && dr === 1);
 }
 
-/** Square -> pixel center (in percent of board size) from white's POV. */
-function squareToPct(
+/**
+ * Square -> chessground's internal `pos2user` coords. Chessground's
+ * shape SVG uses `viewBox="-4 -4 8 8"`, so each square is exactly 1 unit
+ * wide, the centre of `a1` (white POV) sits at (-3.5, 3.5) and h8 at
+ * (3.5, -3.5). We mirror the math so our knight overlay shares the same
+ * coordinate system as chessground's straight arrows — that's what
+ * makes stroke widths, arrowhead sizes, and arrow shortening line up
+ * pixel-for-pixel.
+ */
+function squareToCgUser(
   square: string,
   orientation: 'white' | 'black',
 ): { x: number; y: number } {
   const fileIdx = square.charCodeAt(0) - 'a'.charCodeAt(0);
   const rankIdx = Number(square[1]) - 1;
   const boardFile = orientation === 'white' ? fileIdx : 7 - fileIdx;
-  const boardRank = orientation === 'white' ? 7 - rankIdx : rankIdx;
-  return {
-    x: (boardFile + 0.5) * 12.5,
-    y: (boardRank + 0.5) * 12.5,
-  };
-}
-
-/**
- * Build an L-shaped path (Chess.com-style) from `from` to `to` for a
- * knight move. The long leg goes first along the axis of the larger
- * delta; the short leg turns 90deg and ends at the destination.
- */
-function knightLPath(
-  from: string,
-  to: string,
-  orientation: 'white' | 'black',
-): { d: string; arrowAt: { x: number; y: number; angle: number } } | null {
-  if (!isKnightJump(from, to)) return null;
-  const a = squareToPct(from, orientation);
-  const b = squareToPct(to, orientation);
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  // Long leg along the axis with larger magnitude.
-  const longHoriz = Math.abs(dx) > Math.abs(dy);
-  const corner = longHoriz ? { x: b.x, y: a.y } : { x: a.x, y: b.y };
-  const d = `M ${a.x} ${a.y} L ${corner.x} ${corner.y} L ${b.x} ${b.y}`;
-  // Arrowhead angle is along the final (short) leg.
-  const angle =
-    (Math.atan2(b.y - corner.y, b.x - corner.x) * 180) / Math.PI;
-  return { d, arrowAt: { x: b.x, y: b.y, angle } };
+  const boardRank = orientation === 'white' ? rankIdx : 7 - rankIdx;
+  // pos2user(pos) = (pos[0] - 3.5, 3.5 - pos[1]) in user units.
+  return { x: boardFile - 3.5, y: 3.5 - boardRank };
 }
 
 export function Board({
@@ -162,8 +143,15 @@ export function Board({
   const skipNextAnim = useRef(false);
   /** Knight-jump shapes split out from chessground for our L-path overlay.
    *  Non-knight shapes (circles + straight arrows) stay inside chessground
-   *  and persist there until the user erases them or the FEN changes. */
-  const [knightShapes, setKnightShapes] = useState<DrawShape[]>([]);
+   *  and persist there until the user erases them or the FEN changes.
+   *  `destShareCount` mirrors chessground's `dests` collision map so the
+   *  knight L-path can shorten its final leg by `arrowMargin(20/64)`
+   *  whenever another arrow points at the same square — exactly like a
+   *  straight arrow would. */
+  const [knightOverlay, setKnightOverlay] = useState<{
+    shapes: DrawShape[];
+    destShareCount: Map<string, number>;
+  }>({ shapes: [], destShareCount: new Map() });
   /** When we replace a knight arrow's brush with `invisible` to suppress
    *  chessground's straight-line rendering, we'd lose the user's chosen
    *  colour. We stash the original brush keyed by `${orig}-${dest}` so the
@@ -388,8 +376,20 @@ export function Board({
             }
           }
 
+          // Tally how many shapes target each destination across every
+          // arrow chessground knows about (including knight shapes that
+          // are now `invisible`-brushed). This matches chessground's own
+          // `dests` collision detection (see svg.ts `isShort`) and tells
+          // the knight overlay which final-leg margin to use.
+          const destShareCount = new Map<string, number>();
+          for (const s of next) {
+            if (s.dest && s.orig !== s.dest) {
+              destShareCount.set(s.dest, (destShareCount.get(s.dest) ?? 0) + 1);
+            }
+          }
+
           if (mutated) api.current?.setShapes(next);
-          setKnightShapes(overlayKnights);
+          setKnightOverlay({ shapes: overlayKnights, destShareCount });
         },
       },
     };
@@ -413,7 +413,7 @@ export function Board({
       turnColor: turn,
       animation: { enabled: animEnabled, duration: 80 },
     });
-    setKnightShapes([]);
+    setKnightOverlay({ shapes: [], destShareCount: new Map() });
     knightOriginalBrushRef.current.clear();
   }, [fen, turn]);
 
@@ -480,7 +480,11 @@ export function Board({
     <div ref={wrapRef} className="relative aspect-square w-full max-w-[560px] mx-auto">
       <div ref={boardRef} className="w-full h-full" />
       <SquareHighlightOverlay squares={highlightSquares} orientation={orientation} />
-      <KnightArrowOverlay shapes={knightShapes} orientation={orientation} />
+      <KnightArrowOverlay
+        shapes={knightOverlay.shapes}
+        destShareCount={knightOverlay.destShareCount}
+        orientation={orientation}
+      />
       {badge && lastMoveUci && (
         <BadgeOverlay
           square={lastMoveUci.slice(2, 4)}
@@ -494,96 +498,148 @@ export function Board({
   );
 }
 
-/** Mirrors the chessground brush palette we configure in `Board()`. We
- *  keep `green` and `red` mapped to chess.com red so user-drawn knight
- *  arrows colour-match the straight-arrow shapes chessground draws for
- *  rooks/bishops. `engineBest` retains chessground's classic green for
- *  the analysis review's recommendation arrow. */
-const BRUSH_COLOR: Record<string, string> = {
-  green: CHESS_COM_RED,
-  red: CHESS_COM_RED,
-  blue: '#003088',
-  yellow: '#e68f00',
-  engineBest: ENGINE_BEST_GREEN,
+/** Mirrors the chessground brush palette we configure in `Board()`. Each
+ *  entry has the same `color` / `opacity` / `lineWidth` used in the
+ *  chessground brushes config above so straight arrows and knight
+ *  L-arrows render with identical stroke widths and tints. Keep them in
+ *  sync if either palette changes.
+ *
+ *  `green` and `red` both map to chess.com red because that's what
+ *  chessground does for user-drawn shapes (the brush remap above
+ *  rewrites green → CHESS_COM_RED). `engineBest` retains chessground's
+ *  classic green for the analysis review's recommendation arrow.
+ */
+const KNIGHT_BRUSH: Record<string, { color: string; opacity: number; lineWidth: number }> = {
+  green: { color: CHESS_COM_RED, opacity: 0.85, lineWidth: 12 },
+  red: { color: CHESS_COM_RED, opacity: 0.85, lineWidth: 12 },
+  blue: { color: '#003088', opacity: 0.85, lineWidth: 12 },
+  yellow: { color: '#e68f00', opacity: 0.85, lineWidth: 12 },
+  engineBest: { color: ENGINE_BEST_GREEN, opacity: 0.9, lineWidth: 12 },
 };
 
+/**
+ * Renders an L-shaped knight arrow that matches chessground's straight
+ * arrows pixel-for-pixel: same coordinate system (viewBox `-4 -4 8 8`,
+ * `xMidYMid slice`), same stroke width (`lineWidth/64` user units),
+ * same opacity application (only on the `<line>`, not on a parent
+ * group), same arrowhead marker geometry (`M0,0 V4 L3,2 Z`, `refX=2.05`,
+ * `refY=2`, `markerWidth=4`), and the same tail shortening
+ * (`arrowMargin = 10/64` for a single arrow, `20/64` when another arrow
+ * targets the same square — i.e. `isShort` from chessground/src/svg.ts).
+ *
+ * Why the careful match: previously the L-arrow used a different SVG
+ * coordinate system (`viewBox 0 0 100 100`, `preserveAspectRatio
+ * "none"`), butt linecaps, and a parent-group `opacity`. The result
+ * looked DARKER than the regular straight arrows (the line + arrowhead
+ * fill stacked their alpha at the corner) and ran all the way to the
+ * destination corner, visually pushing colliding straight arrows off
+ * their square. Mirroring chessground's geometry exactly fixes both:
+ * stacking is identical, and our knight participates in the same
+ * `arrowMargin` shortening rule that chessground applies to the
+ * straight arrow it's colliding with.
+ */
 function KnightArrowOverlay({
   shapes,
+  destShareCount,
   orientation,
 }: {
   shapes: DrawShape[];
+  destShareCount: Map<string, number>;
   orientation: 'white' | 'black';
 }) {
   if (shapes.length === 0) return null;
-  // Chessground's arrows use a `marker-end` triangle whose tip sits flush
-  // with the end of the line (the line is shortened by `arrowMargin`
-  // worth of stroke widths). We reproduce that look here so a knight's
-  // L-path doesn't visually clash with a rook/bishop arrow drawn next to
-  // it. Each brush colour gets its own `<marker>` because SVG markers
-  // can't reference the parent stroke colour declaratively.
-  const colors = Array.from(
-    new Set(
-      shapes
-        .map((s) => (s.brush && BRUSH_COLOR[s.brush]) ?? BRUSH_COLOR.green)
-        .filter(Boolean),
-    ),
-  );
   return (
     <svg
-      viewBox="0 0 100 100"
-      preserveAspectRatio="none"
+      viewBox="-4 -4 8 8"
+      preserveAspectRatio="xMidYMid slice"
       className="absolute inset-0 pointer-events-none"
       // z-index 9 matches chessground's `.cg-custom-svgs` so the L-shape is
       // painted above pieces (z-index 2/8) but below a piece being dragged
       // (z-index 11), exactly like chess.com.
-      style={{ width: '100%', height: '100%', zIndex: 9 }}
+      //
+      // CRITICAL: chessground's `.cg-shapes` stylesheet applies an
+      // SVG-level `opacity: 0.6` on top of each per-arrow `opacity: 0.85`,
+      // landing at an effective ~0.51 alpha for user arrows (see
+      // node_modules/chessground/assets/chessground.base.css:113-117).
+      // Our overlay must inherit the same outer multiplier or every
+      // knight arrow renders noticeably brighter / more saturated than
+      // the straight arrows next to it. (Pixel sampling confirmed it:
+      // knight RGB(216,89,84) vs straight RGB(230,143,126) over the
+      // same brush — exactly the 0.85 → 0.51 alpha gap.)
+      style={{ width: '100%', height: '100%', zIndex: 9, opacity: 0.6 }}
     >
       <defs>
-        {colors.map((c) => (
-          <marker
-            key={c}
-            id={`knight-arrowhead-${markerId(c)}`}
-            viewBox="0 0 4 4"
-            refX="2.05"
-            refY="2"
-            markerWidth="4"
-            markerHeight="4"
-            orient="auto"
-            // Setting markerUnits to strokeWidth (the default) makes the
-            // arrowhead scale with the line. Chessground's marker uses
-            // the same path: M0,0 V4 L3,2 Z — a triangle pointing right.
-          >
-            <path d="M0,0 V4 L3,2 Z" fill={c} />
-          </marker>
-        ))}
+        {shapes.map((s, i) => {
+          const cfg = brushFor(s);
+          return (
+            <marker
+              key={`m-${i}-${cfg.color}`}
+              id={`knight-arrowhead-${i}`}
+              viewBox="0 0 4 4"
+              refX="2.05"
+              refY="2"
+              markerWidth="4"
+              markerHeight="4"
+              orient="auto"
+              overflow="visible"
+            >
+              <path d="M0,0 V4 L3,2 Z" fill={cfg.color} />
+            </marker>
+          );
+        })}
       </defs>
       {shapes.map((s, i) => {
         if (!s.dest) return null;
-        const path = knightLPath(s.orig, s.dest, orientation);
-        if (!path) return null;
-        const color =
-          (s.brush && BRUSH_COLOR[s.brush]) ?? BRUSH_COLOR.green;
+        const cfg = brushFor(s);
+        const a = squareToCgUser(s.orig, orientation);
+        const b = squareToCgUser(s.dest, orientation);
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        // Long leg first along the axis with larger magnitude — that's
+        // the chess.com convention.
+        const longHoriz = Math.abs(dx) > Math.abs(dy);
+        const corner = longHoriz ? { x: b.x, y: a.y } : { x: a.x, y: b.y };
+        // Shorten the final leg so the line tip sits inside the
+        // arrowhead, exactly like chessground does for straight arrows.
+        // Chessground uses `arrowMargin = (shorten ? 20 : 10) / 64`, with
+        // `shorten=true` whenever another arrow targets the same square.
+        const shorten = (destShareCount.get(s.dest) ?? 0) > 1;
+        const margin = (shorten ? 20 : 10) / 64;
+        const legDx = b.x - corner.x;
+        const legDy = b.y - corner.y;
+        const legLen = Math.hypot(legDx, legDy) || 1;
+        const tipX = b.x - (legDx / legLen) * margin;
+        const tipY = b.y - (legDy / legLen) * margin;
+        const d = `M ${a.x} ${a.y} L ${corner.x} ${corner.y} L ${tipX} ${tipY}`;
+        const strokeWidth = cfg.lineWidth / 64;
         return (
-          <g key={i} opacity={0.85}>
-            <path
-              d={path.d}
-              stroke={color}
-              strokeWidth={2.4}
-              strokeLinecap="butt"
-              strokeLinejoin="round"
-              fill="none"
-              markerEnd={`url(#knight-arrowhead-${markerId(color)})`}
-            />
-          </g>
+          <path
+            key={`p-${i}`}
+            d={d}
+            stroke={cfg.color}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+            opacity={cfg.opacity}
+            markerEnd={`url(#knight-arrowhead-${i})`}
+          />
         );
       })}
     </svg>
   );
 }
 
-/** Convert a hex / colour string into something safe for an SVG `id`. */
-function markerId(color: string): string {
-  return color.replace(/[^a-zA-Z0-9]/g, '');
+/** Look up the chessground-equivalent brush config for a knight shape.
+ *  Falls back to `green` (chess.com red) for unknown brushes so we never
+ *  render a stray black default. */
+function brushFor(shape: DrawShape): {
+  color: string;
+  opacity: number;
+  lineWidth: number;
+} {
+  const key = shape.brush ?? 'green';
+  return KNIGHT_BRUSH[key] ?? KNIGHT_BRUSH.green;
 }
 
 const HIGHLIGHT_COLOR: Record<NonNullable<NonNullable<BoardProps['highlightSquares']>[number]['color']>, string> = {
@@ -594,7 +650,20 @@ const HIGHLIGHT_COLOR: Record<NonNullable<NonNullable<BoardProps['highlightSquar
 
 /**
  * Renders a colored ring on each requested square. Used for hints (blue)
- * and feedback (red/green) during repertoire training.
+ * and feedback (red/green) during repertoire training and puzzles.
+ *
+ * Implementation note: we used to draw this as an SVG circle with
+ * `viewBox="0 0 100 100" preserveAspectRatio="none"`. That looked fine on
+ * pixel-perfect 8-multiple board widths, but a non-multiple width (the
+ * puzzle page caps the board at `min(560px, calc(100vh - 280px))`, which
+ * is rarely a multiple of 8 in practice) forced the SVG to fractionally
+ * stretch and pushed the ring noticeably off-centre relative to the
+ * pieces chessground was rendering inside its own per-square divs.
+ *
+ * Switching to a stack of absolutely-positioned `div`s, each sized at
+ * exactly 12.5% × 12.5% (the same percentage chessground uses for its
+ * pieces), makes the ring share chessground's rounding and stay glued to
+ * the square center on every viewport size.
  */
 function SquareHighlightOverlay({
   squares,
@@ -605,30 +674,49 @@ function SquareHighlightOverlay({
 }) {
   if (squares.length === 0) return null;
   return (
-    <svg
-      viewBox="0 0 100 100"
-      preserveAspectRatio="none"
+    <div
       className="absolute inset-0 pointer-events-none"
-      style={{ width: '100%', height: '100%', zIndex: 9 }}
+      style={{ zIndex: 9 }}
     >
       {squares.map((sq, i) => {
-        const c = squareToPct(sq.square, orientation);
+        const fileIdx = sq.square.charCodeAt(0) - 'a'.charCodeAt(0);
+        const rankIdx = Number(sq.square[1]) - 1;
+        const boardFile = orientation === 'white' ? fileIdx : 7 - fileIdx;
+        const boardRank = orientation === 'white' ? 7 - rankIdx : rankIdx;
         const color = HIGHLIGHT_COLOR[sq.color ?? 'hint'];
+        // Per-square cell at exactly 12.5% × 12.5% of the board, in the
+        // same percentage grid chessground uses for pieces — this keeps
+        // the ring centered on every viewport size. The inner ring is
+        // 80% of the cell so it sits just inside the square edge,
+        // leaving the piece visible underneath.
         return (
-          <circle
+          <div
             key={`${sq.square}-${i}`}
-            cx={c.x}
-            cy={c.y}
-            // 12.5% per square; ring just inside the square edge.
-            r={5}
-            fill="none"
-            stroke={color}
-            strokeWidth={1.2}
-            opacity={0.9}
-          />
+            style={{
+              position: 'absolute',
+              left: `${boardFile * 12.5}%`,
+              top: `${boardRank * 12.5}%`,
+              width: '12.5%',
+              height: '12.5%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <div
+              style={{
+                width: '80%',
+                height: '80%',
+                borderRadius: '50%',
+                border: `2px solid ${color}`,
+                opacity: 0.9,
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
         );
       })}
-    </svg>
+    </div>
   );
 }
 

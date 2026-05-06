@@ -14,7 +14,7 @@
 //
 // Run: URL=http://localhost:5173/ node scripts/test-knight-arrow-toggle.mjs
 
-import { runBrowserTest, expect, DEFAULT_URL } from '../harness.mjs';
+import { runBrowserTest, expect, DEFAULT_URL, appendBypass } from '../harness.mjs';
 
 await runBrowserTest({
   name: 'knight-arrow-toggle',
@@ -23,7 +23,7 @@ await runBrowserTest({
     // The openings route just gives us a page with chessground available
     // in node_modules. We then drive chessground's API directly from
     // page.evaluate — see the long comment below.
-    await page.goto(`${DEFAULT_URL}#/openings`, { waitUntil: 'networkidle' });
+    await page.goto(appendBypass(`${DEFAULT_URL}openings`), { waitUntil: 'networkidle' });
 
     const result = await page.evaluate(async () => {
   // Spin up a Board-equivalent test rig: we can't import Board.tsx into

@@ -1,46 +1,34 @@
-import { Link } from 'react-router-dom';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '@/db/schema';
+import { UserButton } from '@clerk/clerk-react';
 
 /**
- * Header profile chip. Today this is purely local — it shows the
- * Chess.com username from `Settings` and links to the Backup &
- * restore page (which is also where users manage their data when there
- * isn't a cloud account yet).
+ * Header profile chip. Renders Clerk's `<UserButton />` — opens a popover
+ * with account info, "Manage account", and "Sign out".
  *
- * Phase 2 swaps this for Clerk's `<UserButton />` while keeping the same
- * visual slot and the same "your-data lives here" link.
+ * Phase 1 (off-plan additions in `PROJECT_STATUS.md`) shipped a hand-built
+ * chip that linked to the Backup page when a username was set, or showed
+ * a "Sign in" placeholder otherwise. Phase 2 swaps both behaviours for
+ * Clerk's component while keeping the same header slot dimensions so the
+ * layout doesn't reflow.
+ *
+ * The slot is sized for the existing 28-px chip; Clerk's UserButton lays
+ * out at the same height by default so no width adjustment is needed.
+ *
+ * Note: this component is rendered *inside* `<AuthGate>`, which means
+ * `useAuth().isSignedIn` is always true here. We don't need a fallback
+ * for the signed-out case (the sign-in page renders a different layout).
  */
 export function ProfileChip() {
-  const settings = useLiveQuery(() => db.settings.get('main'), []);
-  const username = settings?.username?.trim() ?? '';
-  const initial = username ? username[0]!.toUpperCase() : '?';
-
-  if (!username) {
-    return (
-      <Link
-        to="/import"
-        className="flex items-center gap-2 text-xs px-2 py-1 rounded-md border border-border bg-bg-soft hover:text-text text-text-muted transition-colors"
-        title="Set a Chess.com username on the Import page"
-      >
-        <span className="w-5 h-5 rounded-full bg-bg-raised flex items-center justify-center text-[10px]">
-          ?
-        </span>
-        Sign in
-      </Link>
-    );
-  }
-
   return (
-    <Link
-      to="/backup"
-      className="flex items-center gap-2 text-xs px-2 py-1 rounded-md border border-border bg-bg-soft hover:border-accent/60 transition-colors"
-      title={`${username} — manage your data`}
-    >
-      <span className="w-5 h-5 rounded-full bg-accent/30 text-accent flex items-center justify-center text-[10px] font-semibold">
-        {initial}
-      </span>
-      <span className="font-medium max-w-[120px] truncate">{username}</span>
-    </Link>
+    <div className="flex items-center">
+      <UserButton
+        appearance={{
+          elements: {
+            // Keep the avatar small enough to match the existing nav line
+            // height (h-14 header → ~28 px avatar).
+            avatarBox: 'w-7 h-7',
+          },
+        }}
+      />
+    </div>
   );
 }

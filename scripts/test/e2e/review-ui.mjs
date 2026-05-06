@@ -7,7 +7,7 @@
 // Currently primarily an observation script — exploration-classification.mjs
 // has the strict assertions for the off-mainline badge.
 
-import { runBrowserTest, expect, sleep, DEFAULT_URL } from '../harness.mjs';
+import { runBrowserTest, expect, sleep, DEFAULT_URL, appendBypass } from '../harness.mjs';
 
 await runBrowserTest({
   name: 'review-ui',
@@ -46,7 +46,7 @@ await runBrowserTest({
     }
     console.log('Analysis done.');
 
-    await page.goto(`${DEFAULT_URL}#/review/${id}`, { waitUntil: 'networkidle' });
+    await page.goto(appendBypass(`${DEFAULT_URL}review/${id}`), { waitUntil: 'networkidle' });
     await page.waitForTimeout(1000);
 
 // Step through 4 moves via ArrowRight to get to a position where white has played 3 moves.

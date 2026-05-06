@@ -27,6 +27,29 @@ import { chromium } from 'playwright';
 
 export const DEFAULT_URL = process.env.URL || 'http://localhost:5173/';
 
+/** Query-string flag the dev-only auth bypass watches for. Centralised
+ *  here so test scripts importing `appendBypass` don't have to know the
+ *  exact name. Mirrors `QUERY_FLAG` in `src/lib/testAuth.ts`. */
+export const E2E_AUTH_BYPASS_QUERY = 'e2e_auth_bypass=1';
+
+/**
+ * Append the auth-bypass query flag to a URL, preserving existing query
+ * strings and fragments. Idempotent — calling it on a URL that already
+ * has the flag is a no-op.
+ *
+ * Test scripts that build their own URLs (`${DEFAULT_URL}review/${id}`)
+ * use this helper to opt into the bypass. Scripts that rely on the
+ * harness's initial `page.goto(url)` get the flag injected automatically
+ * via `bypassAuth: true` on `runBrowserTest`.
+ */
+export function appendBypass(url) {
+  if (url.includes(E2E_AUTH_BYPASS_QUERY)) return url;
+  const [base, hash] = url.split('#');
+  const sep = base.includes('?') ? '&' : '?';
+  const withQuery = `${base}${sep}${E2E_AUTH_BYPASS_QUERY}`;
+  return hash !== undefined ? `${withQuery}#${hash}` : withQuery;
+}
+
 /**
  * Verify the dev server responds on the configured URL before launching
  * a browser. Failing fast here saves ~3 s of confusing Chromium errors
@@ -177,9 +200,12 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * @param {boolean} [opts.skipDevServerCheck] default false.
  * @param {boolean} [opts.skipInitialGoto] default false. Useful when the test needs to navigate to a non-root URL itself.
  * @param {boolean} [opts.exitOnFinish] default true (process.exit(0|1) at end). Set false from runners.
+ * @param {boolean} [opts.bypassAuth] default true. When true, the dev-only auth bypass query flag is appended to the initial `page.goto`, so the page boots into a synthetic signed-in session that satisfies `<AuthGate>` without a real Clerk OAuth round-trip. Test scripts that build their own URLs should also call `appendBypass(url)` before passing them to `page.goto`.
  */
 export async function runBrowserTest(opts) {
-  const url = opts.url ?? DEFAULT_URL;
+  const rawUrl = opts.url ?? DEFAULT_URL;
+  const bypassAuth = opts.bypassAuth ?? true;
+  const url = bypassAuth ? appendBypass(rawUrl) : rawUrl;
   const waitUntil = opts.waitUntil ?? 'networkidle';
   const failOnPageErrors = opts.failOnPageErrors ?? false;
   const exitOnFinish = opts.exitOnFinish ?? true;

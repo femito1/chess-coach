@@ -4,6 +4,7 @@ import { BootBanner } from '@/engine/BootBanner';
 import { useEffect } from 'react';
 import { startAnalysisQueue } from '@/engine/queue';
 import { ProfileChip } from './ProfileChip';
+import { ProfileSyncBanner } from '@/features/auth/ProfileSyncBanner';
 
 export function AppLayout() {
   useEffect(() => {
@@ -35,6 +36,9 @@ export function AppLayout() {
           </div>
         </div>
       </header>
+      {/* Renders nothing in the steady state; surfaces only when a
+          different Clerk user signs in on this browser profile. */}
+      <ProfileSyncBanner />
       <main className="flex-1">
         <div className="max-w-7xl mx-auto px-6 py-8">
           <Outlet />

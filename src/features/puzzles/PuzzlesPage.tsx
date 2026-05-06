@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Chess } from 'chess.js';
 import {
   db,
   getSettings,
@@ -11,6 +10,7 @@ import {
 } from '@/db/schema';
 import { Board } from '@/components/Board';
 import { regeneratePuzzles } from './generate';
+import { applyPuzzleMove } from './solve';
 import { gradeSrs, isDue, newSrsState, summarizeIntervals, type Grade } from '@/srs/sm2';
 import { MOTIF_LABEL, MOTIF_ORDER } from '@/engine/motifs';
 import { TimeClassFilterSelect } from '@/components/TimeClassFilter';
@@ -197,61 +197,28 @@ function PuzzleSolver({
 
   function onMove(m: { from: string; to: string; promotion?: string }): boolean {
     if (status !== 'solving') return false;
-    const expected = puzzle.solutionUci[solvedIdx];
-    if (!expected) return false;
-    const uci = m.from + m.to + (m.promotion ?? '');
-    const expectedNoProm = expected.slice(0, 4);
-    const match = uci.slice(0, 4) === expectedNoProm;
     // Either way, the user has now committed to a move — hide any
     // currently-displayed hint ring. (`hintUsed` stays sticky.)
     setHintShown(false);
-    if (!match) {
+    const result = applyPuzzleMove({
+      fen,
+      solutionUci: puzzle.solutionUci,
+      solvedIdx,
+      move: m,
+    });
+    if (result.kind === 'rejected') {
+      if (result.reason === 'no-expected') return false;
+      // Treat both 'wrong-move' and 'illegal' as a wrong attempt so the
+      // user gets the wrong-state UI (Retry / Hint / Reveal) and an
+      // attempt counter bump.
       setAttempts((n) => n + 1);
       setStatus('wrong');
       return false;
     }
-    const c = new Chess();
-    try {
-      c.load(fen);
-      c.move({ from: m.from, to: m.to, promotion: m.promotion });
-    } catch {
-      return false;
-    }
-    const nextIdx = solvedIdx + 1;
-    setLastUci(uci);
-    // Auto-play opponent reply if present.
-    if (nextIdx < puzzle.solutionUci.length) {
-      const reply = puzzle.solutionUci[nextIdx];
-      try {
-        c.move({
-          from: reply.slice(0, 2),
-          to: reply.slice(2, 4),
-          promotion: reply.slice(4, 5) || undefined,
-        });
-        setFen(c.fen());
-        setLastUci(reply);
-        setSolvedIdx(nextIdx + 1);
-      } catch {
-        setFen(c.fen());
-        setSolvedIdx(nextIdx);
-      }
-    } else {
-      setFen(c.fen());
-      setSolvedIdx(nextIdx);
-    }
-    if (nextIdx + 1 >= puzzle.solutionUci.length || nextIdx >= puzzle.solutionUci.length - 1) {
-      // Done when the user has made their final move of the line.
-      if (nextIdx >= puzzle.solutionUci.length || nextIdx === puzzle.solutionUci.length - 1) {
-        // If the solution ends with the user's move (odd length), solved.
-        // Otherwise we've just played an opponent reply above.
-      }
-    }
-    if (nextIdx >= puzzle.solutionUci.length) {
-      setStatus('solved');
-    } else if (nextIdx + 1 === puzzle.solutionUci.length && puzzle.solutionUci.length % 2 === 1) {
-      // Solver just played the last move of an odd-length line.
-      setStatus('solved');
-    }
+    setFen(result.fen);
+    setLastUci(result.lastUci);
+    setSolvedIdx(result.nextSolvedIdx);
+    if (result.solved) setStatus('solved');
     return true;
   }
 
