@@ -299,7 +299,7 @@ function UsernameStep({
         <PlayerCard
           profile={suggestion}
           headline="Is this you?"
-          actionLabel={confirming ? 'Confirming…' : 'Yes, that&rsquo;s me'}
+          actionLabel={confirming ? 'Confirming…' : 'Yes, that’s me'}
           onAction={() => confirm(suggestion.username)}
           disabled={confirming}
         />
