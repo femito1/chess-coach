@@ -1,0 +1,49 @@
+# Cloudflare Pages response headers.
+#
+# Why this file exists:
+#   1. Stockfish 16 NNUE multi-threading needs SharedArrayBuffer, which the
+#      browser only enables when the page is "cross-origin isolated":
+#        Cross-Origin-Opener-Policy:   same-origin
+#        Cross-Origin-Embedder-Policy: require-corp
+#      Without these, the engine silently falls back to the single-threaded
+#      build (`stockfish-nnue-16-single.js`) and analysis is ~3-4x slower.
+#   2. With COEP=require-corp every subresource must opt-in via CORP. We mark
+#      the engine + hashed Vite assets as same-origin so the worker can fetch
+#      them.
+#   3. Long-lived immutable caching for the engine + hashed asset bundles
+#      means repeat visits load instantly from disk cache.
+#
+# If Clerk's sign-in widget breaks under `require-corp` (cross-origin script
+# loads), swap that line to `credentialless` instead -- still enables
+# SharedArrayBuffer on modern Chromium / Firefox, but is more permissive
+# about cross-origin loads. Track the regression in DEPLOY.md.
+
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+# Stockfish engine bundle. Files are pinned per-build so safe to mark
+# immutable. If you swap Stockfish versions, change the filename or purge
+# the CF cache for /stockfish/* explicitly.
+/stockfish/*
+  Cross-Origin-Resource-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cache-Control: public, max-age=31536000, immutable
+
+# Vite-hashed JS / CSS / image bundles (e.g. /assets/index-abc123.js).
+# Vite changes the hash on every content change, so immutable is correct.
+/assets/*
+  Cross-Origin-Resource-Policy: same-origin
+  Cache-Control: public, max-age=31536000, immutable
+
+# index.html and any other top-level HTML must NOT be cached by the
+# browser, otherwise users keep loading the previous deploy's bundle
+# references after we ship a new build.
+/index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+/
+  Cache-Control: no-cache, no-store, must-revalidate

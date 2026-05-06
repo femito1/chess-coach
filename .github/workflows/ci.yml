@@ -1,0 +1,153 @@
+name: CI
+
+# Runs on every push to main and every pull request targeting main.
+# Cloudflare Pages handles preview/production deploys separately via its
+# own GitHub integration; this workflow only runs the test suite.
+#
+# Architecture: see DEPLOY.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs of the same ref so a fast follow-up push doesn't
+# burn double minutes. Matches Cloudflare Pages' own dedup behavior.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Required because src/lib/env.ts throws at module load if these are
+  # missing or malformed. The auth-bypass query flag (?e2e_auth_bypass=1)
+  # short-circuits the *runtime* auth path, but Vite still bundles
+  # ClerkProvider, which reads these at import time. None of these values
+  # are ever sent to a real Clerk/Supabase backend during CI -- the bypass
+  # uses an in-memory Supabase stub and synthetic auth hooks.
+  VITE_CLERK_PUBLISHABLE_KEY: pk_test_ci-dummy-key-not-used-at-runtime
+  VITE_SUPABASE_URL: https://ci-dummy.supabase.co
+  VITE_SUPABASE_ANON_KEY: ci-dummy-anon-key-not-used-at-runtime
+
+jobs:
+  unit:
+    name: Typecheck + unit + integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (vitest)
+        run: npm run test:unit
+
+      # Integration tests need:
+      #   - a running dev server on :5173 (the harness pings it up front)
+      #   - Playwright Chromium with system dependencies
+      # We start the dev server in the background, wait for it, then run
+      # the suite. `set -e` + the kill on EXIT guarantee the server is
+      # cleaned up even on test failure.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Start dev server
+        run: |
+          npm run dev > /tmp/vite.log 2>&1 &
+          echo $! > /tmp/vite.pid
+          # Wait up to 60s for Vite to start serving.
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5173/ > /dev/null; then
+              echo "Dev server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Dev server failed to start within 60s. Last 200 lines of log:"
+          tail -200 /tmp/vite.log
+          exit 1
+
+      - name: Integration tests
+        run: npm run test:integration
+
+      - name: Stop dev server
+        if: always()
+        run: |
+          if [ -f /tmp/vite.pid ]; then
+            kill $(cat /tmp/vite.pid) 2>/dev/null || true
+          fi
+
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-traces
+          path: |
+            test-results/
+            /tmp/vite.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  e2e:
+    name: Playwright e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Start dev server
+        run: |
+          npm run dev > /tmp/vite.log 2>&1 &
+          echo $! > /tmp/vite.pid
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5173/ > /dev/null; then
+              echo "Dev server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Dev server failed to start within 60s. Last 200 lines of log:"
+          tail -200 /tmp/vite.log
+          exit 1
+
+      - name: e2e tests
+        run: npm run test:e2e
+
+      - name: Stop dev server
+        if: always()
+        run: |
+          if [ -f /tmp/vite.pid ]; then
+            kill $(cat /tmp/vite.pid) 2>/dev/null || true
+          fi
+
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-traces
+          path: |
+            test-results/
+            /tmp/vite.log
+          retention-days: 7
+          if-no-files-found: ignore
