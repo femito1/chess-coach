@@ -29,9 +29,18 @@
 # Stockfish engine bundle. Files are pinned per-build so safe to mark
 # immutable. If you swap Stockfish versions, change the filename or purge
 # the CF cache for /stockfish/* explicitly.
+#
+# IMPORTANT: do NOT redeclare `Cross-Origin-Embedder-Policy` here. The
+# `/*` block above already sets it, and Cloudflare Pages *appends* (does
+# not replace) per-route headers on top of the wildcard, so adding
+# `COEP: require-corp` again produces a response with the header listed
+# twice. Browsers reject worker scripts whose response has duplicate
+# `Cross-Origin-Embedder-Policy` headers — `new Worker(url)` then fails
+# with an empty `ErrorEvent` (no message, no filename), which is exactly
+# what we hit on the first prod deploy. We only need CORP here, since
+# the wildcard `/*` block doesn't set CORP.
 /stockfish/*
   Cross-Origin-Resource-Policy: same-origin
-  Cross-Origin-Embedder-Policy: require-corp
   Cache-Control: public, max-age=31536000, immutable
 
 # Vite-hashed JS / CSS / image bundles (e.g. /assets/index-abc123.js).
