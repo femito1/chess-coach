@@ -6,6 +6,7 @@ import type { Color as CgColor, Key } from 'chessground/types';
 import type { DrawShape } from 'chessground/draw';
 import { Chess, type Square } from 'chess.js';
 import type { Classification } from '@/db/schema';
+import { PRIMARY_BOARD_MAX_PX } from './BoardFrame';
 
 /** Available brushes for `<Board arrows={...} />`. The first four mirror
  *  chessground's built-ins and respect any user theme; `engineBest` is a
@@ -477,7 +478,11 @@ export function Board({
       : null;
 
   return (
-    <div ref={wrapRef} className="relative aspect-square w-full max-w-[560px] mx-auto">
+    <div
+      ref={wrapRef}
+      className="relative aspect-square w-full mx-auto"
+      style={{ maxWidth: PRIMARY_BOARD_MAX_PX }}
+    >
       <div ref={boardRef} className="w-full h-full" />
       <SquareHighlightOverlay squares={highlightSquares} orientation={orientation} />
       <KnightArrowOverlay

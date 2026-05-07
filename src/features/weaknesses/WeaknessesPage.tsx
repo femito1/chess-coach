@@ -1,13 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { db, getSettings, updateSettings } from '@/db/schema';
-import type { Analysis, TimeClassFilter } from '@/db/schema';
+import {
+  db,
+  getSettings,
+  normalizeTimeClassSelection,
+  updateSettings,
+} from '@/db/schema';
+import type { Analysis, TimeClassSelection } from '@/db/schema';
 import { listAllGamesLight } from '@/db/queries';
-import { aggregateMistakes } from './aggregate';
-import { MOTIF_LABEL } from '@/engine/motifs';
-import { TimeClassFilterSelect } from '@/components/TimeClassFilter';
-import { gameMatchesFilter, labelFor } from '@/lib/timeClass';
+import { aggregateMistakes, type MistakeRow } from './aggregate';
+import { MOTIF_EXPLANATION, MOTIF_LABEL } from '@/engine/motifs';
+import { TimeClassChips } from '@/components/TimeClassFilter';
+import { Board } from '@/components/Board';
+import { THUMBNAIL_BOARD_MAX_PX } from '@/components/BoardFrame';
+import { EvalBar } from '@/components/EvalBar';
+import { CLASSIFICATION_LABEL } from '@/engine/classify';
+import { gameMatchesSelection, labelForSelection } from '@/lib/timeClass';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
+import { Chess } from 'chess.js';
 
 export function WeaknessesPage() {
   // Throttled to 1 s: the analyzer can fire hundreds of `db.games`
@@ -17,17 +27,16 @@ export function WeaknessesPage() {
   // of PGN into memory on every refire — the dominant cause of the
   // mid-analysis page hangs the user reported on prod.
   const games = useThrottledLiveQuery(() => listAllGamesLight(), [], 1000);
-  const [filter, setFilter] = useState<TimeClassFilter>('rapid');
+  const [filter, setFilter] = useState<TimeClassSelection>(['rapid']);
 
-  // Load saved filter preference once.
   useEffect(() => {
     void getSettings().then((s) => {
-      if (s.timeClassFilter) setFilter(s.timeClassFilter);
+      setFilter(normalizeTimeClassSelection(s.timeClassFilter));
     });
   }, []);
 
   const filteredGames = useMemo(
-    () => (games ?? []).filter((g) => gameMatchesFilter(g, filter)),
+    () => (games ?? []).filter((g) => gameMatchesSelection(g, filter)),
     [games, filter],
   );
 
@@ -53,7 +62,7 @@ export function WeaknessesPage() {
     return aggregateMistakes(filteredGames, map);
   }, [filteredGames, analyses]);
 
-  function onFilterChange(next: TimeClassFilter) {
+  function onFilterChange(next: TimeClassSelection) {
     setFilter(next);
     void updateSettings({ timeClassFilter: next });
   }
@@ -71,27 +80,28 @@ export function WeaknessesPage() {
         <p className="text-sm text-text-muted">
           {analyzedGames === 0
             ? 'Patterns across your analyzed games — what\u2019s costing you the most points.'
-            : `Patterns across ${analyzedGames} analyzed ${labelFor(filter).toLowerCase()} game${analyzedGames === 1 ? '' : 's'} — what\u2019s costing you the most points.`}
+            : `Patterns across ${analyzedGames} analyzed ${labelForSelection(filter).toLowerCase()} game${analyzedGames === 1 ? '' : 's'} — what\u2019s costing you the most points.`}
         </p>
       </div>
-      <TimeClassFilterSelect
-        value={filter}
+      <TimeClassChips
+        selection={filter}
         onChange={onFilterChange}
         available={games}
       />
     </div>
   );
 
+  const isAll = filter.length === 0;
   if (!agg || analyzedGames === 0) {
     return (
       <div className="space-y-6">
         {header}
         <div className="card p-8 text-center text-text-muted space-y-2">
           <div className="text-lg">
-            No analyzed {filter === 'all' ? '' : labelFor(filter).toLowerCase()} games yet.
+            No analyzed {isAll ? '' : labelForSelection(filter).toLowerCase()} games yet.
           </div>
           <div className="text-sm">
-            {filter === 'all' ? (
+            {isAll ? (
               <>
                 <Link to="/import" className="text-accent">
                   Import some games
@@ -145,25 +155,22 @@ export function WeaknessesPage() {
             the analysis from Settings.
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div className="space-y-3">
             {agg.byMotif.map((m) => (
               <div key={m.motif} className="border border-border rounded-md p-3 bg-bg-raised/30">
                 <div className="flex items-baseline justify-between">
                   <div className="font-medium">{MOTIF_LABEL[m.motif]}</div>
                   <div className="text-accent font-mono">{m.count}</div>
                 </div>
-                <ul className="mt-2 space-y-1 text-xs text-text-muted">
+                <p className="mt-1 text-xs text-text-muted leading-relaxed">
+                  {MOTIF_EXPLANATION[m.motif]}
+                </p>
+                <ul className="mt-3 divide-y divide-border">
                   {m.examples.map((ex) => (
-                    <li key={`${ex.gameId}-${ex.ply}`} className="flex gap-2 items-center">
-                      <span className="font-mono w-14 shrink-0">{ex.san}</span>
-                      <span className="truncate flex-1">vs {ex.opponent}</span>
-                      <Link
-                        to={`/review/${ex.gameId}?ply=${ex.ply}`}
-                        className="text-accent hover:underline shrink-0"
-                      >
-                        Review →
-                      </Link>
-                    </li>
+                    <MistakeExample
+                      key={`${ex.gameId}-${ex.ply}`}
+                      row={ex}
+                    />
                   ))}
                 </ul>
               </div>
@@ -283,4 +290,177 @@ function TimePressureCard({
 
 function pct(x: number): string {
   return `${(x * 100).toFixed(1)}%`;
+}
+
+/**
+ * One example row inside a motif card. Click to expand into a mini
+ * board preview showing the FEN before the mistake, the move the user
+ * played (highlighted as the wrong move), and the move the engine
+ * preferred (drawn as a green arrow). An EvalBar sits to the left of
+ * the board mirroring the rhythm of the review page.
+ *
+ * Why expand-in-place vs. just routing to `/review/:id?ply=N`: from
+ * Pass 4 user-feedback, clicking through to the review page jumped the
+ * board to the position *after* the mistake (no move highlighted, no
+ * "this is the bad move" framing) and the user had to navigate
+ * backwards to even see what move was being criticised. The inline
+ * preview answers "what was the move and what was wrong with it"
+ * before the user commits to a full deep-link review.
+ *
+ * The "Review in full" button still routes to `/review/:id?ply=N`,
+ * additionally appending `?from=weakness` so the review page can
+ * surface a banner explaining the deep-link context (and pre-position
+ * the board exactly on the offending ply).
+ */
+function MistakeExample({ row }: { row: MistakeRow }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <li className="py-2">
+      <div className="flex items-center gap-2 text-sm">
+        <button
+          type="button"
+          onClick={() => setExpanded((x) => !x)}
+          className="text-text-muted hover:text-text shrink-0 w-5"
+          aria-label={expanded ? 'Collapse example' : 'Expand example'}
+          title={expanded ? 'Collapse' : 'Expand to see the position'}
+        >
+          {expanded ? '▼' : '▶'}
+        </button>
+        <span className="font-mono w-16 shrink-0">{row.san}</span>
+        <span className="truncate flex-1 text-xs text-text-muted">
+          vs {row.opponent}
+          {row.bestMoveSan && (
+            <>
+              {' \u00b7 '}engine wanted{' '}
+              <span className="font-mono text-good">{row.bestMoveSan}</span>
+            </>
+          )}
+        </span>
+        <Link
+          to={buildReviewLink(row)}
+          className="text-accent hover:underline shrink-0 text-xs"
+        >
+          Review in full →
+        </Link>
+      </div>
+      {expanded && (
+        <div className="mt-3">
+          <ExpandedMistake row={row} />
+        </div>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Build the deep-link the "Review in full" button uses. We pin three
+ * params:
+ *  - `ply`        — jump straight to the offending position. Existing
+ *                   behaviour, kept so the URL still works on its own.
+ *  - `from`       — `'weakness'`. Tells the review page to render the
+ *                   "you came from the weaknesses page" banner.
+ *  - `motifs`     — comma-separated motif keys that this row was tagged
+ *                   with. Lets the banner enumerate motif explanations
+ *                   without re-reading the analysis row. Capped at the
+ *                   first three so the URL stays sane.
+ */
+function buildReviewLink(row: MistakeRow): string {
+  const params = new URLSearchParams();
+  params.set('ply', String(row.ply));
+  params.set('from', 'weakness');
+  if (row.motifs.length > 0) {
+    params.set('motifs', row.motifs.slice(0, 3).join(','));
+  }
+  return `/review/${row.gameId}?${params.toString()}`;
+}
+
+function ExpandedMistake({ row }: { row: MistakeRow }) {
+  // Compute fenAfter (= the position the user *landed on* after their
+  // mistake, before the engine's reply) so we can render the played
+  // move's last-move highlight cleanly. Falls back to fenBefore when
+  // we can't replay the move (corrupt UCI / illegal move — shouldn't
+  // happen for stored analyses but defensive code is cheap).
+  const fenAfter = useMemo(() => {
+    if (!row.uci) return row.fenBefore;
+    try {
+      const c = new Chess(row.fenBefore);
+      const m = c.move({
+        from: row.uci.slice(0, 2),
+        to: row.uci.slice(2, 4),
+        promotion: row.uci.slice(4, 5) || undefined,
+      });
+      if (!m) return row.fenBefore;
+      return c.fen();
+    } catch {
+      return row.fenBefore;
+    }
+  }, [row.fenBefore, row.uci]);
+
+  // Mover-POV orientation. Mover side is `row.userColor` because
+  // aggregator only emits rows where the mover is the user.
+  const orientation = row.userColor;
+  const bestArrow = row.bestMoveUci
+    ? [
+        {
+          from: row.bestMoveUci.slice(0, 2),
+          to: row.bestMoveUci.slice(2, 4),
+          brush: 'engineBest' as const,
+        },
+      ]
+    : [];
+
+  return (
+    <div className="bg-bg-soft rounded-md p-3 space-y-2">
+      <p className="text-xs text-text-muted leading-relaxed">
+        {row.userColor === 'white' ? 'You played White.' : 'You played Black.'}{' '}
+        On move {Math.ceil(row.ply / 2)}, you played{' '}
+        <span className="font-mono text-blunder font-semibold">{row.san}</span>
+        {row.bestMoveSan ? (
+          <>
+            {' '}— the engine preferred{' '}
+            <span className="font-mono text-good font-semibold">
+              {row.bestMoveSan}
+            </span>
+            .
+          </>
+        ) : (
+          '.'
+        )}{' '}
+        Classified as <span className="font-medium">
+          {CLASSIFICATION_LABEL[row.classification]}
+        </span>
+        {row.inTimeTrouble && (
+          <>
+            {' '}<span className="text-mistake">(played in time trouble)</span>
+          </>
+        )}
+        .
+      </p>
+      <div
+        className="mx-auto w-full flex gap-2 items-stretch"
+        style={{ maxWidth: `min(${THUMBNAIL_BOARD_MAX_PX}px, 80vw)` }}
+      >
+        <EvalBar
+          cpWhite={row.evalCpBefore}
+          orientation={orientation}
+        />
+        <div className="flex-1 min-w-0">
+          <Board
+            fen={fenAfter}
+            orientation={orientation}
+            lastMoveUci={row.uci}
+            lastMoveClassification={row.classification}
+            arrows={bestArrow}
+            viewOnly
+          />
+        </div>
+      </div>
+      <p className="text-[11px] text-text-muted">
+        Eval bar shows the position <em>before</em> your move. The board
+        shows where it landed; the green arrow is what the engine wanted
+        to play.
+      </p>
+    </div>
+  );
 }

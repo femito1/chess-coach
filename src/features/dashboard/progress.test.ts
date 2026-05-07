@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  accuracyTrend,
   computeUserTimeStats,
   totalSecondsPlayed,
+  type GameForCharts,
   type GameForTimeStats,
 } from './progress';
 
@@ -183,5 +185,72 @@ describe('totalSecondsPlayed', () => {
       game({ userTimeSec: 0, pgn: CLOCKED_PGN }),
     ]);
     expect(total).toBe(0);
+  });
+});
+
+describe('accuracyTrend filtering', () => {
+  function chartGame(
+    timeClass: string,
+    accuracy: number,
+    endTimeSec: number,
+  ): GameForCharts {
+    // Minimal structural Game shape — only the fields accuracyTrend
+    // touches matter for the filter contract under test.
+    return {
+      id: `${timeClass}-${endTimeSec}`,
+      source: 'chesscom',
+      pgn: '',
+      url: '',
+      timeClass,
+      timeControl: '600',
+      result: 'win',
+      userColor: 'white',
+      userRating: 1500,
+      opponent: 'someone',
+      opponentRating: 1500,
+      endTime: endTimeSec,
+      eco: 'A00',
+      opening: 'Test',
+      analysisStatus: 'done',
+      accuracy: { white: accuracy, black: accuracy },
+    } as unknown as GameForCharts;
+  }
+
+  const games: GameForCharts[] = [
+    chartGame('rapid', 90, 1700000000),
+    chartGame('blitz', 80, 1700000100),
+    chartGame('bullet', 70, 1700000200),
+    chartGame('rapid', 85, 1700000300),
+  ];
+
+  it('returns every game when filter is "all" (default)', () => {
+    expect(accuracyTrend(games)).toHaveLength(4);
+  });
+
+  it('filters down to a single class when given a string', () => {
+    const out = accuracyTrend(games, 'rapid');
+    expect(out).toHaveLength(2);
+    expect(out.every((p) => p.timeClass === 'rapid')).toBe(true);
+  });
+
+  it('filters down to a multi-class subset when given an array', () => {
+    const out = accuracyTrend(games, ['rapid', 'blitz']);
+    expect(out).toHaveLength(3);
+    expect(out.every((p) => p.timeClass === 'rapid' || p.timeClass === 'blitz')).toBe(true);
+  });
+
+  it('returns an empty series when the array is empty (every chip deselected)', () => {
+    const out = accuracyTrend(games, []);
+    expect(out).toHaveLength(0);
+  });
+
+  it('rolling mean is computed only over the filtered points', () => {
+    // With 2 rapid points, the rolling window's "min 5" gate prevents
+    // a value being emitted (we only emit `rolling` once we have at
+    // least 5 samples) — but the per-point `accuracy` is preserved.
+    const out = accuracyTrend(games, ['rapid']);
+    expect(out.map((p) => p.accuracy)).toEqual([90, 85]);
+    // And critically, the rolling line never sees blitz/bullet data.
+    expect(out.every((p) => p.timeClass === 'rapid')).toBe(true);
   });
 });

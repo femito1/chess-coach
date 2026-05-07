@@ -59,11 +59,17 @@ function fmtDate(t: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** `'all'` keeps every time class as a separate series (the original
- *  behaviour); any other value filters the rating trend down to a single
- *  Chess.com `timeClass` so the user can isolate e.g. blitz progress
- *  without rapid/bullet noise on top. */
-type ModeKey = 'all' | string;
+/** Multi-select time-class filter. The user starts with every available
+ *  class active (the chart shows everything). Clicking a chip toggles
+ *  it out of the active set; clicking "All" restores the full set.
+ *
+ *  Convention: `null` = "active set is the full available set" (the
+ *  default). A concrete `string[]` is an explicit subset. We don't
+ *  collapse the default to `[]` because empty would be ambiguous with
+ *  "user deselected everything" (which legitimately produces an empty
+ *  chart). The "All" button always sets the state back to `null`.
+ */
+type ModeSelection = string[] | null;
 
 /** Display order for time-class chips. We only render entries the user
  *  actually has data for, but we want a stable left-to-right order. */
@@ -73,14 +79,50 @@ function modeLabel(m: string): string {
   return m.charAt(0).toUpperCase() + m.slice(1);
 }
 
+/** True when this selection includes the given class. `null` means
+ *  "all available", so we treat anything in the available list as in. */
+function selectionIncludes(
+  selection: ModeSelection,
+  available: string[],
+  cls: string,
+): boolean {
+  if (selection == null) return available.includes(cls);
+  return selection.includes(cls);
+}
+
+/** True when the selection is "all available" — used to drive the
+ *  "All" chip's active state and to short-circuit filtering downstream. */
+function isAllSelected(selection: ModeSelection, available: string[]): boolean {
+  if (selection == null) return true;
+  if (selection.length !== available.length) return false;
+  for (const a of available) if (!selection.includes(a)) return false;
+  return true;
+}
+
+/** Toggle a class in/out of the selection given the available set. We
+ *  materialise `null` (the default-all state) into a concrete array on
+ *  first toggle so subsequent clicks have something to remove from. */
+function toggleMode(
+  selection: ModeSelection,
+  available: string[],
+  cls: string,
+): ModeSelection {
+  const current =
+    selection == null ? [...available] : selection.filter((m) => available.includes(m));
+  if (current.includes(cls)) {
+    return current.filter((m) => m !== cls);
+  }
+  return [...current, cls];
+}
+
 export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> }) {
   // Independent time-window selectors per chart so the user can zoom one
   // without losing context in the other (e.g. last-7-days rating spike
   // vs. all-time accuracy trend).
   const [ratingRange, setRatingRange] = useState<RangeKey>('all');
-  const [ratingMode, setRatingMode] = useState<ModeKey>('all');
+  const [ratingMode, setRatingMode] = useState<ModeSelection>(null);
   const [accuracyRange, setAccuracyRange] = useState<RangeKey>('all');
-  const [accuracyMode, setAccuracyMode] = useState<ModeKey>('all');
+  const [accuracyMode, setAccuracyMode] = useState<ModeSelection>(null);
 
   const ratingsAll = useMemo(() => ratingTrend(games), [games]);
   // We deliberately compute the unfiltered series first to feed the
@@ -112,38 +154,47 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
     return ordered;
   }, [accuracyAllNoFilter]);
 
-  // If the currently-selected mode disappears (e.g. data filtered out by
-  // an upstream change), fall back to 'all' so we don't render an empty
-  // chart with a stale chip selected.
-  const effectiveMode: ModeKey =
-    ratingMode === 'all' || availableModes.includes(ratingMode)
-      ? ratingMode
-      : 'all';
-  const effectiveAccuracyMode: ModeKey =
-    accuracyMode === 'all' || availableAccuracyModes.includes(accuracyMode)
-      ? accuracyMode
-      : 'all';
+  // Drop any explicitly-selected modes the user no longer has data for
+  // (e.g. they renamed an account; chips for the old data hung around).
+  // `null` means "all available" — always valid.
+  const effectiveRatingMode: ModeSelection =
+    ratingMode == null
+      ? null
+      : ratingMode.filter((m) => availableModes.includes(m));
+  const effectiveAccuracyMode: ModeSelection =
+    accuracyMode == null
+      ? null
+      : accuracyMode.filter((m) => availableAccuracyModes.includes(m));
+
+  const ratingAllSelected = isAllSelected(effectiveRatingMode, availableModes);
+  const accuracyAllSelected = isAllSelected(
+    effectiveAccuracyMode,
+    availableAccuracyModes,
+  );
 
   const ratings = useMemo(() => {
     const inRange = withinRange(
       ratingsAll,
       RANGE_OPTIONS.find((r) => r.key === ratingRange)?.days ?? null,
     );
-    return effectiveMode === 'all'
-      ? inRange
-      : inRange.filter((r) => r.timeClass === effectiveMode);
-  }, [ratingsAll, ratingRange, effectiveMode]);
+    if (ratingAllSelected) return inRange;
+    const allowed = new Set(effectiveRatingMode ?? availableModes);
+    return inRange.filter((r) => allowed.has(r.timeClass));
+  }, [ratingsAll, ratingRange, ratingAllSelected, effectiveRatingMode, availableModes]);
 
   // The accuracy series is recomputed (not just filtered) when the mode
-  // changes, so the rolling mean follows only that mode's points instead
-  // of being polluted by other classes' accuracy.
-  const accuracyAllForMode = useMemo(
-    () =>
-      effectiveAccuracyMode === 'all'
-        ? accuracyAllNoFilter
-        : accuracyTrend(games, effectiveAccuracyMode),
-    [games, effectiveAccuracyMode, accuracyAllNoFilter],
-  );
+  // selection changes, so the rolling mean follows only the picked
+  // classes' points instead of being polluted by other classes' games.
+  const accuracyAllForMode = useMemo(() => {
+    if (accuracyAllSelected) return accuracyAllNoFilter;
+    return accuracyTrend(games, effectiveAccuracyMode ?? availableAccuracyModes);
+  }, [
+    games,
+    accuracyAllSelected,
+    effectiveAccuracyMode,
+    availableAccuracyModes,
+    accuracyAllNoFilter,
+  ]);
   const accuracy = useMemo(
     () =>
       withinRange(
@@ -181,9 +232,13 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
             <div className="flex items-center gap-2 flex-wrap">
               {availableModes.length > 1 && (
                 <ModePicker
-                  value={effectiveMode}
+                  selection={effectiveRatingMode}
                   modes={availableModes}
-                  onChange={setRatingMode}
+                  allActive={ratingAllSelected}
+                  onToggle={(m) =>
+                    setRatingMode(toggleMode(effectiveRatingMode, availableModes, m))
+                  }
+                  onAll={() => setRatingMode(ratingAllSelected ? [] : null)}
                 />
               )}
               <RangePicker value={ratingRange} onChange={setRatingRange} />
@@ -192,8 +247,8 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
           {ratingByClass.rows.length === 0 ? (
             <EmptyChart
               text={
-                effectiveMode !== 'all'
-                  ? `No ${modeLabel(effectiveMode)} games in this range.`
+                !ratingAllSelected
+                  ? 'No rating data for the selected time controls.'
                   : 'No rating data in this range.'
               }
             />
@@ -249,9 +304,15 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
             <div className="flex items-center gap-2 flex-wrap">
               {availableAccuracyModes.length > 1 && (
                 <ModePicker
-                  value={effectiveAccuracyMode}
+                  selection={effectiveAccuracyMode}
                   modes={availableAccuracyModes}
-                  onChange={setAccuracyMode}
+                  allActive={accuracyAllSelected}
+                  onToggle={(m) =>
+                    setAccuracyMode(
+                      toggleMode(effectiveAccuracyMode, availableAccuracyModes, m),
+                    )
+                  }
+                  onAll={() => setAccuracyMode(accuracyAllSelected ? [] : null)}
                 />
               )}
               <RangePicker value={accuracyRange} onChange={setAccuracyRange} />
@@ -262,8 +323,8 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
               text={
                 accuracyAllNoFilter.length === 0
                   ? 'Waiting on analyzed games.'
-                  : effectiveAccuracyMode !== 'all'
-                    ? `No analyzed ${modeLabel(effectiveAccuracyMode)} games in this range.`
+                  : !accuracyAllSelected
+                    ? 'No analyzed games for the selected time controls.'
                     : 'No analyzed games in this range.'
               }
             />
@@ -429,54 +490,72 @@ function RangePicker({
   );
 }
 
-/** Pill-style segmented control for picking which Chess.com time class
- *  to show on the rating trend. Mirrors `RangePicker` so the two
- *  controls visually pair up. The "All" chip keeps the original
- *  multi-series behaviour. */
+/** Multi-select chip bar for picking which Chess.com time classes to
+ *  include in the chart. Visual contract:
+ *
+ *   - Every available chip starts active (the "all-blue at start" the
+ *     user asked for). Clicking a chip toggles it off; clicking again
+ *     toggles it back on.
+ *   - The leading "All" chip is active when every available class is
+ *     active. Clicking it from a partial state restores the full set.
+ *   - The selection lives in the parent (`null` = full set). Empty
+ *     subsets are allowed and produce an empty chart, matching what
+ *     the user just asked for. */
 function ModePicker({
-  value,
+  selection,
   modes,
-  onChange,
+  allActive,
+  onToggle,
+  onAll,
 }: {
-  value: ModeKey;
+  selection: ModeSelection;
   modes: string[];
-  onChange: (next: ModeKey) => void;
+  allActive: boolean;
+  onToggle: (mode: string) => void;
+  onAll: () => void;
 }) {
-  const options: { key: ModeKey; label: string }[] = [
-    { key: 'all', label: 'All' },
-    ...modes.map((m) => ({ key: m, label: modeLabel(m) })),
-  ];
   return (
     <div
       className="flex gap-0.5 text-[11px] rounded-md border border-border bg-bg-raised/40 p-0.5"
-      role="tablist"
+      role="group"
       aria-label="Time class"
     >
-      {options.map((o) => {
-        const active = o.key === value;
-        const dotColor =
-          o.key === 'all' ? null : (TIME_CLASS_COLOR[o.key] ?? AXIS_COLOR);
+      <button
+        key="all"
+        type="button"
+        aria-pressed={allActive}
+        onClick={onAll}
+        className={`flex items-center gap-1 px-2 py-0.5 rounded transition-colors ${
+          allActive ? 'bg-accent/20 text-accent' : 'text-text-muted hover:text-text'
+        }`}
+      >
+        All
+      </button>
+      {modes.map((m) => {
+        const active = selectionIncludes(selection, modes, m);
+        const dotColor = TIME_CLASS_COLOR[m] ?? AXIS_COLOR;
         return (
           <button
-            key={o.key}
+            key={m}
             type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => onChange(o.key)}
+            aria-pressed={active}
+            onClick={() => onToggle(m)}
             className={`flex items-center gap-1 px-2 py-0.5 rounded transition-colors ${
               active
                 ? 'bg-accent/20 text-accent'
                 : 'text-text-muted hover:text-text'
             }`}
           >
-            {dotColor && (
-              <span
-                aria-hidden
-                className="inline-block w-1.5 h-1.5 rounded-full"
-                style={{ background: dotColor }}
-              />
-            )}
-            {o.label}
+            <span
+              aria-hidden
+              className="inline-block w-1.5 h-1.5 rounded-full"
+              style={{
+                background: active ? dotColor : 'transparent',
+                outline: `1px solid ${dotColor}`,
+                outlineOffset: '-1px',
+              }}
+            />
+            {modeLabel(m)}
           </button>
         );
       })}

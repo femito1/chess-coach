@@ -4,6 +4,7 @@ import {
   type Color,
   type Repertoire,
   type RepertoireCard,
+  type RepertoireKind,
   type RepertoireLineStats,
   type RepertoireNode,
 } from '@/db/schema';
@@ -36,13 +37,22 @@ export async function createRepertoire(input: {
   name: string;
   color: Color;
   description?: string;
+  /** `'family'` (default) for repertoires bound to a single openings-
+   *  library family; `'custom'` for the legacy free-form bucket. */
+  kind?: RepertoireKind;
+  /** Required when `kind === 'family'`; ignored otherwise. */
+  family?: string;
 }): Promise<Repertoire> {
   const now = Date.now();
+  const kind: RepertoireKind = input.kind ?? 'family';
+  const family = kind === 'family' ? input.family : undefined;
   const rep: Repertoire = {
     id: uid(),
     name: input.name,
     color: input.color,
     description: input.description,
+    kind,
+    family,
     createdAt: now,
     updatedAt: now,
   };

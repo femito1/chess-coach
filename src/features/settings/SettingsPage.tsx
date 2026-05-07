@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
-import { getSettings, updateSettings, db, type TimeClassFilter } from '@/db/schema';
+import {
+  getSettings,
+  normalizeTimeClassSelection,
+  updateSettings,
+  db,
+  type TimeClassSelection,
+} from '@/db/schema';
 import { listAllGamesLight, requeueGamesByScope, type RequeueScope } from '@/db/queries';
-import { TimeClassFilterSelect } from '@/components/TimeClassFilter';
+import { TimeClassChips } from '@/components/TimeClassFilter';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 
 export function SettingsPage() {
@@ -9,7 +15,7 @@ export function SettingsPage() {
   const [engineDepth, setEngineDepth] = useState(16);
   const [autoAnalyze, setAutoAnalyze] = useState(true);
   const [savedDepth, setSavedDepth] = useState(16);
-  const [timeClassFilter, setTimeClassFilter] = useState<TimeClassFilter>('rapid');
+  const [timeClassFilter, setTimeClassFilter] = useState<TimeClassSelection>(['rapid']);
   const [saved, setSaved] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [requeueStatus, setRequeueStatus] = useState<string | null>(null);
@@ -25,7 +31,7 @@ export function SettingsPage() {
       setEngineDepth(s.engineDepth);
       setSavedDepth(s.engineDepth);
       setAutoAnalyze(s.autoAnalyze);
-      if (s.timeClassFilter) setTimeClassFilter(s.timeClassFilter);
+      setTimeClassFilter(normalizeTimeClassSelection(s.timeClassFilter));
     });
   }, []);
 
@@ -131,18 +137,19 @@ export function SettingsPage() {
             Higher = stronger but slower. 16 is a good balance for casual review.
           </div>
         </label>
-        <label className="block text-sm">
+        <div className="block text-sm">
           <div className="mb-1 text-text-muted">Default time-control filter</div>
-          <TimeClassFilterSelect
-            value={timeClassFilter}
+          <TimeClassChips
+            selection={timeClassFilter}
             onChange={setTimeClassFilter}
             available={games ?? []}
           />
           <div className="text-xs text-text-muted mt-1">
-            Weaknesses and Puzzles default to this time control. Bullet games are high
+            Weaknesses and Puzzles default to these time controls. Pick one
+            or more chips, or "All" for everything. Bullet games are high
             volume but low ROI for study, so rapid is a sensible default.
           </div>
-        </label>
+        </div>
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"

@@ -20,6 +20,25 @@ export interface MistakeRow {
   eco?: string;
   ply: number;
   san: string;
+  /** UCI of the played move; needed by the inline mini-board on the
+   *  weaknesses page so it can highlight the move + animate it without
+   *  re-deriving from SAN. Always defined for stored mistakes (the
+   *  analyzer always populates `MoveEval.uci`). */
+  uci?: string;
+  /** FEN of the position the user moved FROM. Used by the weaknesses
+   *  page's inline mini-board (preview) and as a deep-link fallback for
+   *  the review page's "from weakness" banner — review uses this to
+   *  match against the analysis's move list when the `?ply=` deep-link
+   *  hits a transposition or doesn't otherwise resolve. */
+  fenBefore: string;
+  /** White-POV centipawn eval before the move; used by the weakness
+   *  inline EvalBar so the mini preview shares the same visual rhythm
+   *  as the review page. */
+  evalCpBefore: number;
+  /** Engine's preferred UCI from `fenBefore`. Lets the weaknesses page
+   *  draw the "engine wanted this" arrow on the preview without spinning
+   *  up the live engine. */
+  bestMoveUci?: string;
   classification: MoveEval['classification'];
   motifs: Motif[];
   phase?: Phase;
@@ -97,6 +116,10 @@ export function buildMistakes(
         eco: g.eco,
         ply: m.ply,
         san: m.san,
+        uci: m.uci,
+        fenBefore: m.fenBefore,
+        evalCpBefore: m.evalCpBefore,
+        bestMoveUci: m.bestMoveUci,
         classification: m.classification,
         motifs: m.motifs ?? [],
         phase: m.phase,

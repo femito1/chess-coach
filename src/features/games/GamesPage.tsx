@@ -1,8 +1,14 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { listGamesLight, requeueGame } from '@/db/queries';
-import type { AnalysisStatus, GameResult } from '@/db/schema';
+import type {
+  AnalysisStatus,
+  GameResult,
+  TimeClassSelection,
+} from '@/db/schema';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
+import { TimeClassChips } from '@/components/TimeClassFilter';
+import { gameMatchesSelection } from '@/lib/timeClass';
 
 type ResultFilter = 'all' | GameResult;
 type StatusFilter = 'all' | AnalysisStatus;
@@ -17,19 +23,15 @@ export function GamesPage() {
   const [query, setQuery] = useState('');
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [timeClass, setTimeClass] = useState<string>('all');
-
-  const timeClasses = useMemo(() => {
-    if (!games) return [];
-    return Array.from(new Set(games.map((g) => g.timeClass).filter((x): x is string => !!x)));
-  }, [games]);
+  const [timeClassSelection, setTimeClassSelection] =
+    useState<TimeClassSelection>([]);
 
   const filtered = useMemo(() => {
     if (!games) return [];
     return games.filter((g) => {
       if (resultFilter !== 'all' && g.result !== resultFilter) return false;
       if (statusFilter !== 'all' && g.analysisStatus !== statusFilter) return false;
-      if (timeClass !== 'all' && g.timeClass !== timeClass) return false;
+      if (!gameMatchesSelection(g, timeClassSelection)) return false;
       if (query) {
         const q = query.toLowerCase();
         const hay = `${g.opponent} ${g.opening ?? ''} ${g.eco ?? ''}`.toLowerCase();
@@ -37,7 +39,7 @@ export function GamesPage() {
       }
       return true;
     });
-  }, [games, resultFilter, statusFilter, timeClass, query]);
+  }, [games, resultFilter, statusFilter, timeClassSelection, query]);
 
   return (
     <div className="space-y-4">
@@ -48,7 +50,7 @@ export function GamesPage() {
         </div>
       </div>
 
-      <div className="card p-3 flex flex-wrap gap-2 text-sm">
+      <div className="card p-3 flex flex-wrap gap-2 items-center text-sm">
         <input
           className="input flex-1 min-w-[200px]"
           placeholder="Search opponent, opening…"
@@ -76,18 +78,11 @@ export function GamesPage() {
           <option value="done">Analyzed</option>
           <option value="error">Error</option>
         </select>
-        <select
-          className="input w-auto"
-          value={timeClass}
-          onChange={(e) => setTimeClass(e.target.value)}
-        >
-          <option value="all">All time controls</option>
-          {timeClasses.map((tc) => (
-            <option key={tc} value={tc}>
-              {tc}
-            </option>
-          ))}
-        </select>
+        <TimeClassChips
+          selection={timeClassSelection}
+          onChange={setTimeClassSelection}
+          available={games ?? []}
+        />
       </div>
 
       <div className="card overflow-hidden">

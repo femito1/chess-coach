@@ -58,18 +58,34 @@ export interface AccuracyPoint {
 }
 
 /**
- * Per-game accuracy series sorted by end time. If `timeClassFilter` is
- * provided and not 'all', games of other time classes are dropped before
- * the rolling-mean is computed (so the rolling line follows only that
- * mode's data, not a contaminated mix).
+ * Per-game accuracy series sorted by end time.
+ *
+ * `timeClassFilter` controls which games feed into both the per-game
+ * dots and the rolling mean (so the rolling line never mixes data
+ * across time classes the user isn't looking at):
+ *   - `'all'` (default) — every game.
+ *   - a string like `'rapid'` — only games of that single class.
+ *   - an array like `['rapid', 'blitz']` — any game whose class is in
+ *     the array. Empty arrays return an empty series (matches the
+ *     "user deselected every chip" UI state).
  */
 export function accuracyTrend(
   games: ReadonlyArray<GameForCharts>,
-  timeClassFilter: string = 'all',
+  timeClassFilter: string | ReadonlyArray<string> = 'all',
 ): AccuracyPoint[] {
+  const allowedSet =
+    typeof timeClassFilter === 'string'
+      ? timeClassFilter === 'all'
+        ? null
+        : new Set([timeClassFilter])
+      : new Set(timeClassFilter);
   const pts = games
     .filter((g) => g.accuracy && g.endTime)
-    .filter((g) => timeClassFilter === 'all' || (g.timeClass ?? 'other') === timeClassFilter)
+    .filter((g) => {
+      if (allowedSet == null) return true;
+      const cls = g.timeClass ?? 'other';
+      return allowedSet.has(cls);
+    })
     .map((g) => ({
       t: g.endTime * (g.endTime < 1e12 ? 1000 : 1),
       accuracy:

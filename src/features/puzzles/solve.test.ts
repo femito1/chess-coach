@@ -87,6 +87,31 @@ describe('applyPuzzleMove', () => {
     expect(result.reason).toBe('no-expected');
   });
 
+  test('rejected wrong move leaves caller-side state untouched (retry-from-checkpoint contract)', () => {
+    // The page's `retry()` no longer resets fen/solvedIdx; it just
+    // flips status back to 'solving'. That only works because a
+    // rejected move never returns mutated state — every successfully
+    // accepted move's (fen, nextSolvedIdx, lastUci) IS the checkpoint
+    // we resume from. Pin that contract here so a future "be helpful
+    // and pre-roll the user's wrong move so they can see what
+    // happened" refactor can't silently break the retry experience.
+    const fen = '4k3/8/8/8/8/8/8/R3K2R w - - 0 1';
+    const result = applyPuzzleMove({
+      fen,
+      solutionUci: ['a1a8', 'e8e7', 'h1h8', 'e7e6'],
+      solvedIdx: 2, // user is mid-line, has already played 2 plies
+      move: { from: 'h1', to: 'h2' }, // wrong move (expected h1h8)
+    });
+    expect(result.kind).toBe('rejected');
+    if (result.kind !== 'rejected') return;
+    expect(result.reason).toBe('wrong-move');
+    // The result is intentionally a discriminated union — there's no
+    // partial-state on a rejection. The page treats that as: keep the
+    // checkpoint exactly where it is.
+    expect('fen' in result).toBe(false);
+    expect('nextSolvedIdx' in result).toBe(false);
+  });
+
   test('expected move with explicit promotion still matches when user promotes to queen', () => {
     // Solution stores 'a7a8q'; user move is 'a7a8' with promotion: 'q'.
     // The state machine compares only the first 4 chars, then chess.js

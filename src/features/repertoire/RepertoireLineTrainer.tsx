@@ -1,26 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type RepertoireLineStats } from '@/db/schema';
-import { Board } from '@/components/Board';
 import {
   enumerateLines,
   getLineStatsMap,
   lineKey,
-  recordLineAttempt,
-  recordLineCompletion,
-  recordLineMove,
   type RepertoireLine,
 } from './store';
 import { identifyOpening } from '@/features/openings/library';
-
-type Status = 'thinking' | 'wrong' | 'right' | 'done';
-
-interface AttemptStats {
-  total: number;
-  wrong: number;
-  hintsUsed: number;
-}
+import {
+  LineRunner,
+  type LineRunnerControlState,
+} from './LineRunner';
 
 interface DecoratedLine {
   line: RepertoireLine;
@@ -259,7 +251,7 @@ function Header({
 }) {
   return (
     <div className="flex items-center gap-3 flex-wrap">
-      <Link to={`/repertoire/${repertoireId}`} className="btn text-xs">
+      <Link to="/repertoire" className="btn text-xs">
         ← Back
       </Link>
       <div className="flex-1 min-w-0">
@@ -440,8 +432,6 @@ function accuracyPct(correct: number, total: number): number | null {
   return correct / total;
 }
 
-const OPPONENT_AUTOPLAY_DELAY_MS = 600;
-
 function ActiveTrainer({
   repertoireId,
   line,
@@ -464,273 +454,91 @@ function ActiveTrainer({
   onStatsChanged: () => void;
 }) {
   return (
-    <LineRunner
-      key={`${repertoireId}-${decorated.family}-${lineKey(line.uci)}`}
-      repertoireId={repertoireId}
-      line={line}
-      decorated={decorated}
-      stats={stats}
-      userColor={userColor}
-      onBackToLines={onBackToLines}
-      onNextLine={onNextLine}
-      onShuffleLine={onShuffleLine}
-      onStatsChanged={onStatsChanged}
-    />
-  );
-}
-
-function LineRunner({
-  repertoireId,
-  line,
-  decorated,
-  stats,
-  userColor,
-  onBackToLines,
-  onNextLine,
-  onShuffleLine,
-  onStatsChanged,
-}: {
-  repertoireId: string;
-  line: RepertoireLine;
-  decorated: DecoratedLine;
-  stats: RepertoireLineStats | null;
-  userColor: 'white' | 'black';
-  onBackToLines: () => void;
-  onNextLine: () => void;
-  onShuffleLine: () => void;
-  onStatsChanged: () => void;
-}) {
-  // ply = how many moves of `line.uci` have been applied so far. The board
-  // shows `line.fens[ply]`. The user is to move when (ply % 2 === 0) ===
-  // (userColor === 'white').
-  const [ply, setPly] = useState(0);
-  const [status, setStatus] = useState<Status>('thinking');
-  const [hintShown, setHintShown] = useState(false);
-  const [revealShown, setRevealShown] = useState(false);
-  const [wrongUci, setWrongUci] = useState<string | null>(null);
-  const [sessionStats, setSessionStats] = useState<AttemptStats>({
-    total: 0,
-    wrong: 0,
-    hintsUsed: 0,
-  });
-  // We mark a single attempt-completion in the persisted stats only once,
-  // even if the user clicks "restart" mid-line. `attemptLogged` makes sure
-  // `recordLineAttempt` runs once per mount; `completionLogged` makes sure
-  // `recordLineCompletion` runs once per actual reach-the-end.
-  const attemptLogged = useRef(false);
-  const completionLogged = useRef(false);
-  const opponentTimer = useRef<number | null>(null);
-
-  // Log the attempt as soon as the trainer mounts on this line.
-  useEffect(() => {
-    if (attemptLogged.current) return;
-    attemptLogged.current = true;
-    void recordLineAttempt(repertoireId, line).then(onStatsChanged);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const isUserTurn = useMemo(() => {
-    if (ply >= line.uci.length) return false;
-    const fen = line.fens[ply];
-    const turn = fen.split(' ')[1] === 'w' ? 'white' : 'black';
-    return turn === userColor;
-  }, [ply, line, userColor]);
-
-  // Auto-advance opponent moves with a small delay so the user can see
-  // what just happened. Cleared if the user navigates away mid-line.
-  useEffect(() => {
-    if (status !== 'thinking') return;
-    if (ply >= line.uci.length) {
-      setStatus('done');
-      if (!completionLogged.current) {
-        completionLogged.current = true;
-        const perfect =
-          sessionStats.wrong === 0 && sessionStats.hintsUsed === 0;
-        void recordLineCompletion(repertoireId, line, perfect).then(onStatsChanged);
-      }
-      return;
-    }
-    if (!isUserTurn) {
-      opponentTimer.current = window.setTimeout(() => {
-        setPly((p) => p + 1);
-      }, OPPONENT_AUTOPLAY_DELAY_MS);
-      return () => {
-        if (opponentTimer.current) {
-          clearTimeout(opponentTimer.current);
-          opponentTimer.current = null;
-        }
-      };
-    }
-    // We intentionally exclude `sessionStats`/`onStatsChanged` so completion
-    // logic only fires on real ply transitions.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ply, isUserTurn, status, line, repertoireId]);
-
-  const expectedUci = line.uci[ply];
-  const expectedSan = line.san[ply];
-  const expectedFromSquare = expectedUci ? expectedUci.slice(0, 2) : undefined;
-
-  function tryMove(m: {
-    from: string;
-    to: string;
-    promotion?: string;
-  }): boolean {
-    if (!isUserTurn || status !== 'thinking') return false;
-    const played = m.from + m.to + (m.promotion ?? '');
-    setSessionStats((s) => ({ ...s, total: s.total + 1 }));
-    // Compare ignoring promotion piece — a wrong promotion piece is still
-    // technically a valid attempt, so accept any 4-char match.
-    if (played.slice(0, 4) === expectedUci.slice(0, 4)) {
-      setStatus('right');
-      setHintShown(false);
-      setRevealShown(false);
-      setWrongUci(null);
-      void recordLineMove(repertoireId, line, 'correct').then(onStatsChanged);
-      window.setTimeout(() => {
-        setStatus('thinking');
-        setPly((p) => p + 1);
-      }, 350);
-      return true;
-    } else {
-      setStatus('wrong');
-      setWrongUci(played);
-      setSessionStats((s) => ({ ...s, wrong: s.wrong + 1 }));
-      void recordLineMove(repertoireId, line, 'wrong').then(onStatsChanged);
-      // Tell the Board to snap the piece back to its starting square.
-      // Without this, chessground keeps the visually-played piece on
-      // its destination and "Try again" leaves it stuck there.
-      return false;
-    }
-  }
-
-  function retry() {
-    setStatus('thinking');
-    setWrongUci(null);
-  }
-
-  function showHint() {
-    setHintShown(true);
-    setStatus('thinking');
-    setWrongUci(null);
-    setSessionStats((s) => ({ ...s, hintsUsed: s.hintsUsed + 1 }));
-  }
-
-  function reveal() {
-    setRevealShown(true);
-  }
-
-  function playRevealedMove() {
-    if (!expectedUci) return;
-    setStatus('right');
-    window.setTimeout(() => {
-      setStatus('thinking');
-      setPly((p) => p + 1);
-      setHintShown(false);
-      setRevealShown(false);
-      setWrongUci(null);
-    }, 250);
-  }
-
-  function restartLine() {
-    completionLogged.current = false;
-    setPly(0);
-    setStatus('thinking');
-    setHintShown(false);
-    setRevealShown(false);
-    setWrongUci(null);
-    setSessionStats({ total: 0, wrong: 0, hintsUsed: 0 });
-  }
-
-  const fen = line.fens[Math.min(ply, line.fens.length - 1)];
-  const lastUci = ply > 0 ? line.uci[ply - 1] : undefined;
-
-  const highlightSquares =
-    hintShown && expectedFromSquare && status === 'thinking'
-      ? [{ square: expectedFromSquare, color: 'hint' as const }]
-      : status === 'wrong' && wrongUci
-        ? [{ square: wrongUci.slice(0, 2), color: 'wrong' as const }]
-        : [];
-
-  return (
     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
-      <div className="space-y-3">
-        <Board
-          fen={fen}
-          orientation={userColor}
-          lastMoveUci={lastUci}
-          viewOnly={status !== 'thinking' || !isUserTurn}
-          onMove={tryMove}
-          highlightSquares={highlightSquares}
-        />
-        <RunnerStatusBar
-          status={status}
-          isUserTurn={isUserTurn}
-          ply={ply}
-          totalPly={line.uci.length}
-          userColor={userColor}
-          expectedSan={expectedSan}
-          revealShown={revealShown}
-          hintShown={hintShown}
-          onRetry={retry}
-          onHint={showHint}
-          onReveal={reveal}
-          onPlayReveal={playRevealedMove}
-          onRestart={restartLine}
-          onNext={onNextLine}
-          onShuffle={onShuffleLine}
-          onBackToLines={onBackToLines}
-        />
-      </div>
-
-      <aside className="space-y-3">
-        <RunnerStats
-          line={line}
-          ply={ply}
-          decorated={decorated}
-          sessionStats={sessionStats}
-          persistedStats={stats}
-        />
-        <LineMoves line={line} ply={ply} userColor={userColor} />
-      </aside>
+      <LineRunner
+        key={`${repertoireId}-${decorated.family}-${lineKey(line.uci)}`}
+        repertoireId={repertoireId}
+        line={line}
+        userColor={userColor}
+        onStatsChanged={onStatsChanged}
+        renderControls={(c) => (
+          <RunnerStatusBar
+            control={c}
+            userColor={userColor}
+            onNext={onNextLine}
+            onShuffle={onShuffleLine}
+            onBackToLines={onBackToLines}
+          />
+        )}
+      />
+      <ActiveTrainerAside
+        line={line}
+        decorated={decorated}
+        persistedStats={stats}
+        userColor={userColor}
+      />
     </div>
   );
 }
 
-function RunnerStatusBar({
-  status,
-  isUserTurn,
-  ply,
-  totalPly,
+/**
+ * Right-aside on the legacy `/repertoire/:id/lines` page. We can't see
+ * the runner's live `ply` / `sessionStats` from here without lifting
+ * state up; the legacy page deliberately keeps the aside static (it's
+ * the all-time / persisted view). The new practice page surfaces the
+ * live "this run" panel directly below the board instead.
+ */
+function ActiveTrainerAside({
+  line,
+  decorated,
+  persistedStats,
   userColor,
-  expectedSan,
-  revealShown,
-  hintShown,
-  onRetry,
-  onHint,
-  onReveal,
-  onPlayReveal,
-  onRestart,
+}: {
+  line: RepertoireLine;
+  decorated: DecoratedLine;
+  persistedStats: RepertoireLineStats | null;
+  userColor: 'white' | 'black';
+}) {
+  return (
+    <aside className="space-y-3">
+      <PersistedStatsPanel
+        decorated={decorated}
+        persistedStats={persistedStats}
+        lineLength={line.uci.length}
+      />
+      <LineMoves line={line} ply={0} userColor={userColor} />
+    </aside>
+  );
+}
+
+
+function RunnerStatusBar({
+  control,
+  userColor,
   onNext,
   onShuffle,
   onBackToLines,
 }: {
-  status: Status;
-  isUserTurn: boolean;
-  ply: number;
-  totalPly: number;
+  control: LineRunnerControlState;
   userColor: 'white' | 'black';
-  expectedSan: string | undefined;
-  revealShown: boolean;
-  hintShown: boolean;
-  onRetry: () => void;
-  onHint: () => void;
-  onReveal: () => void;
-  onPlayReveal: () => void;
-  onRestart: () => void;
   onNext: () => void;
   onShuffle: () => void;
   onBackToLines: () => void;
 }) {
+  const {
+    status,
+    isUserTurn,
+    ply,
+    totalPly,
+    expectedSan,
+    hintShown,
+    revealShown,
+    onRetry,
+    onHint,
+    onReveal,
+    onPlayReveal,
+    onRestart,
+  } = control;
   return (
     <div className="card p-3 space-y-2">
       <div className="text-sm min-h-[1.5rem]">
@@ -829,23 +637,22 @@ function RunnerStatusBar({
   );
 }
 
-function RunnerStats({
-  line,
-  ply,
+/**
+ * Persisted (all-time) stats for one repertoire line. Lifted out of
+ * the original `RunnerStats` component so the legacy `/lines` page
+ * doesn't have to lift state out of the LineRunner — the live "this
+ * run" panel that used to live here now belongs to the new practice
+ * page (which can read it directly from LineRunner's render-prop).
+ */
+function PersistedStatsPanel({
   decorated,
-  sessionStats,
   persistedStats,
+  lineLength,
 }: {
-  line: RepertoireLine;
-  ply: number;
   decorated: DecoratedLine;
-  sessionStats: AttemptStats;
   persistedStats: RepertoireLineStats | null;
+  lineLength: number;
 }) {
-  const sessAcc =
-    sessionStats.total === 0
-      ? null
-      : 1 - sessionStats.wrong / sessionStats.total;
   const allAcc =
     persistedStats && persistedStats.movesPlayed > 0
       ? persistedStats.correctMoves / persistedStats.movesPlayed
@@ -864,41 +671,7 @@ function RunnerStats({
           )}
           {decorated.variation || 'Line'}
         </div>
-      </div>
-      <div className="border-t border-border pt-2 space-y-1">
-        <div className="text-xs uppercase tracking-wide text-text-muted">
-          This run
-        </div>
-        <div className="flex justify-between">
-          <span className="text-text-muted">Length</span>
-          <span className="font-mono">{line.uci.length} ply</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-text-muted">Progress</span>
-          <span className="font-mono">{ply} / {line.uci.length}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-text-muted">Wrong tries</span>
-          <span
-            className={`font-mono ${sessionStats.wrong > 0 ? 'text-blunder' : ''}`}
-          >
-            {sessionStats.wrong}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-text-muted">Hints used</span>
-          <span className="font-mono">{sessionStats.hintsUsed}</span>
-        </div>
-        {sessAcc !== null && (
-          <div className="flex justify-between">
-            <span className="text-text-muted">Accuracy</span>
-            <span
-              className={`font-mono ${sessAcc >= 0.9 ? 'text-good' : sessAcc < 0.6 ? 'text-blunder' : ''}`}
-            >
-              {(sessAcc * 100).toFixed(0)}%
-            </span>
-          </div>
-        )}
+        <div className="text-xs text-text-muted">{lineLength} ply</div>
       </div>
       <div className="border-t border-border pt-2 space-y-1">
         <div className="text-xs uppercase tracking-wide text-text-muted">
@@ -906,9 +679,7 @@ function RunnerStats({
         </div>
         <div className="flex justify-between">
           <span className="text-text-muted">Attempts</span>
-          <span className="font-mono">
-            {persistedStats?.attempts ?? 0}
-          </span>
+          <span className="font-mono">{persistedStats?.attempts ?? 0}</span>
         </div>
         <div className="flex justify-between">
           <span className="text-text-muted">Completions</span>

@@ -1,14 +1,29 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Color } from '@/db/schema';
-import { createRepertoire, deleteRepertoire, dueCards } from './store';
+import { db, type Repertoire } from '@/db/schema';
+import { deleteRepertoire, dueCards } from './store';
 
+/**
+ * Repertoire list page. After the family-first refactor, repertoires
+ * are bound 1:1 to opening families ("Sicilian Defense", "Italian
+ * Game"). New repertoires are not created from this page — the user
+ * creates them implicitly by adding lines from the Openings library
+ * (`/openings`), which auto-creates the family-bound repertoire on
+ * first add. This page is now a *list* + *practice launcher*.
+ *
+ * The legacy "New repertoire" button + free-form "Custom" repertoires
+ * are intentionally not exposed here. v10 wiped the legacy data and
+ * the new flow is family-driven. If a user genuinely wants a custom
+ * tree they can still get one by importing PGN through the editor —
+ * we don't surface a button for it because >95% of the use case is
+ * the family flow.
+ */
 export function RepertoirePage() {
-  const reps = useLiveQuery(() => db.repertoires.orderBy('updatedAt').reverse().toArray(), []);
-  const [creating, setCreating] = useState(false);
-  const [name, setName] = useState('');
-  const [color, setColor] = useState<Color>('white');
+  const reps = useLiveQuery(
+    () => db.repertoires.orderBy('updatedAt').reverse().toArray(),
+    [],
+  );
   const [dueCounts, setDueCounts] = useState<Record<string, number>>({});
 
   useLiveQuery(async () => {
@@ -21,118 +36,125 @@ export function RepertoirePage() {
     setDueCounts(counts);
   }, [reps]);
 
-  async function create() {
-    if (!name.trim()) return;
-    await createRepertoire({ name: name.trim(), color });
-    setName('');
-    setCreating(false);
-  }
-
   return (
     <div className="space-y-4">
-      <div className="flex items-end justify-between">
+      <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Repertoire</h1>
           <p className="text-sm text-text-muted">
-            Build an opening repertoire, drill it with spaced repetition, and compare
-            your actual games against your prep.
+            One repertoire per opening family. Add lines from the
+            <Link to="/openings" className="text-accent hover:underline mx-1">
+              openings library
+            </Link>
+            to build a family\u2019s repertoire, then drill it on the
+            <Link to="/practice" className="text-accent hover:underline ml-1">
+              practice page
+            </Link>.
           </p>
         </div>
-        <button type="button" className="btn-primary" onClick={() => setCreating(!creating)}>
-          {creating ? 'Cancel' : 'New repertoire'}
-        </button>
+        <Link to="/openings" className="btn-primary text-xs">
+          Browse openings
+        </Link>
       </div>
 
-      {creating && (
-        <div className="card p-4 space-y-3">
-          <label className="block text-sm">
-            <div className="mb-1 text-text-muted">Name</div>
-            <input
-              className="input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. My Najdorf"
-            />
-          </label>
-          <label className="block text-sm">
-            <div className="mb-1 text-text-muted">Color you play</div>
-            <select
-              className="input w-auto"
-              value={color}
-              onChange={(e) => setColor(e.target.value as Color)}
-            >
-              <option value="white">White</option>
-              <option value="black">Black</option>
-            </select>
-          </label>
-          <button type="button" className="btn-primary" onClick={create} disabled={!name.trim()}>
-            Create
-          </button>
-        </div>
-      )}
-
-      {!reps || reps.length === 0 ? (
-        <div className="card p-8 text-center text-text-muted">
-          No repertoires yet. Create one to start building your prep.
+      {!reps ? (
+        <div className="card p-8 text-center text-text-muted">Loading…</div>
+      ) : reps.length === 0 ? (
+        <div className="card p-8 text-center text-text-muted space-y-2">
+          <div className="text-lg">No repertoires yet.</div>
+          <p className="text-sm">
+            Pick an opening family and add a few lines from the{' '}
+            <Link to="/openings" className="text-accent hover:underline">
+              openings library
+            </Link>{' '}
+            — the repertoire is created for you.
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {reps.map((r) => (
-            <div key={r.id} className="card p-4 flex flex-col gap-3">
-              <div>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="font-medium">{r.name}</div>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded ${r.color === 'white' ? 'bg-bg-raised text-text' : 'bg-text/90 text-bg'}`}
-                  >
-                    {r.color}
-                  </span>
-                </div>
-                {r.description && (
-                  <div className="text-xs text-text-muted mt-1">{r.description}</div>
-                )}
-                <div className="text-xs text-text-muted mt-1">
-                  Updated {new Date(r.updatedAt).toLocaleDateString()}
-                  {dueCounts[r.id] > 0 && (
-                    <>
-                      {' · '}
-                      <span className="text-accent">{dueCounts[r.id]} due</span>
-                    </>
-                  )}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Link to={`/repertoire/${r.id}`} className="btn-primary text-xs">
-                  Open
-                </Link>
-                <Link
-                  to={`/repertoire/${r.id}/train`}
-                  className="btn text-xs"
-                  title="Spaced-repetition cards drilling individual positions"
-                >
-                  Cards {dueCounts[r.id] > 0 ? `(${dueCounts[r.id]})` : ''}
-                </Link>
-                <Link
-                  to={`/repertoire/${r.id}/lines`}
-                  className="btn text-xs"
-                  title="Play through full opening lines from move 1"
-                >
-                  Lines
-                </Link>
-                <button
-                  type="button"
-                  className="btn text-xs ml-auto text-blunder hover:text-blunder"
-                  onClick={() => {
-                    if (confirm(`Delete repertoire "${r.name}"?`)) void deleteRepertoire(r.id);
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
+            <RepertoireCard
+              key={r.id}
+              rep={r}
+              dueCount={dueCounts[r.id] ?? 0}
+            />
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function RepertoireCard({
+  rep,
+  dueCount,
+}: {
+  rep: Repertoire;
+  dueCount: number;
+}) {
+  const isFamily = rep.kind === 'family' || (rep.kind == null && Boolean(rep.family));
+  return (
+    <div className="card p-4 flex flex-col gap-3">
+      <div>
+        <div className="flex items-start justify-between gap-3">
+          <div className="font-medium truncate">{rep.name}</div>
+          <span
+            className={`text-xs px-2 py-0.5 rounded shrink-0 ${rep.color === 'white' ? 'bg-bg-raised text-text' : 'bg-text/90 text-bg'}`}
+          >
+            {rep.color}
+          </span>
+        </div>
+        {!isFamily && (
+          <div className="text-[11px] text-text-muted italic mt-0.5">
+            Custom (not bound to a single family)
+          </div>
+        )}
+        {rep.description && (
+          <div className="text-xs text-text-muted mt-1">{rep.description}</div>
+        )}
+        <div className="text-xs text-text-muted mt-1">
+          Updated {new Date(rep.updatedAt).toLocaleDateString()}
+          {dueCount > 0 && (
+            <>
+              {' \u00b7 '}
+              <span className="text-accent">{dueCount} due</span>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Link
+          to={`/practice?rep=${encodeURIComponent(rep.id)}`}
+          className="btn-primary text-xs"
+          title="Practice the lines in this repertoire"
+        >
+          Practice
+        </Link>
+        <Link
+          to={`/repertoire/${rep.id}/train`}
+          className="btn text-xs"
+          title="Spaced-repetition cards drilling individual positions"
+        >
+          Cards {dueCount > 0 ? `(${dueCount})` : ''}
+        </Link>
+        <Link
+          to={`/repertoire/${rep.id}/lines`}
+          className="btn text-xs"
+          title="Legacy line picker (kept for backwards-compat)"
+        >
+          Lines
+        </Link>
+        <button
+          type="button"
+          className="btn text-xs ml-auto text-blunder hover:text-blunder"
+          onClick={() => {
+            if (confirm(`Delete repertoire "${rep.name}"?`))
+              void deleteRepertoire(rep.id);
+          }}
+        >
+          Delete
+        </button>
+      </div>
     </div>
   );
 }

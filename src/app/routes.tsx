@@ -10,9 +10,9 @@ import { SettingsPage } from '@/features/settings/SettingsPage';
 import { WeaknessesPage } from '@/features/weaknesses/WeaknessesPage';
 import { PuzzlesPage } from '@/features/puzzles/PuzzlesPage';
 import { RepertoirePage } from '@/features/repertoire/RepertoirePage';
-import { RepertoireEditor } from '@/features/repertoire/RepertoireEditor';
 import { RepertoireTrainer } from '@/features/repertoire/RepertoireTrainer';
 import { RepertoireLineTrainer } from '@/features/repertoire/RepertoireLineTrainer';
+import { PracticePage } from '@/features/repertoire/PracticePage';
 import { LibraryPage } from '@/features/openings/LibraryPage';
 import { BackupPage } from '@/features/backup/BackupPage';
 import { SignInPage } from '@/features/auth/SignInPage';
@@ -69,9 +69,9 @@ export const router = createBrowserRouter([
                   { path: 'weaknesses', element: <WeaknessesPage /> },
                   { path: 'puzzles', element: <PuzzlesPage /> },
                   { path: 'repertoire', element: <RepertoirePage /> },
-                  { path: 'repertoire/:id', element: <RepertoireEditor /> },
                   { path: 'repertoire/:id/train', element: <RepertoireTrainer /> },
                   { path: 'repertoire/:id/lines', element: <RepertoireLineTrainer /> },
+                  { path: 'practice', element: <PracticePage /> },
                   { path: 'openings', element: <LibraryPage /> },
                   { path: 'backup', element: <BackupPage /> },
                   { path: 'settings', element: <SettingsPage /> },

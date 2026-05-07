@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { Link } from 'react-router-dom';
 import { Board } from '@/components/Board';
-import { db, type Color } from '@/db/schema';
-import { createRepertoire } from '@/features/repertoire/store';
+import { BoardFrame } from '@/components/BoardFrame';
+import { type Color } from '@/db/schema';
 import {
   addFamilyToRepertoire,
   addLineToRepertoire,
   colorHint,
+  ensureFamilyRepertoire,
   familyColor,
   getFamilies,
   getVariations,
@@ -293,7 +294,7 @@ function LinePreview({
   const hint = colorHint(line);
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_320px] gap-3 items-start">
+    <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
       <div className="space-y-2">
         <div
           className={`flex items-center gap-2 px-3 py-2 rounded-md border ${
@@ -309,11 +310,15 @@ function LinePreview({
               : "You are Black. White starts; you respond with this defense."}
           </div>
         </div>
-        <Board
-          fen={currentFen}
-          orientation={hint}
-          lastMoveUci={lastUci}
-          viewOnly
+        <BoardFrame
+          board={
+            <Board
+              fen={currentFen}
+              orientation={hint}
+              lastMoveUci={lastUci}
+              viewOnly
+            />
+          }
         />
         <div className="flex items-center gap-1 text-sm">
           <button className="btn" onClick={() => onPly(0)}>⏮</button>
@@ -349,6 +354,8 @@ function LinePreview({
     </div>
   );
 }
+
+
 
 function MoveListPreview({
   sans,
@@ -388,47 +395,43 @@ function MoveListPreview({
   );
 }
 
+/**
+ * "Add this line to its family repertoire" CTA. Family-first: we
+ * auto-create (or reuse) the repertoire bound to this line's family
+ * via `ensureFamilyRepertoire(family)`. There is intentionally NO
+ * picker — a Sicilian Najdorf line always lands in the user's "Sicilian
+ * Defense" repertoire, never in some unrelated bucket.
+ *
+ * Pre-refactor this component had a "Add to which repertoire?"
+ * dropdown that let the user route a Najdorf line into "My Black
+ * Repertoire" alongside an unrelated French line. That mixed-bucket
+ * model is what the v10 wipe + family refactor explicitly removes.
+ */
 function AddToRepertoirePanel({
   line,
-  defaultColor,
 }: {
   line: OpeningLine;
   defaultColor: Color;
 }) {
-  // The colour is intrinsic to the line — a Sicilian Defense is always
-  // Black's prep, so we don't let the user "add it as White". This removes
-  // a whole category of beginner confusion.
-  const color = defaultColor;
-  const [selectedId, setSelectedId] = useState<string>('');
-  const [status, setStatus] = useState<string | null>(null);
+  const family = line.family;
+  const color = familyColor(family);
+  const [status, setStatus] = useState<{ msg: string; repId?: string } | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const reps = useLiveQuery(
-    () => db.repertoires.where('color').equals(color).toArray(),
-    [color],
-  );
-
-  const effectiveId =
-    selectedId || (reps && reps.length > 0 ? reps[0].id : '');
 
   async function handleAdd() {
     if (busy) return;
     setBusy(true);
     setStatus(null);
     try {
-      let repId = effectiveId;
-      if (!repId) {
-        const name =
-          color === 'white' ? 'My White Repertoire' : 'My Black Repertoire';
-        const created = await createRepertoire({ name, color });
-        repId = created.id;
-      }
-      const added = await addLineToRepertoire(repId, line);
-      setStatus(
-        added > 0
-          ? `Added ${added} new move${added === 1 ? '' : 's'}.`
-          : 'Nothing new — line already in that repertoire.',
-      );
+      const rep = await ensureFamilyRepertoire(family);
+      const added = await addLineToRepertoire(rep.id, line);
+      setStatus({
+        msg:
+          added > 0
+            ? `Added ${added} new move${added === 1 ? '' : 's'} to "${family}".`
+            : `Already in "${family}" — nothing to add.`,
+        repId: rep.id,
+      });
     } finally {
       setBusy(false);
     }
@@ -438,120 +441,83 @@ function AddToRepertoirePanel({
     <div className="card p-3 space-y-2">
       <div className="flex items-center justify-between">
         <div className="text-xs uppercase tracking-wide text-text-muted">
-          Add to repertoire
+          Add to {family}
         </div>
         <ColorBadge color={color} size="xs" />
       </div>
-      <select
-        className="input"
-        value={effectiveId}
-        onChange={(e) => setSelectedId(e.target.value)}
-      >
-        {reps && reps.length > 0 ? (
-          reps.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.name}
-            </option>
-          ))
-        ) : (
-          <option value="">
-            (create "My {color === 'white' ? 'White' : 'Black'} Repertoire")
-          </option>
-        )}
-      </select>
+      <p className="text-xs text-text-muted">
+        Lines are grouped by opening family — every Sicilian line goes
+        into your Sicilian Defense repertoire.
+      </p>
       <button
         type="button"
         className="btn-primary w-full"
         onClick={handleAdd}
         disabled={busy}
       >
-        {busy ? 'Adding…' : `Add line to ${color === 'white' ? 'White' : 'Black'} repertoire`}
+        {busy ? 'Adding…' : `Add line`}
       </button>
-      {status && <div className="text-xs text-text-muted">{status}</div>}
+      {status && (
+        <div className="text-xs text-text-muted flex items-center justify-between gap-2 flex-wrap">
+          <span>{status.msg}</span>
+          {status.repId && (
+            <Link
+              to="/practice"
+              className="text-accent hover:underline shrink-0"
+            >
+              Practice →
+            </Link>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 function AddFamilyButton({
   family,
-  defaultColor = 'white',
 }: {
   family: string;
   defaultColor?: Color;
 }) {
-  const [open, setOpen] = useState(false);
-  const color = defaultColor;
-  const [selectedId, setSelectedId] = useState<string>('');
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  const reps = useLiveQuery(
-    () => db.repertoires.where('color').equals(color).toArray(),
-    [color],
-  );
+  const [msg, setMsg] = useState<{ text: string; repId?: string } | null>(null);
 
   async function handleBulkAdd() {
-    let repId = selectedId || (reps && reps.length > 0 ? reps[0].id : '');
-    if (!repId) {
-      const name =
-        color === 'white' ? 'My White Repertoire' : 'My Black Repertoire';
-      const created = await createRepertoire({ name, color });
-      repId = created.id;
-    }
     setMsg(null);
-    const total = await addFamilyToRepertoire(repId, family, (done, total) => {
+    const rep = await ensureFamilyRepertoire(family);
+    const total = await addFamilyToRepertoire(rep.id, family, (done, total) => {
       setProgress({ done, total });
     });
     setProgress(null);
-    setMsg(`Added ${total} new moves across the family.`);
-  }
-
-  if (!open) {
-    return (
-      <button type="button" className="btn text-xs" onClick={() => setOpen(true)}>
-        Add whole family to {color === 'white' ? 'White' : 'Black'} repertoire…
-      </button>
-    );
+    setMsg({
+      text: `Added ${total} new moves across "${family}".`,
+      repId: rep.id,
+    });
   }
 
   return (
-    <div className="w-full mt-2 p-2 rounded border border-border bg-bg-raised/30 space-y-2 text-sm">
-      <div className="flex items-center gap-2">
-        <ColorBadge color={color} size="xs" />
-        <select
-          className="input flex-1"
-          value={selectedId}
-          onChange={(e) => setSelectedId(e.target.value)}
-        >
-          {reps && reps.length > 0 ? (
-            reps.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
-              </option>
-            ))
-          ) : (
-            <option value="">
-              (create "My {color === 'white' ? 'White' : 'Black'} Repertoire")
-            </option>
+    <div className="flex flex-col gap-2 w-full">
+      <button
+        type="button"
+        className="btn-primary text-xs"
+        onClick={handleBulkAdd}
+        disabled={progress !== null}
+      >
+        {progress
+          ? `Adding ${progress.done}/${progress.total}…`
+          : `Add every line of "${family}"`}
+      </button>
+      {msg && (
+        <div className="text-xs text-text-muted flex items-center justify-between gap-2">
+          <span>{msg.text}</span>
+          {msg.repId && (
+            <Link to="/practice" className="text-accent hover:underline shrink-0">
+              Practice →
+            </Link>
           )}
-        </select>
-      </div>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          className="btn-primary text-xs flex-1"
-          onClick={handleBulkAdd}
-          disabled={progress !== null}
-        >
-          {progress
-            ? `Adding ${progress.done}/${progress.total}…`
-            : `Add all lines of "${family}"`}
-        </button>
-        <button type="button" className="btn text-xs" onClick={() => setOpen(false)}>
-          Close
-        </button>
-      </div>
-      {msg && <div className="text-xs text-text-muted">{msg}</div>}
+        </div>
+      )}
     </div>
   );
 }

@@ -157,13 +157,49 @@ export async function repertoiresForColor(color: Color): Promise<Repertoire[]> {
   return db.repertoires.where('color').equals(color).toArray();
 }
 
+/**
+ * Locate (or create) the repertoire bound to a specific openings-library
+ * family. Used by the family-first add flow on the library page: the
+ * user picks a Najdorf line, and we route it into "their" Sicilian
+ * Defense repertoire (creating one on the fly if needed).
+ *
+ * Color is inferred from the family — colour-mismatched families don't
+ * exist in our dataset (a Sicilian rep is *always* black-side prep).
+ *
+ * Idempotent: subsequent calls return the same repertoire row.
+ */
+export async function ensureFamilyRepertoire(family: string): Promise<Repertoire> {
+  const color = familyColor(family);
+  // Filter on the indexed `color` first, then narrow to the family in
+  // JS — `family` isn't indexed. The result set is tiny in practice
+  // (a user has maybe 5\u201320 repertoires), so the JS filter is
+  // cheap.
+  const candidates = await db.repertoires.where('color').equals(color).toArray();
+  const existing = candidates.find(
+    (r) => r.kind === 'family' && r.family === family,
+  );
+  if (existing) return existing;
+  return createRepertoire({
+    name: family,
+    color,
+    kind: 'family',
+    family,
+  });
+}
+
+/**
+ * Backwards-compat: pre-family-refactor call sites that just want
+ * "some repertoire for this color, create if missing". Now creates a
+ * legacy `'custom'` repertoire rather than a family-bound one — call
+ * `ensureFamilyRepertoire(family)` from new code.
+ */
 export async function ensureRepertoire(
   color: Color,
   name = color === 'white' ? 'My White Repertoire' : 'My Black Repertoire',
 ): Promise<Repertoire> {
   const existing = await repertoiresForColor(color);
   if (existing.length > 0) return existing[0];
-  return createRepertoire({ name, color });
+  return createRepertoire({ name, color, kind: 'custom' });
 }
 
 /**

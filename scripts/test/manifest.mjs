@@ -41,6 +41,8 @@ export const BROWSER_TESTS = [
   { name: 'accuracy-low',               file: 'scripts/test/live/accuracy-low.mjs',                      category: 'live' },
 
   // --- Importing + persistence ------------------------------------
+  { name: 'dexie-v10-wipe',             file: 'scripts/test/integration/dexie-v10-wipe.mjs',             category: 'integration' },
+  { name: 'repertoire-practice',        file: 'scripts/test/integration/repertoire-practice.mjs',        category: 'integration' },
   { name: 'backup',                     file: 'scripts/test/integration/backup.mjs',                     category: 'integration' },
   { name: 'phase2',                     file: 'scripts/test/integration/phase2.mjs',                     category: 'integration' },
   { name: 'auto-import',                file: 'scripts/test/integration/auto-import.mjs',                category: 'integration' },

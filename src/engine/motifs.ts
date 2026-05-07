@@ -496,5 +496,51 @@ export const MOTIF_ORDER: Motif[] = [
   'other',
 ];
 
+/**
+ * Plain-English description of each motif. Surfaced in two places:
+ *  - the weaknesses page's expanded mistake card ("This is a fork because
+ *    the knight attacks two pieces at once…"),
+ *  - the review page's "from weakness" banner when the user clicks
+ *    through from a weakness example.
+ *
+ * Kept short — one sentence, study-flashcard register. Avoid jargon
+ * the player wouldn't recognise from a beginner book.
+ */
+export const MOTIF_EXPLANATION: Record<Motif, string> = {
+  missedMate:
+    'There was a forced mate available — the engine sees a winning sequence that ends the game.',
+  allowedMate:
+    'This move walks into a forced mate — the opponent now has a sequence that ends the game.',
+  missedFork:
+    'A move was available that attacks two valuable pieces at once, so the opponent can\u2019t save both.',
+  missedPin:
+    'A piece could have been pinned against a more valuable one, freezing it in place.',
+  missedSkewer:
+    'A line attack on a valuable piece would have forced it to move, exposing the piece behind it.',
+  missedBackRank:
+    'The opponent\u2019s back rank was weak — a heavy piece could have delivered (or threatened) mate along the first/eighth rank.',
+  fork: 'The opponent\u2019s reply attacks two of your pieces at once, and you can\u2019t save both.',
+  pin:
+    'Your piece is now pinned to a more valuable piece behind it — it can\u2019t move without losing material.',
+  skewer:
+    'A line attack now forces a valuable piece of yours to move, losing the piece behind it.',
+  backRank:
+    'Your king is stuck on the back rank with no escape squares — heavy pieces can mate along the first/eighth rank.',
+  hangingPiece:
+    'A piece is left undefended, attacked by more pieces than defend it. The opponent can take it for free.',
+  trappedPiece:
+    'A piece has no safe squares to move to — it will be lost on the next move.',
+  overloadedDefender:
+    'A defender is asked to do too many jobs at once — protecting it on one front leaves another open.',
+  discoveredAttack:
+    'Moving one piece uncovers an attack from a piece behind it.',
+  weakKing:
+    'Your king has lost its pawn cover and several attackers are converging — the position is unsafe.',
+  lostMaterial:
+    'The line ends with you down material — pieces drop without sufficient compensation.',
+  other:
+    'A significant evaluation drop without a clean tactical name attached.',
+};
+
 
 

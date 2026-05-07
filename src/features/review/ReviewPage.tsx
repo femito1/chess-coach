@@ -2,9 +2,11 @@ import { useEffect, useMemo } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Chess } from 'chess.js';
-import { db } from '@/db/schema';
+import { db, type Motif } from '@/db/schema';
 import { requeueGame } from '@/db/queries';
 import { Board } from '@/components/Board';
+import { BoardFrame } from '@/components/BoardFrame';
+import { EvalBar } from '@/components/EvalBar';
 import { EvalGraph } from '@/components/EvalGraph';
 import { MoveList } from '@/components/MoveList';
 import type { Classification, MoveEval } from '@/db/schema';
@@ -13,6 +15,7 @@ import { useLiveEval, formatCp, getCachedLiveEval } from './LiveEval';
 import { AccuracyPanel } from './AccuracyPanel';
 import { MoveInsight } from './MoveInsight';
 import { classifyMove, CLASSIFICATION_LABEL } from '@/engine/classify';
+import { MOTIF_EXPLANATION, MOTIF_LABEL } from '@/engine/motifs';
 
 export function ReviewPage() {
   const { id } = useParams<{ id: string }>();
@@ -169,6 +172,40 @@ export function ReviewPage() {
   ]);
   const explorationClassification = explorationInsight?.classification;
 
+  // Deep-link banner state. The weaknesses page links to
+  // `/review/:id?ply=N&from=weakness&motifs=fork,pin` so we can render
+  // a dedicated "you came from the weaknesses page" banner with the
+  // mistake's classification + motif explanations. Pulled into its
+  // own memo so the JSX below stays readable.
+  const fromWeaknessBanner = useMemo<
+    | {
+        moverColor: 'White' | 'Black';
+        playedSan: string;
+        bestSan?: string;
+        classification: Classification;
+        motifs: Motif[];
+      }
+    | null
+  >(() => {
+    if (searchParams.get('from') !== 'weakness') return null;
+    if (!analysis) return null;
+    const ply = Number(searchParams.get('ply'));
+    if (!Number.isFinite(ply) || ply < 1) return null;
+    const moveEval = analysis.moves[ply - 1];
+    if (!moveEval) return null;
+    const motifsParam = searchParams.get('motifs');
+    const motifs = motifsParam
+      ? (motifsParam.split(',').filter((m) => m in MOTIF_EXPLANATION) as Motif[])
+      : moveEval.motifs ?? [];
+    return {
+      moverColor: ply % 2 === 1 ? 'White' : 'Black',
+      playedSan: moveEval.san,
+      bestSan: moveEval.bestMoveSan,
+      classification: moveEval.classification,
+      motifs,
+    };
+  }, [searchParams, analysis]);
+
   if (!id) return <div>Missing id.</div>;
   if (game === undefined) return <div className="text-text-muted">Loading…</div>;
   if (!game) return <div className="text-text-muted">Game not found.</div>;
@@ -177,6 +214,17 @@ export function ReviewPage() {
     !rs.isExploring && rs.mainlinePly > 0 ? analysis?.moves[rs.mainlinePly - 1] : undefined;
   const moverColorLabel: 'White' | 'Black' =
     rs.mainlinePly > 0 && rs.mainlinePly % 2 === 1 ? 'White' : 'Black';
+
+  // Eval bar input. Mainline reads the analyzed move-after-eval (White
+  // POV); exploration uses the live engine's running result.
+  const barCpWhite = rs.isExploring
+    ? (liveEval?.cpWhite ?? null)
+    : currentMoveEval
+      ? currentMoveEval.evalCpAfter
+      : null;
+  const barMate = rs.isExploring
+    ? liveEval?.mate
+    : currentMoveEval?.mateInAfter;
 
   // Use the dedicated `engineBest` brush so the engine's recommendation
   // arrow keeps its classic green look even though the chessground
@@ -204,20 +252,35 @@ export function ReviewPage() {
         <a href={game.url} target="_blank" rel="noreferrer" className="btn text-xs">Chess.com ↗</a>
       </div>
 
+      {fromWeaknessBanner && (
+        <FromWeaknessBanner banner={fromWeaknessBanner} />
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-4 items-start">
         <div className="space-y-3">
-          <Board
-            fen={rs.currentFen}
-            orientation={game.userColor}
-            lastMoveUci={rs.lastUci}
-            lastMoveClassification={
-              rs.isExploring
-                ? explorationClassification
-                : currentMoveEval?.classification
+          <BoardFrame
+            evalBar={
+              <EvalBar
+                cpWhite={barCpWhite}
+                mate={barMate}
+                orientation={game.userColor}
+              />
             }
-            arrows={arrows}
-            viewOnly={false}
-            onMove={(m) => rs.tryPlay(m)}
+            board={
+              <Board
+                fen={rs.currentFen}
+                orientation={game.userColor}
+                lastMoveUci={rs.lastUci}
+                lastMoveClassification={
+                  rs.isExploring
+                    ? explorationClassification
+                    : currentMoveEval?.classification
+                }
+                arrows={arrows}
+                viewOnly={false}
+                onMove={(m) => rs.tryPlay(m)}
+              />
+            }
           />
 
           <div className="flex items-center justify-between gap-2 text-sm">
@@ -375,6 +438,82 @@ function ExplorationMoveInsight({
         )}
       </div>
       <div className="text-xs text-text-muted mt-1">Eval after: {evalAfter}</div>
+    </div>
+  );
+}
+
+/**
+ * Header banner that appears when the user reaches the review page via
+ * a "Review in full" deep-link from the weaknesses page. Re-uses the
+ * mistake's classification + motif metadata to explain *why* this
+ * position is being shown — so the user isn't dropped into a board
+ * full of pieces with no context (the original feedback that motivated
+ * the inline mini-board on the weaknesses page).
+ *
+ * Mirrors the visual rhythm of the pre-existing analysis-error / no-
+ * analysis cards (small "card" with coloured left border based on the
+ * mistake's classification), so the banner looks like a natural part
+ * of the review page rather than a transient toast.
+ */
+function FromWeaknessBanner({
+  banner,
+}: {
+  banner: {
+    moverColor: 'White' | 'Black';
+    playedSan: string;
+    bestSan?: string;
+    classification: Classification;
+    motifs: Motif[];
+  };
+}) {
+  const tone =
+    banner.classification === 'blunder'
+      ? 'border-blunder/60 bg-blunder/10'
+      : banner.classification === 'mistake'
+        ? 'border-mistake/60 bg-mistake/10'
+        : banner.classification === 'miss'
+          ? 'border-miss/60 bg-miss/10'
+          : 'border-inaccuracy/60 bg-inaccuracy/10';
+  const label = CLASSIFICATION_LABEL[banner.classification];
+  return (
+    <div className={`card p-3 border ${tone}`}>
+      <div className="flex items-baseline justify-between flex-wrap gap-2">
+        <div className="text-xs uppercase tracking-wide">
+          From weaknesses · {label}
+        </div>
+        <Link to="/weaknesses" className="text-xs text-accent hover:underline">
+          ← Back to weaknesses
+        </Link>
+      </div>
+      <p className="text-sm mt-1">
+        {banner.moverColor} played{' '}
+        <span className="font-mono font-semibold text-blunder">
+          {banner.playedSan}
+        </span>
+        {banner.bestSan && (
+          <>
+            {' '}— the engine preferred{' '}
+            <span className="font-mono font-semibold text-good">
+              {banner.bestSan}
+            </span>
+          </>
+        )}
+        . The board is positioned right on this move; step backward (←)
+        to see the position before it, or use the arrow on the board to
+        compare.
+      </p>
+      {banner.motifs.length > 0 && (
+        <ul className="mt-2 space-y-1 text-xs">
+          {banner.motifs.map((m) => (
+            <li key={m} className="text-text-muted">
+              <span className="font-medium text-text">
+                {MOTIF_LABEL[m]}:
+              </span>{' '}
+              {MOTIF_EXPLANATION[m]}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

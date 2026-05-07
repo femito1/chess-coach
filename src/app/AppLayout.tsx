@@ -13,8 +13,19 @@ export function AppLayout() {
 
   return (
     <div className="min-h-screen flex flex-col">
+      {/* Tightened chrome: the page used to ship with `h-14` (56 px)
+          header + `py-8` (64 px combined) main padding, which pushed
+          the first row of every page ~120 px below the viewport top.
+          On data-dense pages (Review, Weaknesses, Puzzles) that left
+          the actual board / first card cramped against the bottom of
+          the viewport. Slimming the header to `h-12` and the main
+          padding to `pt-5 pb-12` reclaims ~24 px above the fold
+          without eating into vertical rhythm between sections. The
+          container also widens to `max-w-screen-2xl` (1536 px) so
+          21" / ultrawide users don't get a narrow centered column
+          with massive left/right gutters. */}
       <header className="border-b border-border bg-bg-soft/60 backdrop-blur sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto flex items-center gap-4 px-6 h-14">
+        <div className="max-w-screen-2xl mx-auto flex items-center gap-4 px-4 lg:px-8 h-12">
           <Link
             to="/dashboard"
             className="font-semibold tracking-tight hover:text-accent transition-colors whitespace-nowrap shrink-0"
@@ -40,7 +51,7 @@ export function AppLayout() {
           different Clerk user signs in on this browser profile. */}
       <ProfileSyncBanner />
       <main className="flex-1">
-        <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="max-w-screen-2xl mx-auto px-4 lg:px-8 pt-5 pb-12">
           <Outlet />
         </div>
       </main>

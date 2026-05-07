@@ -3,17 +3,24 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import {
   db,
   getSettings,
+  normalizeTimeClassSelection,
   updateSettings,
   type Motif,
   type Puzzle,
-  type TimeClassFilter,
+  type TimeClassSelection,
 } from '@/db/schema';
 import { Board } from '@/components/Board';
+import { BoardFrame } from '@/components/BoardFrame';
+import { EvalBar } from '@/components/EvalBar';
+import { buildSolutionSteps } from '@/components/SolutionPlayer';
+import { SolutionControls } from '@/components/SolutionControls';
+import { useLiveEval } from '@/features/review/LiveEval';
 import { regeneratePuzzles } from './generate';
 import { applyPuzzleMove } from './solve';
 import { gradeSrs, isDue, newSrsState, summarizeIntervals, type Grade } from '@/srs/sm2';
 import { MOTIF_LABEL, MOTIF_ORDER } from '@/engine/motifs';
-import { TimeClassFilterSelect } from '@/components/TimeClassFilter';
+import { TimeClassChips } from '@/components/TimeClassFilter';
+import { gameMatchesSelection } from '@/lib/timeClass';
 
 type Filter = 'due' | 'all' | 'unsolved';
 
@@ -21,13 +28,13 @@ export function PuzzlesPage() {
   const puzzles = useLiveQuery(() => db.puzzles.toArray(), []);
   const [filter, setFilter] = useState<Filter>('due');
   const [motifFilter, setMotifFilter] = useState<Motif | 'all'>('all');
-  const [timeClassFilter, setTimeClassFilter] = useState<TimeClassFilter>('rapid');
+  const [timeClassFilter, setTimeClassFilter] = useState<TimeClassSelection>(['rapid']);
   const [generating, setGenerating] = useState(false);
   const [generateMsg, setGenerateMsg] = useState<string | null>(null);
 
   useEffect(() => {
     void getSettings().then((s) => {
-      if (s.timeClassFilter) setTimeClassFilter(s.timeClassFilter);
+      setTimeClassFilter(normalizeTimeClassSelection(s.timeClassFilter));
     });
   }, []);
 
@@ -46,10 +53,7 @@ export function PuzzlesPage() {
 
   const filtered = useMemo(() => {
     if (!puzzles) return [];
-    let list = puzzles;
-    if (timeClassFilter !== 'all') {
-      list = list.filter((p) => p.timeClass === timeClassFilter);
-    }
+    let list = puzzles.filter((p) => gameMatchesSelection(p, timeClassFilter));
     if (filter === 'due') list = list.filter((p) => isDue(p.srs));
     else if (filter === 'unsolved') list = list.filter((p) => !p.srs || p.srs.reps === 0);
     if (motifFilter !== 'all') list = list.filter((p) => p.motifs.includes(motifFilter));
@@ -60,10 +64,7 @@ export function PuzzlesPage() {
     if (!puzzles) return [];
     // Only count motifs on puzzles that survive the time-class filter,
     // otherwise the dropdown lists motifs that produce zero results.
-    const scoped =
-      timeClassFilter === 'all'
-        ? puzzles
-        : puzzles.filter((p) => p.timeClass === timeClassFilter);
+    const scoped = puzzles.filter((p) => gameMatchesSelection(p, timeClassFilter));
     const set = new Set<Motif>();
     for (const p of scoped) for (const m of p.motifs) set.add(m);
     return MOTIF_ORDER.filter((m) => set.has(m));
@@ -74,7 +75,7 @@ export function PuzzlesPage() {
     setCurrentIdx(0);
   }, [filter, motifFilter, timeClassFilter]);
 
-  function onTimeClassChange(next: TimeClassFilter) {
+  function onTimeClassChange(next: TimeClassSelection) {
     setTimeClassFilter(next);
     void updateSettings({ timeClassFilter: next });
   }
@@ -109,9 +110,9 @@ export function PuzzlesPage() {
         </div>
       </div>
 
-      <div className="card p-2 flex flex-wrap gap-2 text-sm">
-        <TimeClassFilterSelect
-          value={timeClassFilter}
+      <div className="card p-2 flex flex-wrap gap-2 items-center text-sm">
+        <TimeClassChips
+          selection={timeClassFilter}
           onChange={onTimeClassChange}
           available={puzzles ?? []}
         />
@@ -181,6 +182,16 @@ function PuzzleSolver({
    *  so a hint-assisted solve can't inflate the schedule. */
   const [hintShown, setHintShown] = useState(false);
   const [hintUsed, setHintUsed] = useState(false);
+  /** Solution-playback cursor for the "Reveal" simulation. Reused on
+   *  the same main board (no second mini-board pops up next to it). */
+  const [playbackIdx, setPlaybackIdx] = useState(0);
+
+  // Build the playthrough steps once per puzzle. Cheap (chess.js
+  // replay over ~10 moves) so the memo deps are just the puzzle id.
+  const solutionSteps = useMemo(
+    () => buildSolutionSteps(puzzle.fen, puzzle.solutionUci),
+    [puzzle.fen, puzzle.solutionUci],
+  );
 
   useEffect(() => {
     setFen(puzzle.fen);
@@ -191,9 +202,27 @@ function PuzzleSolver({
     setLastUci(undefined);
     setHintShown(false);
     setHintUsed(false);
+    setPlaybackIdx(0);
   }, [puzzle.id]);
 
   const solverColor = puzzle.fen.split(' ')[1] === 'w' ? 'white' : 'black';
+
+  // Whichever FEN the board is currently rendering — either the live
+  // solving FEN or the playback step's FEN when "Reveal" is on. We
+  // declare it here so the live-eval hook below picks up the right
+  // value; the same `boardFen` is also fed into the `<Board>` JSX.
+  const boardFen = showSolution
+    ? solutionSteps[playbackIdx]?.fen ?? fen
+    : fen;
+  const boardLastUci = showSolution
+    ? solutionSteps[playbackIdx]?.uci || undefined
+    : lastUci;
+
+  // Live engine eval drives the puzzle's eval bar. Depth 12 is enough
+  // for a quick visual cue without burning a queue slot — the puzzle
+  // page is solver-paced. Tracks `boardFen` so the bar follows the
+  // solution playback instead of freezing on the pre-reveal position.
+  const liveEval = useLiveEval(boardFen, 12);
 
   function onMove(m: { from: string; to: string; promotion?: string }): boolean {
     if (status !== 'solving') return false;
@@ -228,7 +257,32 @@ function PuzzleSolver({
     if (hasNext) onGraded();
   }
 
+  /**
+   * "Try again" after a wrong attempt. Crucially, this does NOT reset
+   * `fen` / `solvedIdx` / `lastUci` — those still hold the LAST
+   * ACCEPTED state of the line (a wrong attempt is rejected by
+   * `applyPuzzleMove` before any of them advance), so resuming from
+   * here means the user picks up exactly where their first mistake
+   * was without having to replay every correctly-played move that
+   * came before it.
+   *
+   * Previously this function snapped back to `puzzle.fen` + `solvedIdx
+   * = 0`, which was the source of the "ugh, now I have to redo the
+   * whole line just because I messed up move 3" complaint.
+   */
   function retry() {
+    setStatus('solving');
+    setHintShown(false);
+  }
+
+  /**
+   * "Restart" — full reset back to the puzzle's starting position.
+   * Distinct from `retry()` because some users prefer to redo the
+   * whole line when a wrong move pops up (e.g. they want a fresh look
+   * at the position rather than picking up where they slipped).
+   * Kept around as a secondary action in the wrong / solving states.
+   */
+  function restart() {
     setFen(puzzle.fen);
     setSolvedIdx(0);
     setStatus('solving');
@@ -249,6 +303,11 @@ function PuzzleSolver({
     setShowSolution(true);
     setStatus('wrong');
     setHintShown(false);
+    // Park the playback cursor at the END of the line so the board
+    // shows the final position of the solution by default — that's
+    // what most "Reveal" interactions are after ("just show me what
+    // the engine wanted"). User can scrub back with prev/next.
+    setPlaybackIdx(Math.max(0, solutionSteps.length - 1));
   }
 
   // Highlight the from-square of the next expected move when the user
@@ -262,20 +321,40 @@ function PuzzleSolver({
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
       <div className="space-y-2">
-        {/* Cap the board so the whole solver fits the viewport without
-            page scroll. Subtracts the layout chrome above + below
-            (header, padding, page header, filters, status row, action
-            buttons). Stays at most 560px on tall screens. */}
-        <div className="mx-auto w-full" style={{ maxWidth: 'min(560px, calc(100vh - 280px))' }}>
-          <Board
-            fen={fen}
-            orientation={solverColor}
-            lastMoveUci={lastUci}
-            viewOnly={status === 'solved' || status === 'wrong'}
-            onMove={(m) => onMove(m)}
-            highlightSquares={hintSquares}
+        {/* Primary board sized via the canonical `<BoardFrame>` so it
+            matches Review / Cards / Lines / Openings exactly. The
+            `viewportClampPx` keeps the solver chrome (status row +
+            action buttons) on-screen on short windows — that's
+            puzzle-specific, the other surfaces don't need it. */}
+        <BoardFrame
+          viewportClampPx={220}
+          evalBar={
+            <EvalBar
+              cpWhite={liveEval?.cpWhite ?? null}
+              mate={liveEval?.mate}
+              orientation={solverColor}
+            />
+          }
+          board={
+            <Board
+              fen={boardFen}
+              orientation={solverColor}
+              lastMoveUci={boardLastUci}
+              viewOnly={showSolution || status === 'solved' || status === 'wrong'}
+              onMove={(m) => onMove(m)}
+              highlightSquares={showSolution ? [] : hintSquares}
+            />
+          }
+        />
+        {showSolution && (
+          <SolutionControls
+            steps={solutionSteps}
+            idx={playbackIdx}
+            onIdxChange={setPlaybackIdx}
+            onClose={() => setShowSolution(false)}
+            title="Solution playthrough"
           />
-        </div>
+        )}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="text-sm min-h-[1.25rem]">
             {status === 'solving' && (
@@ -289,7 +368,12 @@ function PuzzleSolver({
             )}
             {status === 'wrong' && (
               <span className="text-blunder">
-                Not quite. {showSolution ? 'Full solution shown on the right.' : 'Try again, hint, or reveal.'}
+                Not quite.{' '}
+                {showSolution
+                  ? 'Full solution shown on the right.'
+                  : solvedIdx > 0
+                    ? "Try again from here \u2014 your earlier moves are kept."
+                    : 'Try again, hint, or reveal.'}
               </span>
             )}
             {status === 'solved' && (
@@ -303,8 +387,17 @@ function PuzzleSolver({
           </div>
           <div className="flex gap-1">
             {status === 'wrong' && !showSolution && (
-              <button type="button" className="btn text-xs" onClick={retry}>
-                Retry
+              <button
+                type="button"
+                className="btn-primary text-xs"
+                onClick={retry}
+                title={
+                  solvedIdx > 0
+                    ? 'Try again from your last correct move'
+                    : 'Try again from the puzzle start'
+                }
+              >
+                Try again
               </button>
             )}
             {(status === 'solving' || (status === 'wrong' && !showSolution)) && !hintShown && (
@@ -317,6 +410,22 @@ function PuzzleSolver({
                 Reveal
               </button>
             )}
+            {/* "Restart" is a secondary, less-prominent action so the
+                primary affordance is "keep going from here" — only
+                surface it once the user has actually played a move
+                they'd be throwing away (i.e. solvedIdx > 0). */}
+            {(status === 'wrong' || status === 'solving') &&
+              !showSolution &&
+              solvedIdx > 0 && (
+                <button
+                  type="button"
+                  className="btn text-xs text-text-muted"
+                  onClick={restart}
+                  title="Restart the puzzle from the beginning"
+                >
+                  Restart
+                </button>
+              )}
           </div>
         </div>
       </div>
@@ -347,7 +456,7 @@ function PuzzleSolver({
           </div>
         </div>
 
-        {(status === 'solved' || showSolution) && (
+        {status === 'solved' && !showSolution && (
           <div className="card p-3 space-y-1 text-sm">
             <div className="text-xs uppercase tracking-wide text-text-muted">Solution</div>
             <div className="font-mono text-text">
@@ -361,6 +470,16 @@ function PuzzleSolver({
                 </span>
               ))}
             </div>
+            <button
+              type="button"
+              className="btn text-xs w-full"
+              onClick={() => {
+                setShowSolution(true);
+                setPlaybackIdx(0);
+              }}
+            >
+              Replay step-by-step
+            </button>
           </div>
         )}
 

@@ -134,9 +134,19 @@ export type TimeClass = 'bullet' | 'blitz' | 'rapid' | 'daily' | 'classical';
 
 /**
  * User-facing filter for "which time controls count as real games for
- * improvement purposes". Defaults to 'rapid' — bullet mistakes are high
- * volume / low ROI for study.
+ * improvement purposes". An empty array means "no filter" (i.e. all
+ * time controls). Default selection is `['rapid']` — bullet mistakes
+ * are high volume / low ROI for study.
+ *
+ * Historically this was a single value (`TimeClass | 'all'`) but the
+ * UI shifted to multi-select chips so the user can mix e.g. rapid +
+ * blitz. We migrate the legacy single-value shape on read in
+ * `getSettings()` (it isn't indexed, so no Dexie version bump needed).
  */
+export type TimeClassSelection = TimeClass[];
+
+/** Legacy single-value shape, still used by the type system in some
+ *  pure helpers (e.g. progress charts pick *one* mode at a time). */
 export type TimeClassFilter = TimeClass | 'all';
 
 export const TIME_CLASS_ORDER: TimeClass[] = [
@@ -157,8 +167,12 @@ export interface Settings {
   /** Minimum centipawn swing (from side-to-move POV) that the "best" move
    *  must gain over the played move to qualify as a puzzle source. */
   puzzleMinSwingCp?: number;
-  /** Default time-class filter applied to weaknesses + puzzles pages. */
-  timeClassFilter?: TimeClassFilter;
+  /** Default time-class selection applied to weaknesses + puzzles
+   *  pages. Stored as an array of `TimeClass` values; an empty array
+   *  means "all time controls" (no filter). The Settings reader
+   *  (`getSettings`) accepts the legacy single-value shape and
+   *  migrates it on read. */
+  timeClassFilter?: TimeClassSelection;
   /** Last version of the boot-time `recomputeClassificationsAndAccuracies`
    *  pass that ran successfully against this DB. We bump
    *  `RECOMPUTE_VERSION` in `src/db/queries.ts` whenever the classification
@@ -268,12 +282,40 @@ export interface SrsState {
  *  its parent FEN + the move that led here. The root node has no parent.
  *  Each repertoire is scoped to a side-to-study ('white' or 'black').
  */
+/**
+ * Distinguishes repertoires that the user "owns" by family (the
+ * dominant case after the family-first refactor — every Sicilian line
+ * lives inside one "Sicilian Defense" repertoire) from legacy
+ * free-form repertoires that pre-date the refactor (kept for
+ * backwards-compat, surfaced in the UI under a "Custom" group).
+ *
+ * A v10 migration walks every existing Repertoire and stamps `kind`
+ * to `'family'` when the lines all belong to a single family, or
+ * `'custom'` when they're mixed / when the user explicitly created
+ * the repertoire via the legacy "New repertoire" button.
+ */
+export type RepertoireKind = 'family' | 'custom';
+
 export interface Repertoire {
   id: string;
   name: string;
   color: Color;
   /** Optional high-level description ("My Sicilian Najdorf repertoire"). */
   description?: string;
+  /** What this repertoire collects. `'family'` (the new default) means
+   *  every line belongs to a single openings-library family — the
+   *  practice page knows how to drill these by family / variation /
+   *  shuffled and cross-references each line against the openings
+   *  library for ECO + variation labels. `'custom'` is the legacy
+   *  free-form bucket: a tree of moves the user assembled themselves,
+   *  not bound to any specific family. Optional for backwards-compat
+   *  with v9 rows; absent → treat as `'custom'`. */
+  kind?: RepertoireKind;
+  /** When `kind === 'family'`, the canonical family name from the
+   *  openings library (`OpeningLine.family`). Used for grouping in the
+   *  list page and as the title in the practice page. Always paired
+   *  with `kind === 'family'`; left undefined for `'custom'`. */
+  family?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -598,6 +640,67 @@ export class CoachDB extends Dexie {
       evalCache: 'key, fen, depth, savedAt',
       importRecords: 'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
     });
+    // v10: introduce `Repertoire.kind` + `Repertoire.family` for the
+    // family-first refactor (PROJECT_STATUS.md §4). Neither field is
+    // indexed, so `.stores(...)` is unchanged from v9 — the version
+    // bump exists so the type contract advances and so we can run a
+    // one-shot migration that **wipes** every legacy repertoire and
+    // its dependent rows.
+    //
+    // Why wipe instead of migrate? The pre-v10 model was one big
+    // 'My White Repertoire' / 'My Black Repertoire' bucket that mixed
+    // multiple openings (e.g. Najdorf + French + Caro-Kann all in one
+    // black repertoire). The new model is one repertoire per
+    // openings-library family, and there is no robust way to
+    // *automatically* split a mixed bucket back into its families
+    // without inspecting every node tree, guessing which lines belong
+    // together, and inventing names for the result. Anything we
+    // generate would be wrong some of the time. Per the design
+    // decision in PASS4_PLAN.md, we ship a clean break: nuke the
+    // legacy rows and let the user rebuild via the openings library
+    // (one click per family, fast).
+    //
+    // Wipe scope:
+    //   - `repertoires`               — every row.
+    //   - `repertoireNodes`           — every row (entire tree).
+    //   - `repertoireCards`           — every SRS card; user loses
+    //                                   spaced-repetition history but
+    //                                   re-builds quickly via the
+    //                                   library + new practice page.
+    //   - `repertoireLineStats`       — every per-line stat row.
+    //
+    // We deliberately do NOT touch `games`, `analyses`, `puzzles`,
+    // `settings`, `evalCache`, `notes`, or `importRecords`. The user's
+    // analyzed game library + puzzle history + Clerk binding survive
+    // the upgrade unchanged.
+    //
+    // Pattern note: the upgrade hook follows the safe pattern (see
+    // CLAUDE.md gotcha) — we use `tx.table(...).clear()` inside the
+    // upgrade transaction Dexie hands us, rather than reading rows
+    // and writing them back. `.clear()` is a single IDB op that's
+    // safe to call from inside an upgrade.
+    this.version(10)
+      .stores({
+        games:
+          'id, url, username, endTime, analysisStatus, timeClass, eco, result',
+        analyses: 'gameId, analyzedAt, depth',
+        settings: 'key',
+        puzzles: 'id, gameId, generatedAt, *motifs, *tags, [srs.dueAt+id]',
+        repertoires: 'id, color, updatedAt',
+        repertoireNodes: 'id, repertoireId, fen, parentFen',
+        repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',
+        repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
+        notes: 'fenKey, updatedAt',
+        evalCache: 'key, fen, depth, savedAt',
+        importRecords:
+          'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
+      })
+      .upgrade(async (tx) => {
+        await tx.table('repertoires').clear();
+        await tx.table('repertoireNodes').clear();
+        await tx.table('repertoireCards').clear();
+        await tx.table('repertoireLineStats').clear();
+      });
   }
 }
 
@@ -605,7 +708,21 @@ export const db = new CoachDB();
 
 export async function getSettings(): Promise<Settings> {
   const existing = await db.settings.get('main');
-  if (existing) return existing;
+  if (existing) {
+    // Legacy single-value shape (`'rapid'` / `'all'` / `undefined`)
+    // gets normalized to a `TimeClassSelection` here so call sites
+    // can assume the array shape without a Dexie migration. The
+    // Settings table isn't indexed by this field so re-writing
+    // legacy rows in-place is safe.
+    const raw = existing.timeClassFilter as unknown;
+    const normalized = normalizeTimeClassSelection(raw);
+    if (!Array.isArray(raw)) {
+      const migrated: Settings = { ...existing, timeClassFilter: normalized };
+      await db.settings.put(migrated);
+      return migrated;
+    }
+    return existing;
+  }
   const defaults: Settings = {
     key: 'main',
     username: '',
@@ -613,10 +730,45 @@ export async function getSettings(): Promise<Settings> {
     autoAnalyze: true,
     puzzleGenDepth: 18,
     puzzleMinSwingCp: 200,
-    timeClassFilter: 'rapid',
+    timeClassFilter: ['rapid'],
   };
   await db.settings.put(defaults);
   return defaults;
+}
+
+/**
+ * Normalize whatever lives at `Settings.timeClassFilter` to the canonical
+ * array shape:
+ *   - `undefined` / `null`      → `['rapid']` (legacy default)
+ *   - `'all'`                   → `[]` (= all time classes / no filter)
+ *   - `'rapid'` / 'blitz' / etc → `['rapid']`
+ *   - `[]`                      → `[]`
+ *   - `['rapid','blitz']`       → `['rapid','blitz']` (deduped, ordered)
+ *
+ * Exported because the same migration runs at the *page* layer when a
+ * component reads its own piece of Settings (we don't always go through
+ * `getSettings`).
+ */
+export function normalizeTimeClassSelection(raw: unknown): TimeClassSelection {
+  const VALID: TimeClass[] = ['rapid', 'blitz', 'bullet', 'daily', 'classical'];
+  if (raw == null) return ['rapid'];
+  if (Array.isArray(raw)) {
+    const seen = new Set<string>();
+    const out: TimeClass[] = [];
+    for (const v of raw) {
+      if (typeof v !== 'string') continue;
+      if (!VALID.includes(v as TimeClass)) continue;
+      if (seen.has(v)) continue;
+      seen.add(v);
+      out.push(v as TimeClass);
+    }
+    return out;
+  }
+  if (typeof raw === 'string') {
+    if (raw === 'all') return [];
+    if (VALID.includes(raw as TimeClass)) return [raw as TimeClass];
+  }
+  return ['rapid'];
 }
 
 export async function updateSettings(patch: Partial<Omit<Settings, 'key'>>): Promise<void> {

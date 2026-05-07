@@ -23,7 +23,7 @@ export function ProfileSyncBanner() {
   return (
     <div
       role="alert"
-      className="mx-auto max-w-7xl px-6 mt-4 rounded-md border border-blunder/40 bg-blunder/10 text-sm py-3 px-4 flex items-start gap-3"
+      className="mx-auto max-w-screen-2xl px-4 lg:px-8 mt-4 rounded-md border border-blunder/40 bg-blunder/10 text-sm py-3 flex items-start gap-3"
     >
       <div className="flex-1">
         <div className="font-medium text-text">Different account detected</div>
