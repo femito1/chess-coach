@@ -35,6 +35,7 @@ export const BROWSER_TESTS = [
   { name: 'recompute',                  file: 'scripts/test/integration/recompute.mjs',                  category: 'integration' },
   { name: 'recompute-skip',             file: 'scripts/test/integration/recompute-skip.mjs',             category: 'integration' },
   { name: 'recompute-all',              file: 'scripts/test/integration/recompute-all.mjs',              category: 'integration' },
+  { name: 'user-time-backfill',         file: 'scripts/test/integration/user-time-backfill.mjs',         category: 'integration' },
   { name: 'classifications',            file: 'scripts/test/live/classifications.mjs',                   category: 'live' },
   { name: 'accuracy',                   file: 'scripts/test/live/accuracy.mjs',                          category: 'live' },
   { name: 'accuracy-low',               file: 'scripts/test/live/accuracy-low.mjs',                      category: 'live' },

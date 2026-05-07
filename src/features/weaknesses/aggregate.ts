@@ -1,6 +1,14 @@
 import type { Analysis, Game, Motif, MoveEval, Phase } from '@/db/schema';
 import { MOTIF_ORDER } from '@/engine/motifs';
 
+/**
+ * Game shape consumed by the aggregator. Excludes `pgn` so callers can
+ * pass either the full `Game` or the light projection (`GameLight`).
+ * The aggregator never reads PGN — it only joins game metadata against
+ * the `analyses` table.
+ */
+export type GameForAggregation = Omit<Game, 'pgn'>;
+
 export interface MistakeRow {
   gameId: string;
   gameUrl?: string;
@@ -65,7 +73,7 @@ function baseOf(tc: string | undefined): number | undefined {
  * user was the mover. Downstream stats all derive from this list.
  */
 export function buildMistakes(
-  games: Game[],
+  games: ReadonlyArray<GameForAggregation>,
   analyses: Map<string, Analysis>,
 ): MistakeRow[] {
   const rows: MistakeRow[] = [];
@@ -104,7 +112,7 @@ export function buildMistakes(
 }
 
 export function aggregateMistakes(
-  games: Game[],
+  games: ReadonlyArray<GameForAggregation>,
   analyses: Map<string, Analysis>,
 ): Aggregates {
   const rows = buildMistakes(games, analyses);

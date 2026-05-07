@@ -9,11 +9,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import type { Game } from '@/db/schema';
 import {
   accuracyTrend,
   ratingTrend,
   winRateByOpening,
+  type GameForCharts,
 } from './progress';
 
 const AXIS_COLOR = '#9aa3b2';
@@ -73,7 +73,7 @@ function modeLabel(m: string): string {
   return m.charAt(0).toUpperCase() + m.slice(1);
 }
 
-export function ProgressCharts({ games }: { games: Game[] }) {
+export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> }) {
   // Independent time-window selectors per chart so the user can zoom one
   // without losing context in the other (e.g. last-7-days rating spike
   // vs. all-time accuracy trend).

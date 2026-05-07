@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { countByStatus, listGames, requeueAllErrors } from '@/db/queries';
+import { countByStatus, listGamesLight, requeueAllErrors } from '@/db/queries';
 import { db } from '@/db/schema';
 import { isDue } from '@/srs/sm2';
 import { ProgressCharts } from './ProgressCharts';
@@ -9,13 +9,14 @@ import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 import { totalSecondsPlayed } from './progress';
 
 export function DashboardPage() {
-  // Throttled to 1.5 s. These four queries together pull every game
-  // (with PGN!), every puzzle, and every repertoire card on each Dexie
-  // change event. While the analyzer is running, that fires hundreds of
-  // times per minute and makes the dashboard feel glued to the engine.
-  // 1.5 s of staleness on aggregate counters is invisible to the user.
+  // Throttled to 1.5 s. The dashboard's `games` query reads a *light*
+  // projection (`listGamesLight` — no PGN) so each refire allocates
+  // ~50 KB of metadata instead of ~2 MB of PGN strings. Combined with
+  // cached `userTimeSec` (populated by the analyzer / backfill), this
+  // keeps the dashboard fast even while the analyzer is firing per-game
+  // writes through `useLiveQuery`.
   const counts = useThrottledLiveQuery(() => countByStatus(), [], 1500);
-  const games = useThrottledLiveQuery(() => listGames(), [], 1500);
+  const games = useThrottledLiveQuery(() => listGamesLight(), [], 1500);
   const duePuzzles = useThrottledLiveQuery(
     async () => {
       const ps = await db.puzzles.toArray();
@@ -293,7 +294,7 @@ function AnalysisStatus({
   );
 }
 
-function avgAccuracy(games: { accuracy?: { white: number; black: number }; userColor: 'white' | 'black' }[]): string {
+function avgAccuracy(games: ReadonlyArray<{ accuracy?: { white: number; black: number }; userColor: 'white' | 'black' }>): string {
   const withAcc = games.filter((g) => g.accuracy);
   if (withAcc.length === 0) return '—';
   const sum = withAcc.reduce((acc, g) => acc + (g.userColor === 'white' ? g.accuracy!.white : g.accuracy!.black), 0);

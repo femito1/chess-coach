@@ -62,6 +62,26 @@ export interface Game {
   analysisStatus: AnalysisStatus;
   analysisError?: string;
   accuracy?: { white: number; black: number };
+  /** Cached per-game stats derived from PGN clocks at analysis time so
+   *  the dashboard's "Hours played" tile doesn't have to re-parse every
+   *  PGN on every render. Both are populated by the analyzer when a game
+   *  finishes (`saveAnalyzedTimeStats`) and by a one-shot version-stamped
+   *  backfill for games analyzed before this code shipped
+   *  (`backfillUserTimeStats`). Absent on unanalyzed games and on
+   *  pre-backfill done games — `totalSecondsPlayed` then falls back to
+   *  the original PGN regex path so behaviour stays identical.
+   *
+   *  Why both fields:
+   *    - `userTimeSec` is the authoritative number when `%clk` is in the
+   *      PGN. Daily / correspondence games are stored as `undefined`,
+   *      not `0`, so the dashboard can distinguish "we deliberately
+   *      excluded this game" from "this game took zero seconds".
+   *    - `userPlyCount` enables the no-clock fallback heuristic (half
+   *      base + per-move offset, capped at 2× base) without re-running
+   *      the regex; for clock-rich PGNs we still store it for free since
+   *      we already iterated the moves. */
+  userTimeSec?: number;
+  userPlyCount?: number;
 }
 
 export interface MoveEval {
@@ -174,6 +194,12 @@ export interface Settings {
    *  than guessing. Falls back to a conservative constant if the probe
    *  ever fails. */
   deviceAnalysisMsPerGame?: number;
+  /** Last version of the boot-time `backfillUserTimeStats` pass that
+   *  ran successfully against this DB. Same pattern as
+   *  `lastRecomputeVersion` — version-stamping lets a warm boot skip
+   *  the pass entirely. Bumped only when the PGN-clock derivation
+   *  logic changes its output for existing games. */
+  lastUserTimeBackfillVersion?: number;
 }
 
 /* =======================================================================
@@ -534,6 +560,31 @@ export class CoachDB extends Dexie {
     // which is the desired behaviour for users who upgraded across the
     // Phase 2 boundary.
     this.version(8).stores({
+      games:
+        'id, url, username, endTime, analysisStatus, timeClass, eco, result',
+      analyses: 'gameId, analyzedAt, depth',
+      settings: 'key',
+      puzzles: 'id, gameId, generatedAt, *motifs, *tags, [srs.dueAt+id]',
+      repertoires: 'id, color, updatedAt',
+      repertoireNodes: 'id, repertoireId, fen, parentFen',
+      repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',
+      repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
+      notes: 'fenKey, updatedAt',
+      evalCache: 'key, fen, depth, savedAt',
+      importRecords: 'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
+    });
+    // v9: added `Game.userTimeSec` + `Game.userPlyCount` (cached PGN
+    // clock-derived stats so the dashboard doesn't re-parse every PGN
+    // on every render) and `Settings.lastUserTimeBackfillVersion` (skip
+    // stamp for the one-shot backfill pass). None of those fields are
+    // indexed, so `.stores(...)` is identical to v8 — Dexie just needs
+    // the version bump so the type contract advances. Existing rows
+    // surface `userTimeSec`/`userPlyCount` as `undefined`; the backfill
+    // pass populates them on next boot, and the dashboard's
+    // `totalSecondsPlayed` already prefers the cached fields and falls
+    // back to PGN-parsing when missing, so behaviour is identical
+    // before, during, and after the backfill.
+    this.version(9).stores({
       games:
         'id, url, username, endTime, analysisStatus, timeClass, eco, result',
       analyses: 'gameId, analyzedAt, depth',

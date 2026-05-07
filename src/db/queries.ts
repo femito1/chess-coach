@@ -30,6 +30,11 @@ import {
  */
 export const RECOMPUTE_VERSION = 1;
 export const OPENING_REFRESH_VERSION = 1;
+/** Version stamp for the boot-time `backfillUserTimeStats` pass. Bump
+ *  this any time `computeUserTimeStats` would produce different output
+ *  for an existing PGN — e.g. a fix to how `%clk` increments are
+ *  handled, or a change to the no-clock fallback heuristic. */
+export const USER_TIME_BACKFILL_VERSION = 1;
 
 /** Order-sensitive equality on two motif arrays. Cheap shortcut used
  *  by `recomputeClassificationsAndAccuracies` instead of a per-move
@@ -78,6 +83,50 @@ export async function upsertGames(games: Game[]): Promise<{ added: number; skipp
 
 export async function listGames(): Promise<Game[]> {
   return db.games.orderBy('endTime').reverse().toArray();
+}
+
+/**
+ * Game projection that omits the `pgn` field. Use this anywhere the
+ * UI needs game metadata (id, opponent, rating, opening, accuracy,
+ * timing) but doesn't need the move list itself.
+ *
+ * Why this exists: a typical PGN is ~2 KB; on a 1 k-game library that's
+ * ~2 MB of *string* hauled out of IndexedDB into JS heap on every
+ * `useLiveQuery` refire. The dashboard alone fires that read every 1.5 s
+ * while the analyzer is running (a hot Dexie write firehose). Skipping
+ * PGN cuts the per-refire allocation by ~95 % and is the single biggest
+ * fix for the "page hangs for 20 s when reload-while-analyzing" symptom.
+ *
+ * The shape is `Omit<Game, 'pgn'>` so TypeScript catches any consumer
+ * that tries to read `pgn` off a light row at compile time. Pages that
+ * actually need PGN (review, repertoire-gap analysis) keep using
+ * `getGame` / `listGames` / `db.games.toArray()`.
+ */
+export type GameLight = Omit<Game, 'pgn'>;
+
+export async function listGamesLight(): Promise<GameLight[]> {
+  // Dexie has no native "select-without-field" projection; the cheapest
+  // way to drop one large field is to read the rows and strip it before
+  // returning. The string is freed by the next GC.
+  const rows = await db.games.orderBy('endTime').reverse().toArray();
+  return rows.map(stripPgn);
+}
+
+/** Same projection but returns rows in arbitrary order — matches
+ *  `db.games.toArray()`. Used by pages that don't care about ordering
+ *  (Weaknesses, Settings) so the projection stays a one-liner there. */
+export async function listAllGamesLight(): Promise<GameLight[]> {
+  const rows = await db.games.toArray();
+  return rows.map(stripPgn);
+}
+
+function stripPgn(g: Game): GameLight {
+  // Object spread + delete is faster than `const { pgn, ...rest } = g`
+  // on large arrays per V8's hidden-class semantics, but the difference
+  // is negligible for the row counts we deal with here. Readability wins.
+  const { pgn: _pgn, ...light } = g;
+  void _pgn;
+  return light;
 }
 
 export async function getGame(id: string): Promise<Game | undefined> {
@@ -460,4 +509,89 @@ export async function requeueAllErrors(): Promise<number> {
 export async function requeueGame(gameId: string): Promise<void> {
   await db.games.update(gameId, { analysisStatus: 'pending', analysisError: undefined });
   await db.analyses.delete(gameId);
+}
+
+/**
+ * One-shot backfill of `Game.userTimeSec` + `Game.userPlyCount` for
+ * games analyzed before v9 shipped. Without these cached fields, the
+ * dashboard's "Hours played" tile re-parses every PGN on every render,
+ * which on a 1 k-game library means ~2 MB of regex work per render
+ * while the analyzer is firing per-move writes — the dominant cause of
+ * the "page hangs for 20 s" symptom.
+ *
+ * Same pattern as `recomputeClassificationsAndAccuracies`:
+ *   - version-stamped (warm boots short-circuit immediately),
+ *   - chunked through `bulkGet` + `bulkPut`,
+ *   - yields between chunks so the UI thread stays responsive,
+ *   - empty-DB runs are deliberately *not* stamped (so a later import
+ *     still gets a real pass).
+ *
+ * Operates over *every* game (not just `done`) because `userTimeSec`
+ * is purely PGN-derived — it doesn't depend on engine analysis. That
+ * means newly-imported pending games also get the cache populated, so
+ * the "Hours played" tile is accurate for unanalyzed games too.
+ */
+export async function backfillUserTimeStats(opts?: {
+  force?: boolean;
+}): Promise<number> {
+  if (!opts?.force) {
+    const settings = await getSettings();
+    if (settings.lastUserTimeBackfillVersion === USER_TIME_BACKFILL_VERSION) {
+      return 0;
+    }
+  }
+
+  // Lazy-imported to avoid a cycle: progress.ts → schema.ts → queries.ts.
+  const { computeUserTimeStats } = await import('@/features/dashboard/progress');
+
+  const ids = (await db.games.toCollection().primaryKeys()) as string[];
+  let updated = 0;
+
+  for (let start = 0; start < ids.length; start += RECOMPUTE_CHUNK) {
+    const chunkIds = ids.slice(start, start + RECOMPUTE_CHUNK);
+    const games = await db.games.bulkGet(chunkIds);
+
+    const merged: Game[] = [];
+    for (const g of games) {
+      if (!g) continue;
+      // Skip rows that are already at the current version's output.
+      // We can't tell apart "computed and got undefined" from "never
+      // computed" by looking at the row alone — but the version stamp
+      // on Settings is the global signal, so once it's stamped the
+      // per-row check doesn't matter. For the *first* run on an
+      // existing DB, every row is potentially stale, so we always
+      // recompute and only skip writing when nothing changed.
+      const stats = computeUserTimeStats({
+        timeClass: g.timeClass,
+        timeControl: g.timeControl,
+        userColor: g.userColor,
+        pgn: g.pgn,
+      });
+      if (
+        stats.userTimeSec === g.userTimeSec &&
+        stats.userPlyCount === g.userPlyCount
+      ) {
+        continue;
+      }
+      merged.push({
+        ...g,
+        userTimeSec: stats.userTimeSec,
+        userPlyCount: stats.userPlyCount,
+      });
+      updated++;
+    }
+
+    if (merged.length > 0) {
+      await db.games.bulkPut(merged);
+    }
+
+    await yieldToBrowser();
+  }
+
+  if (ids.length > 0) {
+    await updateSettings({
+      lastUserTimeBackfillVersion: USER_TIME_BACKFILL_VERSION,
+    });
+  }
+  return updated;
 }

@@ -5,6 +5,7 @@ import {
   db,
 } from '@/db/schema';
 import {
+  backfillUserTimeStats,
   nextPendingGame,
   recomputeClassificationsAndAccuracies,
   refreshOpeningMetadata,
@@ -13,6 +14,7 @@ import {
   saveAnalysis,
   setAnalysisStatus,
 } from '@/db/queries';
+import { computeUserTimeStats } from '@/features/dashboard/progress';
 import { analysisPool } from './pool';
 
 /** How long the queue has to be idle (no pending games found) before we
@@ -189,6 +191,22 @@ export async function startAnalysisQueue(): Promise<void> {
       }
     });
 
+    // Backfill cached per-game time stats (`userTimeSec` / `userPlyCount`)
+    // for games analyzed before v9 shipped. After this completes once
+    // per DB, the dashboard's "Hours played" tile reads the cached
+    // fields directly and never re-parses PGN on render. Version-
+    // stamped + chunked + run in the background, same as the other
+    // boot passes — a warm boot returns in single-digit ms.
+    boot.setPhase('Caching time stats…');
+    await bootStep('backfillUserTimeStats', async () => {
+      const backfilled = await backfillUserTimeStats();
+      if (backfilled > 0) {
+        console.info(
+          `[queue] cached user-time stats for ${backfilled} games`,
+        );
+      }
+    });
+
     clearTimeout(bannerTimer);
     boot.setPhase(null);
     boot.setStarted(false);
@@ -269,7 +287,24 @@ async function runLoop(): Promise<void> {
         );
         await saveAnalysis(analysis);
         const accuracy = computeAccuracy(analysis.moves);
-        await db.games.update(game.id, { accuracy, analysisStatus: 'done' });
+        // Stamp the per-game time stats while we already have the PGN
+        // hot in JS heap (we just iterated every move). The dashboard's
+        // "Hours played" tile reads these cached fields and falls back
+        // to PGN-parsing only when absent — see `totalSecondsPlayed`.
+        // Doing it here means newly-analyzed games never land in the
+        // pre-backfill state where the dashboard would have to re-parse.
+        const timeStats = computeUserTimeStats({
+          timeClass: game.timeClass,
+          timeControl: game.timeControl,
+          userColor: game.userColor,
+          pgn: game.pgn,
+        });
+        await db.games.update(game.id, {
+          accuracy,
+          analysisStatus: 'done',
+          userTimeSec: timeStats.userTimeSec,
+          userPlyCount: timeStats.userPlyCount,
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         await setAnalysisStatus(game.id, 'error', msg);

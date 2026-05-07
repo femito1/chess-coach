@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { db, getSettings, updateSettings } from '@/db/schema';
 import type { Analysis, TimeClassFilter } from '@/db/schema';
+import { listAllGamesLight } from '@/db/queries';
 import { aggregateMistakes } from './aggregate';
 import { MOTIF_LABEL } from '@/engine/motifs';
 import { TimeClassFilterSelect } from '@/components/TimeClassFilter';
@@ -10,10 +11,12 @@ import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 
 export function WeaknessesPage() {
   // Throttled to 1 s: the analyzer can fire hundreds of `db.games`
-  // writes per minute during a queue run. Re-running this page's two
-  // heavy aggregations on every one of those writes makes the whole app
-  // feel laggy. One-second staleness is invisible on an aggregate page.
-  const games = useThrottledLiveQuery(() => db.games.toArray(), [], 1000);
+  // writes per minute during a queue run. We pull a *light* projection
+  // (no PGN) since the aggregator only needs metadata + the analyses
+  // table. Without the projection a 1 k-game library would haul ~2 MB
+  // of PGN into memory on every refire — the dominant cause of the
+  // mid-analysis page hangs the user reported on prod.
+  const games = useThrottledLiveQuery(() => listAllGamesLight(), [], 1000);
   const [filter, setFilter] = useState<TimeClassFilter>('rapid');
 
   // Load saved filter preference once.

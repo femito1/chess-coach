@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { listGames, requeueGame } from '@/db/queries';
+import { listGamesLight, requeueGame } from '@/db/queries';
 import type { AnalysisStatus, GameResult } from '@/db/schema';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 
@@ -8,10 +8,12 @@ type ResultFilter = 'all' | GameResult;
 type StatusFilter = 'all' | AnalysisStatus;
 
 export function GamesPage() {
-  // Throttled — `listGames()` pulls every game (with PGN). Without
-  // throttling the analyzer's per-move writes refetch the whole table on
-  // each move, which is the dominant cause of lag while the queue runs.
-  const games = useThrottledLiveQuery(() => listGames(), [], 1000);
+  // Throttled + light projection: the page only needs metadata
+  // (opponent, opening, result, accuracy, time class) for the table
+  // rows. Without `pgn` the per-refire allocation drops from ~2 MB to
+  // ~50 KB on a 1 k-game library, which removes the dominant cause of
+  // page lag during analysis runs.
+  const games = useThrottledLiveQuery(() => listGamesLight(), [], 1000);
   const [query, setQuery] = useState('');
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');

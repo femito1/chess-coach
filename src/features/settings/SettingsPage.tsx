@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getSettings, updateSettings, db, type TimeClassFilter } from '@/db/schema';
-import { requeueGamesByScope, type RequeueScope } from '@/db/queries';
+import { listAllGamesLight, requeueGamesByScope, type RequeueScope } from '@/db/queries';
 import { TimeClassFilterSelect } from '@/components/TimeClassFilter';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 
@@ -15,8 +15,9 @@ export function SettingsPage() {
   const [requeueStatus, setRequeueStatus] = useState<string | null>(null);
   // Settings only uses `games` to populate the time-class filter dropdown
   // — staleness of a few seconds is invisible. Throttled for the same
-  // reason as the dashboard / weaknesses pages.
-  const games = useThrottledLiveQuery(() => db.games.toArray(), [], 1500);
+  // reason as the dashboard / weaknesses pages, and uses the light
+  // projection (no PGN) since we only need `timeClass` for the dropdown.
+  const games = useThrottledLiveQuery(() => listAllGamesLight(), [], 1500);
 
   useEffect(() => {
     void getSettings().then((s) => {

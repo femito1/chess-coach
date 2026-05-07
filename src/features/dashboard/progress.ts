@@ -6,6 +6,16 @@ import {
 } from '@/engine/phase';
 
 /**
+ * Game shape consumed by `ratingTrend` / `accuracyTrend` /
+ * `winRateByOpening`. Excludes `pgn` so callers can pass either the
+ * full `Game` row or the lightweight projection
+ * (`GameLight` from `db/queries.ts`) without a cast. None of these
+ * functions touch the move list, so removing the field from the type
+ * is purely a documentation + safety win.
+ */
+export type GameForCharts = Omit<Game, 'pgn'>;
+
+/**
  * Split an opening name into its family prefix (everything before the
  * first colon). Matches the split used by the openings library, so the
  * bar chart family names line up with the library and repertoire picker.
@@ -25,7 +35,7 @@ export interface RatingPoint {
   timeClass: string;
 }
 
-export function ratingTrend(games: Game[]): RatingPoint[] {
+export function ratingTrend(games: ReadonlyArray<GameForCharts>): RatingPoint[] {
   const out: RatingPoint[] = [];
   for (const g of games) {
     if (!g.userRating || !g.endTime) continue;
@@ -54,7 +64,7 @@ export interface AccuracyPoint {
  * mode's data, not a contaminated mix).
  */
 export function accuracyTrend(
-  games: Game[],
+  games: ReadonlyArray<GameForCharts>,
   timeClassFilter: string = 'all',
 ): AccuracyPoint[] {
   const pts = games
@@ -95,56 +105,126 @@ export interface OpeningBar {
 }
 
 /**
- * Estimate the total seconds the user has spent playing across the
- * given games. Strategy, in order of preference:
- *
- *   1. If the PGN has `%clk` annotations, derive per-move time spent and
- *      sum it. This is the most accurate — it's the actual wall-clock
- *      time the user spent on the board, not the time control budget.
- *   2. Otherwise, fall back to a rough estimate: half the base time
- *      control, capped at twice the base time. Caps avoid daily / 24h
- *      games inflating the total to absurd numbers when the player
- *      actually only spent a few minutes thinking.
- *   3. Games with no usable signal are skipped.
- *
- * Returns total seconds. Daily / correspondence games are excluded
- * regardless of clock availability (their `timeControl` is e.g. "1/86400"
- * meaning "one move per day", which is meaningless for time-played).
+ * Game shape for `totalSecondsPlayed`. Accepts both the full `Game`
+ * (with PGN) and the lightweight projection (`GameLight`, no PGN). When
+ * `pgn` is absent we rely entirely on the cached `userTimeSec` /
+ * `userPlyCount` fields populated at analysis time; that's the steady-
+ * state path on the dashboard.
  */
-export function totalSecondsPlayed(games: Game[]): number {
+export type GameForTimeStats = Pick<
+  Game,
+  | 'timeClass'
+  | 'timeControl'
+  | 'userColor'
+  | 'userTimeSec'
+  | 'userPlyCount'
+> & { pgn?: string };
+
+/**
+ * Compute the user's seconds played + ply count for a single game.
+ * Pure, side-effect-free, exported so the analyzer can stamp these onto
+ * the `Game` row at analysis-completion time and the boot-time
+ * backfill can populate them for legacy rows. Returns `undefined` for
+ * `userTimeSec` when the game has no usable signal (so the cache
+ * faithfully represents "we tried and got nothing" rather than
+ * conflating with "never computed").
+ *
+ * The strategy mirrors what `totalSecondsPlayed` used to do inline:
+ *   1. Daily / correspondence are excluded entirely.
+ *   2. Prefer `%clk` from the PGN when present.
+ *   3. Fall back to a base-time heuristic (half base + per-move offset,
+ *      capped at 2× base) for clockless rapid/blitz/bullet games.
+ */
+export function computeUserTimeStats(g: {
+  timeClass?: string;
+  timeControl: string;
+  userColor: 'white' | 'black';
+  pgn: string;
+}): { userTimeSec: number | undefined; userPlyCount: number } {
+  const ply = countPlyFromPgn(g.pgn);
+
+  if (g.timeClass === 'daily') {
+    return { userTimeSec: undefined, userPlyCount: ply };
+  }
+
+  const clocks = extractClocks(g.pgn);
+  const base = baseSecondsFromTimeControl(g.timeControl);
+
+  if (clocks.length > 0) {
+    const spent = deriveTimeSpent(clocks, base);
+    let sumW = 0;
+    let sumB = 0;
+    for (let i = 0; i < spent.length; i++) {
+      const s = spent[i];
+      if (typeof s !== 'number' || !Number.isFinite(s) || s < 0) continue;
+      if (i % 2 === 0) sumW += s;
+      else sumB += s;
+    }
+    const userSum = g.userColor === 'white' ? sumW : sumB;
+    if (userSum > 0) {
+      return { userTimeSec: userSum, userPlyCount: ply };
+    }
+  }
+
+  if (typeof base === 'number' && base > 0 && base < 2 * 60 * 60) {
+    const userPly = Math.ceil(ply / 2);
+    const guess = Math.min(base * 2, base * 0.5 + userPly * 2);
+    return { userTimeSec: guess, userPlyCount: ply };
+  }
+
+  return { userTimeSec: undefined, userPlyCount: ply };
+}
+
+/**
+ * Estimate the total seconds the user has spent playing across the
+ * given games.
+ *
+ * Hot path: read the cached `userTimeSec` field if present (populated by
+ * the analyzer / boot-time backfill). Slow path: fall back to parsing
+ * `%clk` from the PGN — this only fires for unanalyzed games, the
+ * one-shot grace window between v9 deploy and the backfill completing,
+ * and tests that pass synthetic data without the cached fields. The
+ * fallback is intentionally identical to the original implementation so
+ * displayed numbers are unchanged before/after caching.
+ *
+ * Daily / correspondence games are excluded regardless of clock
+ * availability (their `timeControl` of "1/86400" doesn't reflect actual
+ * think time).
+ */
+export function totalSecondsPlayed(games: ReadonlyArray<GameForTimeStats>): number {
   let totalSec = 0;
   for (const g of games) {
     if (g.timeClass === 'daily') continue;
 
-    const clocks = extractClocks(g.pgn);
-    const base = baseSecondsFromTimeControl(g.timeControl);
-
-    if (clocks.length > 0) {
-      const spent = deriveTimeSpent(clocks, base);
-      let sumW = 0;
-      let sumB = 0;
-      for (let i = 0; i < spent.length; i++) {
-        const s = spent[i];
-        if (typeof s !== 'number' || !Number.isFinite(s) || s < 0) continue;
-        if (i % 2 === 0) sumW += s;
-        else sumB += s;
-      }
-      // We only care about the user's own time, not the opponent's.
-      const userSum = g.userColor === 'white' ? sumW : sumB;
-      if (userSum > 0) {
-        totalSec += userSum;
-        continue;
-      }
+    // Hot path: cached value populated at analysis time. We treat
+    // `userTimeSec === undefined` differently from `userTimeSec === 0`:
+    //   - `undefined` means "we never tried to compute" (pre-backfill)
+    //     OR "we tried and got no usable signal" (no clocks + no base).
+    //     For pre-backfill rows we'd ideally fall through to the PGN
+    //     path; for genuine-no-signal rows we just want to skip. We
+    //     distinguish by checking PGN availability: if PGN is absent
+    //     the row came from a light projection, so we *can't* fall
+    //     through and we just skip — matching the v9 steady state.
+    //   - `0` would only happen if a game genuinely had zero seconds
+    //     of think time (impossible in practice; treat as skip).
+    if (typeof g.userTimeSec === 'number') {
+      if (g.userTimeSec > 0) totalSec += g.userTimeSec;
+      continue;
+    }
+    if (!g.pgn) {
+      // Light projection without a cached value — pre-backfill row.
+      // Skip; the backfill will populate it shortly. Better to under-
+      // count for one boot than to pull every PGN onto the dashboard.
+      continue;
     }
 
-    // Fallback heuristic when there are no clocks.
-    if (typeof base === 'number' && base > 0 && base < 2 * 60 * 60) {
-      // Half the base + a tiny per-move offset capped at 2× base.
-      const ply = countPlyFromPgn(g.pgn);
-      const userPly = Math.ceil(ply / 2);
-      const guess = Math.min(base * 2, base * 0.5 + userPly * 2);
-      totalSec += guess;
-    }
+    const stats = computeUserTimeStats({
+      timeClass: g.timeClass,
+      timeControl: g.timeControl,
+      userColor: g.userColor,
+      pgn: g.pgn,
+    });
+    if (typeof stats.userTimeSec === 'number') totalSec += stats.userTimeSec;
   }
   return totalSec;
 }
@@ -168,7 +248,10 @@ function countPlyFromPgn(pgn: string): number {
   return Math.max(n, 0);
 }
 
-export function winRateByOpening(games: Game[], topN = 10): OpeningBar[] {
+export function winRateByOpening(
+  games: ReadonlyArray<GameForCharts>,
+  topN = 10,
+): OpeningBar[] {
   const map = new Map<string, OpeningBar>();
   for (const g of games) {
     const f = openingFamily(g.opening);
