@@ -1,0 +1,83 @@
+name: Live API tests
+
+# Daily smoke against the real Chess.com API. Kept separate from `ci.yml`
+# because:
+#   1. Chess.com occasionally rate-limits or has transient outages.
+#      A flake here should not block PRs from merging.
+#   2. Per-PR runs would burn API budget for no incremental signal.
+#
+# Schedule + manual trigger only. Any failure here is informational --
+# the workflow records its result and uploads traces, but is not on the
+# branch-protection required-checks list.
+
+on:
+  schedule:
+    # 06:17 UTC daily. Slightly off-the-hour to avoid the schedule-runner
+    # thundering herd that GitHub Actions has at minute :00.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+env:
+  # See ci.yml for why we need real values rather than dummies.
+  VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+  VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+  VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+jobs:
+  live:
+    name: Live Chess.com API tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Start dev server
+        run: |
+          npm run dev > /tmp/vite.log 2>&1 &
+          echo $! > /tmp/vite.pid
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5173/ > /dev/null; then
+              echo "Dev server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Dev server failed to start within 60s."
+          tail -200 /tmp/vite.log
+          exit 1
+
+      - name: Live tests
+        run: npm run test:live
+        # Don't fail the workflow on Chess.com flakes -- the run is for
+        # observability, not gating. The job still records pass/fail in
+        # its summary, and traces upload below if it fails.
+        continue-on-error: true
+
+      - name: Stop dev server
+        if: always()
+        run: |
+          if [ -f /tmp/vite.pid ]; then
+            kill $(cat /tmp/vite.pid) 2>/dev/null || true
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-traces
+          path: |
+            test-results/
+            /tmp/vite.log
+          retention-days: 14
+          if-no-files-found: ignore

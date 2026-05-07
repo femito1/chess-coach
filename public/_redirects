@@ -1,0 +1,12 @@
+# SPA fallback for Cloudflare Pages.
+#
+# react-router-dom's createBrowserRouter uses real paths (e.g. /review/123).
+# A hard refresh on a non-root path would 404 against a static host without
+# this rule, because there is no /review/123 file in dist/. Returning
+# index.html with status 200 lets the client-side router take over without
+# the browser flashing a redirect.
+#
+# Status 200 is intentional (not 301/302) so the URL stays exactly as the
+# user typed it.
+
+/*    /index.html   200
