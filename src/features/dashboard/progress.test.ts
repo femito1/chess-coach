@@ -3,6 +3,7 @@ import {
   accuracyTrend,
   computeUserTimeStats,
   totalSecondsPlayed,
+  winRateByOpening,
   type GameForCharts,
   type GameForTimeStats,
 } from './progress';
@@ -252,5 +253,85 @@ describe('accuracyTrend filtering', () => {
     expect(out.map((p) => p.accuracy)).toEqual([90, 85]);
     // And critically, the rolling line never sees blitz/bullet data.
     expect(out.every((p) => p.timeClass === 'rapid')).toBe(true);
+  });
+});
+
+describe('winRateByOpening filtering', () => {
+  function chartGame(
+    timeClass: string,
+    opening: string,
+    result: 'win' | 'loss' | 'draw',
+    endTimeSec: number,
+  ): GameForCharts {
+    return {
+      id: `${timeClass}-${opening}-${endTimeSec}`,
+      source: 'chesscom',
+      pgn: '',
+      url: '',
+      timeClass,
+      timeControl: '600',
+      result,
+      userColor: 'white',
+      userRating: 1500,
+      opponent: 'someone',
+      opponentRating: 1500,
+      endTime: endTimeSec,
+      eco: 'A00',
+      opening,
+      analysisStatus: 'done',
+    } as unknown as GameForCharts;
+  }
+
+  // Two opening families across three time classes. The Italian Game
+  // (4 rapid wins, 1 blitz loss) and the French Defense (1 bullet win).
+  const games: GameForCharts[] = [
+    chartGame('rapid', 'Italian Game', 'win', 1),
+    chartGame('rapid', 'Italian Game', 'win', 2),
+    chartGame('rapid', 'Italian Game', 'win', 3),
+    chartGame('rapid', 'Italian Game: Classical', 'win', 4),
+    chartGame('blitz', 'Italian Game', 'loss', 5),
+    chartGame('bullet', 'French Defense', 'win', 6),
+  ];
+
+  it('returns every family when filter is "all" (default)', () => {
+    const out = winRateByOpening(games);
+    const families = new Set(out.map((o) => o.family));
+    expect(families.has('Italian Game')).toBe(true);
+    expect(families.has('French Defense')).toBe(true);
+    const italian = out.find((o) => o.family === 'Italian Game')!;
+    expect(italian.games).toBe(5); // 4 rapid + 1 blitz
+  });
+
+  it('filters by a single time class string', () => {
+    const out = winRateByOpening(games, 10, 'rapid');
+    const italian = out.find((o) => o.family === 'Italian Game');
+    expect(italian).toBeTruthy();
+    expect(italian!.games).toBe(4); // only rapid Italians
+    expect(italian!.wins).toBe(4);
+    // French Defense is bullet-only — not in the rapid slice.
+    expect(out.find((o) => o.family === 'French Defense')).toBeUndefined();
+  });
+
+  it('filters by a multi-class array', () => {
+    const out = winRateByOpening(games, 10, ['rapid', 'blitz']);
+    const italian = out.find((o) => o.family === 'Italian Game')!;
+    expect(italian.games).toBe(5);
+    expect(italian.wins).toBe(4);
+    expect(italian.losses).toBe(1);
+    expect(out.find((o) => o.family === 'French Defense')).toBeUndefined();
+  });
+
+  it('returns an empty list when the filter array is empty (every chip deselected)', () => {
+    const out = winRateByOpening(games, 10, []);
+    expect(out).toHaveLength(0);
+  });
+
+  it('respects topN against the filtered set', () => {
+    // Force the filter down to just blitz; that's a single Italian
+    // Game game. Asking for top 10 still produces just the one row.
+    const out = winRateByOpening(games, 10, 'blitz');
+    expect(out).toHaveLength(1);
+    expect(out[0].family).toBe('Italian Game');
+    expect(out[0].losses).toBe(1);
   });
 });

@@ -150,7 +150,23 @@ export async function setAnalysisStatus(
 }
 
 export async function nextPendingGame(): Promise<Game | undefined> {
-  return db.games.where('analysisStatus').equals('pending').first();
+  // Newest games first. Users care about analyses for the games they
+  // *just* played far more than ancient archive backfill, so when the
+  // queue is processing a fresh import we want the most recent endTime
+  // to come off the queue first. We walk the `endTime` index in reverse
+  // (descending) using a Dexie cursor and stop on the first row with
+  // `analysisStatus === 'pending'` — short-circuits after a single row
+  // in steady state and never materialises the whole pending set in JS.
+  let found: Game | undefined;
+  await db.games
+    .orderBy('endTime')
+    .reverse()
+    .filter((g) => g.analysisStatus === 'pending')
+    .limit(1)
+    .each((g) => {
+      found = g;
+    });
+  return found;
 }
 
 export async function countByStatus(): Promise<Record<AnalysisStatus, number>> {

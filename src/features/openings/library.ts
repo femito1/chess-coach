@@ -132,7 +132,9 @@ export async function addLineToRepertoire(
 /**
  * Add every line in a family to a repertoire. Each line is processed
  * sequentially so that shared prefixes collapse into the same nodes
- * (the store dedupes by FEN).
+ * (the store dedupes by FEN). Stamps `Repertoire.bulkLoadedAt` on
+ * completion so the openings page can show "All lines added" instead
+ * of letting the user click the bulk-add button again.
  */
 export async function addFamilyToRepertoire(
   repertoireId: string,
@@ -145,6 +147,7 @@ export async function addFamilyToRepertoire(
     total += await addLineToRepertoire(repertoireId, lines[i]);
     onProgress?.(i + 1, lines.length);
   }
+  await db.repertoires.update(repertoireId, { bulkLoadedAt: Date.now() });
   return total;
 }
 

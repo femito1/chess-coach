@@ -38,6 +38,209 @@
 .cg-wrap {
   width: 100%;
   height: 100%;
+  /* Make the wrap a CSS container so child rules can size labels via
+   * container-query units (`cqw`). Without `container-type`, the
+   * `clamp(8px, 1.6cqw, 13px)` font-size on coords would silently fall
+   * back to 8px on every board. */
+  container-type: inline-size;
+}
+
+/* ---------------------------------------------------------------- *
+ *  Chess.com-style coordinate labels.
+ * ---------------------------------------------------------------- *
+ *
+ *  Chessground's default `coordinates: true` mode draws the ranks
+ *  column at `top: -20px` (the rank `1` ends up just above the bottom
+ *  edge, `8` slightly above the board top) and the files row at
+ *  `bottom: -4px` (just below the board). Under the default theme half
+ *  the labels alternate dark grey and disappear against this app's
+ *  dark page chrome; in the thumbnail boards (weakness preview etc.)
+ *  the entire ranks column was effectively invisible.
+ *
+ *  Override to the chess.com style: rank numbers in the top-left
+ *  corner of the leftmost-file column ONLY; file letters in the
+ *  bottom-right corner of the bottom-rank row ONLY. Both sit fully
+ *  inside the board area.
+ *
+ *  Implementation:
+ *
+ *    - `coords.ranks` is a vertical flex column spanning the full
+ *      board height. Each `<coord>` child auto-fills 12.5% of the
+ *      parent height (one square tall). chessground uses
+ *      `flex-flow: column-reverse` for white orientation (rank 1 at
+ *      bottom) and `column` for black orientation. We pin the column
+ *      to the LEFT edge of the board (`left: 0`) and use
+ *      `align-items: flex-start` + a small `padding-left` so each
+ *      number sits in the top-left corner of its row's leftmost
+ *      square.
+ *
+ *    - `coords.files` is a horizontal flex row across the full board
+ *      width. Each `<coord>` child fills 12.5% of the width (one
+ *      square wide). Pin to the BOTTOM edge (`bottom: 0`) and
+ *      `align-items: flex-end` + small `padding-right` for each
+ *      letter to sit in the bottom-right corner of its column's
+ *      bottom-rank square.
+ *
+ *    - The squares-mode (`coordinatesOnSquares: true`) variant is left
+ *      untouched on purpose — we don't enable it. Rules for it stay
+ *      out of this block.
+ */
+
+/* Both rank and file containers span the full board, sit fully
+ * inside it (no negative `top` / `bottom` offsets), and host their
+ * `<coord>` children as absolutely positioned per-square labels. */
+.cg-wrap coords.ranks,
+.cg-wrap coords.files {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 1;
+  /* Drop the column/row flex flow chessground uses by default — we
+   * place each <coord> by hand via `:nth-child` rules below. */
+  display: block;
+  font-size: clamp(8px, 1.6cqw, 13px);
+  font-weight: 600;
+  font-family: inherit;
+}
+.cg-wrap coords.ranks coord,
+.cg-wrap coords.files coord {
+  position: absolute;
+  display: block;
+  width: 12.5%;
+  height: 12.5%;
+  line-height: 1;
+  /* Override chessground's translateY(39%) on .ranks coord so labels
+   * sit exactly at the corner we pin them to. */
+  transform: none;
+  padding: 0;
+  /* Chess.com-ish: white text against dark squares, dark text against
+   * light squares. The brown skin already alternates this via
+   * `:nth-child` selectors on the parent — we keep its colour rules
+   * by not setting `color` here. */
+}
+
+/* ---- Ranks (numbers 1..8): top-left corner of the LEFTMOST file's
+ * squares. Default chess.com convention: rank labels live on the a-
+ * file column for white-on-bottom orientation, and on the h-file
+ * column for black-on-bottom orientation. Chessground passes us the
+ * orientation as `coords.ranks` (white) or `coords.ranks.black`. We
+ * pin to `left: 0` for white and `right: 0` for black.
+ *
+ * Children order: chessground emits them as 1, 2, …, 8 in DOM order.
+ * In white orientation rank 1 sits at the BOTTOM of the board (board
+ * coordinate 87.5% from top); in black orientation rank 1 sits at the
+ * TOP. */
+/* Ranks live in the visually-leftmost file column for BOTH
+ * orientations — chess.com convention. `left: 0` is the leftmost
+ * pixel of the board, which is the a-file in white orientation and
+ * the h-file in black orientation. */
+.cg-wrap coords.ranks coord {
+  left: 0;
+  text-align: left;
+  padding-left: 3px;
+  padding-top: 2px;
+}
+.cg-wrap coords.ranks coord:nth-child(1) { top: 87.5%; }
+.cg-wrap coords.ranks coord:nth-child(2) { top: 75%; }
+.cg-wrap coords.ranks coord:nth-child(3) { top: 62.5%; }
+.cg-wrap coords.ranks coord:nth-child(4) { top: 50%; }
+.cg-wrap coords.ranks coord:nth-child(5) { top: 37.5%; }
+.cg-wrap coords.ranks coord:nth-child(6) { top: 25%; }
+.cg-wrap coords.ranks coord:nth-child(7) { top: 12.5%; }
+.cg-wrap coords.ranks coord:nth-child(8) { top: 0; }
+/* Black orientation: ranks are visually mirrored top-to-bottom. */
+.cg-wrap coords.ranks.black coord:nth-child(1) { top: 0; }
+.cg-wrap coords.ranks.black coord:nth-child(2) { top: 12.5%; }
+.cg-wrap coords.ranks.black coord:nth-child(3) { top: 25%; }
+.cg-wrap coords.ranks.black coord:nth-child(4) { top: 37.5%; }
+.cg-wrap coords.ranks.black coord:nth-child(5) { top: 50%; }
+.cg-wrap coords.ranks.black coord:nth-child(6) { top: 62.5%; }
+.cg-wrap coords.ranks.black coord:nth-child(7) { top: 75%; }
+.cg-wrap coords.ranks.black coord:nth-child(8) { top: 87.5%; }
+
+/* ---- Files (letters a..h): bottom-right corner of the BOTTOM-rank
+ * row. White orientation: rank-1 row is at the bottom of the board.
+ * Children order in DOM is a, b, …, h. */
+.cg-wrap coords.files coord {
+  bottom: 0;
+  top: auto;
+  text-align: right;
+  padding-right: 4px;
+  padding-bottom: 2px;
+  /* Anchor children at the BOTTOM of the board — they are 12.5% tall,
+   * but we only want the text at the bottom of that height. Use flex
+   * inside the cell to pin the text. */
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  height: 12.5%;
+}
+.cg-wrap coords.files coord:nth-child(1) { left: 0; }
+.cg-wrap coords.files coord:nth-child(2) { left: 12.5%; }
+.cg-wrap coords.files coord:nth-child(3) { left: 25%; }
+.cg-wrap coords.files coord:nth-child(4) { left: 37.5%; }
+.cg-wrap coords.files coord:nth-child(5) { left: 50%; }
+.cg-wrap coords.files coord:nth-child(6) { left: 62.5%; }
+.cg-wrap coords.files coord:nth-child(7) { left: 75%; }
+.cg-wrap coords.files coord:nth-child(8) { left: 87.5%; }
+/* Black orientation flips files horizontally (h on the left, a on the
+ * right). */
+.cg-wrap coords.files.black coord:nth-child(1) { left: 87.5%; }
+.cg-wrap coords.files.black coord:nth-child(2) { left: 75%; }
+.cg-wrap coords.files.black coord:nth-child(3) { left: 62.5%; }
+.cg-wrap coords.files.black coord:nth-child(4) { left: 50%; }
+.cg-wrap coords.files.black coord:nth-child(5) { left: 37.5%; }
+.cg-wrap coords.files.black coord:nth-child(6) { left: 25%; }
+.cg-wrap coords.files.black coord:nth-child(7) { left: 12.5%; }
+.cg-wrap coords.files.black coord:nth-child(8) { left: 0; }
+
+/* ---- Per-square contrast colours.
+ *
+ *  Each label sits on a specific square; we colour it so it reads
+ *  cleanly against the brown skin's two square shades.
+ *
+ *  Square shade rule: `(file_index + rank) % 2`. file=a..h → 0..7.
+ *  Result 0 → LIGHT square, 1 → DARK square. So:
+ *    - WHITE orientation, ranks on a-file (file=0): nth-child(1)=rank 1
+ *      lands on (0+1)%2=1 (DARK) → needs a LIGHT label. Pattern from
+ *      child 1 onwards: D L D L D L D L → text colour: L D L D L D L D
+ *      (i.e. odd children → LIGHT, even → DARK).
+ *    - WHITE orientation, files on rank 1 (rank=1): nth-child(1)=a-file
+ *      → a1 (0+1)%2=1 (DARK) → LIGHT text. Same odd/even pattern as
+ *      ranks above.
+ *    - BLACK orientation: ranks live on h-file (file=7), files live on
+ *      the rank-8 row (bottom in black-on-bottom view). nth-child(1)
+ *      lands on (7+1)%2=0 (LIGHT) → DARK text. Pattern flips to
+ *      odd → DARK, even → LIGHT.
+ *
+ *  Colours mirror the brown skin's two shades so they look native: a
+ *  warm light cream against dark squares and a deeper cocoa against
+ *  light squares (matches `chessground.brown.css`'s own rgba values to
+ *  ~equal opacity). */
+:root {
+  --cg-coord-light: rgba(245, 230, 200, 0.95);
+  --cg-coord-dark: rgba(70, 55, 35, 0.85);
+}
+/* WHITE orientation: odd → LIGHT, even → DARK. */
+.cg-wrap coords.ranks coord:nth-child(odd),
+.cg-wrap coords.files coord:nth-child(odd) {
+  color: var(--cg-coord-light);
+}
+.cg-wrap coords.ranks coord:nth-child(even),
+.cg-wrap coords.files coord:nth-child(even) {
+  color: var(--cg-coord-dark);
+}
+/* BLACK orientation: odd → DARK, even → LIGHT (flipped). */
+.cg-wrap coords.ranks.black coord:nth-child(odd),
+.cg-wrap coords.files.black coord:nth-child(odd) {
+  color: var(--cg-coord-dark);
+}
+.cg-wrap coords.ranks.black coord:nth-child(even),
+.cg-wrap coords.files.black coord:nth-child(even) {
+  color: var(--cg-coord-light);
 }
 
 /* Slim, dark-themed scrollbar for any element marked .scrollable. The

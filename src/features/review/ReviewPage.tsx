@@ -6,7 +6,7 @@ import { db, type Motif } from '@/db/schema';
 import { requeueGame } from '@/db/queries';
 import { Board } from '@/components/Board';
 import { BoardFrame } from '@/components/BoardFrame';
-import { EvalBar } from '@/components/EvalBar';
+import { EvalBar, mateForWhite } from '@/components/EvalBar';
 import { EvalGraph } from '@/components/EvalGraph';
 import { MoveList } from '@/components/MoveList';
 import type { Classification, MoveEval } from '@/db/schema';
@@ -217,14 +217,26 @@ export function ReviewPage() {
 
   // Eval bar input. Mainline reads the analyzed move-after-eval (White
   // POV); exploration uses the live engine's running result.
+  //
+  // CRITICAL: Stockfish reports mate from the *side-to-move's*
+  // perspective, but the EvalBar expects mate from White's perspective
+  // so the bar stays anchored to the winning colour as the turn flips.
+  // Without `mateForWhite(...)`, the bar would swap to the opposite
+  // side after every reply: e.g. after user (white) plays a move that
+  // forces mate-in-1, it's black to move, the engine reports
+  // `scoreMate = -1` (STM = black is being mated), and a naive
+  // `mate > 0 ? white : black` bar would fill BLACK as if black were
+  // winning. Convert to white-POV at the call site.
   const barCpWhite = rs.isExploring
     ? (liveEval?.cpWhite ?? null)
     : currentMoveEval
       ? currentMoveEval.evalCpAfter
       : null;
   const barMate = rs.isExploring
-    ? liveEval?.mate
-    : currentMoveEval?.mateInAfter;
+    ? mateForWhite(liveEval?.mate, rs.currentFen)
+    : currentMoveEval
+      ? mateForWhite(currentMoveEval.mateInAfter, currentMoveEval.fenAfter)
+      : undefined;
 
   // Use the dedicated `engineBest` brush so the engine's recommendation
   // arrow keeps its classic green look even though the chessground

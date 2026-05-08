@@ -264,12 +264,33 @@ function countPlyFromPgn(pgn: string): number {
   return Math.max(n, 0);
 }
 
+/**
+ * Top-N opening families by volume, with W/D/L counts and win rate.
+ *
+ * `timeClassFilter` works the same as `accuracyTrend`'s third arg:
+ *   - `'all'` (default) — every game.
+ *   - a string like `'rapid'` — only games of that single class.
+ *   - an array like `['rapid', 'blitz']` — any game whose class is in
+ *     the array. Empty arrays return an empty list (matches "user
+ *     deselected every chip" in the chip-bar UI).
+ */
 export function winRateByOpening(
   games: ReadonlyArray<GameForCharts>,
   topN = 10,
+  timeClassFilter: string | ReadonlyArray<string> = 'all',
 ): OpeningBar[] {
+  const allowedSet =
+    typeof timeClassFilter === 'string'
+      ? timeClassFilter === 'all'
+        ? null
+        : new Set([timeClassFilter])
+      : new Set(timeClassFilter);
   const map = new Map<string, OpeningBar>();
   for (const g of games) {
+    if (allowedSet != null) {
+      const cls = g.timeClass ?? 'other';
+      if (!allowedSet.has(cls)) continue;
+    }
     const f = openingFamily(g.opening);
     const agg = map.get(f) ?? {
       family: f,

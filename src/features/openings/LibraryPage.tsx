@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Board } from '@/components/Board';
 import { BoardFrame } from '@/components/BoardFrame';
-import { type Color } from '@/db/schema';
+import { db, type Color } from '@/db/schema';
 import {
   addFamilyToRepertoire,
   addLineToRepertoire,
@@ -483,6 +484,30 @@ function AddFamilyButton({
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [msg, setMsg] = useState<{ text: string; repId?: string } | null>(null);
 
+  // Live coverage check: a family-bound repertoire stamps itself with
+  // `bulkLoadedAt` the moment "Add every line" finishes. We mirror that
+  // flag in the button state so revisiting the openings page doesn't
+  // re-offer a no-op click. The query reactively re-fires on any
+  // `repertoires` write — including the implicit delete from
+  // `RepertoirePage` — so blowing away the rep re-enables the button.
+  //
+  // We don't try to detect partial coverage by counting nodes vs.
+  // expected FENs: chess.js's halfmove-clock semantics differ between
+  // a continuous walk and `load(parentFen)+move(uci)`, which made an
+  // earlier FEN-set comparison flag every fully-bulk-loaded family as
+  // "1 fen short". `bulkLoadedAt` is the unambiguous signal.
+  const familyRep = useLiveQuery(async () => {
+    const candidates = await db.repertoires
+      .where('color')
+      .equals(familyColor(family))
+      .toArray();
+    return (
+      candidates.find((r) => r.kind === 'family' && r.family === family) ?? null
+    );
+  }, [family]);
+
+  const fullyCovered = familyRep?.bulkLoadedAt != null;
+
   async function handleBulkAdd() {
     setMsg(null);
     const rep = await ensureFamilyRepertoire(family);
@@ -496,17 +521,22 @@ function AddFamilyButton({
     });
   }
 
+  const disabled = progress !== null || fullyCovered;
+  const label = progress
+    ? `Adding ${progress.done}/${progress.total}…`
+    : fullyCovered
+      ? 'All lines added'
+      : `Add every line of "${family}"`;
+
   return (
     <div className="flex flex-col gap-2 w-full">
       <button
         type="button"
         className="btn-primary text-xs"
         onClick={handleBulkAdd}
-        disabled={progress !== null}
+        disabled={disabled}
       >
-        {progress
-          ? `Adding ${progress.done}/${progress.total}…`
-          : `Add every line of "${family}"`}
+        {label}
       </button>
       {msg && (
         <div className="text-xs text-text-muted flex items-center justify-between gap-2">

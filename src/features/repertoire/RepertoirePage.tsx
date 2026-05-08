@@ -42,14 +42,15 @@ export function RepertoirePage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Repertoire</h1>
           <p className="text-sm text-text-muted">
-            One repertoire per opening family. Add lines from the
-            <Link to="/openings" className="text-accent hover:underline mx-1">
+            One repertoire per opening family. Add lines from the{' '}
+            <Link to="/openings" className="text-accent hover:underline">
               openings library
-            </Link>
-            to build a family\u2019s repertoire, then drill it on the
-            <Link to="/practice" className="text-accent hover:underline ml-1">
+            </Link>{' '}
+            to build a family&rsquo;s repertoire, then drill it on the{' '}
+            <Link to="/practice" className="text-accent hover:underline">
               practice page
-            </Link>.
+            </Link>
+            .
           </p>
         </div>
         <Link to="/openings" className="btn-primary text-xs">
@@ -99,7 +100,11 @@ function RepertoireCard({
         <div className="flex items-start justify-between gap-3">
           <div className="font-medium truncate">{rep.name}</div>
           <span
-            className={`text-xs px-2 py-0.5 rounded shrink-0 ${rep.color === 'white' ? 'bg-bg-raised text-text' : 'bg-text/90 text-bg'}`}
+            className={`text-xs px-2 py-0.5 rounded shrink-0 border ${
+              rep.color === 'white'
+                ? 'bg-white text-black border-white/70'
+                : 'bg-black text-white border-black'
+            }`}
           >
             {rep.color}
           </span>

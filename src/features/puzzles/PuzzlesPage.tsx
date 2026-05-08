@@ -11,7 +11,7 @@ import {
 } from '@/db/schema';
 import { Board } from '@/components/Board';
 import { BoardFrame } from '@/components/BoardFrame';
-import { EvalBar } from '@/components/EvalBar';
+import { EvalBar, mateForWhite } from '@/components/EvalBar';
 import { buildSolutionSteps } from '@/components/SolutionPlayer';
 import { SolutionControls } from '@/components/SolutionControls';
 import { useLiveEval } from '@/features/review/LiveEval';
@@ -303,11 +303,11 @@ function PuzzleSolver({
     setShowSolution(true);
     setStatus('wrong');
     setHintShown(false);
-    // Park the playback cursor at the END of the line so the board
-    // shows the final position of the solution by default — that's
-    // what most "Reveal" interactions are after ("just show me what
-    // the engine wanted"). User can scrub back with prev/next.
-    setPlaybackIdx(Math.max(0, solutionSteps.length - 1));
+    // Park the playback cursor at the START of the line so the user
+    // sees the puzzle's opening position and can step through the
+    // solution move-by-move via prev/next. Showing the final position
+    // up-front skips past the moves the user actually wanted to learn.
+    setPlaybackIdx(0);
   }
 
   // Highlight the from-square of the next expected move when the user
@@ -331,7 +331,11 @@ function PuzzleSolver({
           evalBar={
             <EvalBar
               cpWhite={liveEval?.cpWhite ?? null}
-              mate={liveEval?.mate}
+              // Convert STM-perspective `scoreMate` from the engine
+              // into White-perspective so the bar fill stays anchored
+              // to the winning colour as the turn flips. See the
+              // EvalBar prop docs for why.
+              mate={mateForWhite(liveEval?.mate, boardFen)}
               orientation={solverColor}
             />
           }

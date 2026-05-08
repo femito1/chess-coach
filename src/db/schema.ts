@@ -318,6 +318,15 @@ export interface Repertoire {
   family?: string;
   createdAt: number;
   updatedAt: number;
+  /** Timestamp of the last time the user clicked "Add every line of
+   *  <family>" on the openings page and the bulk-add finished. Used by
+   *  the openings page to disable the bulk-add button on subsequent
+   *  visits with a "All lines added" label so the user doesn't burn a
+   *  click on a no-op. Cleared implicitly when the repertoire row is
+   *  deleted (the field travels with the row). Optional + non-indexed;
+   *  doesn't require a Dexie version bump because it's only consumed
+   *  in JS. */
+  bulkLoadedAt?: number;
 }
 
 export interface RepertoireNode {

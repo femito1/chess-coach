@@ -28,6 +28,7 @@ export const BROWSER_TESTS = [
   { name: 'heal',                       file: 'scripts/test/integration/heal.mjs',                       category: 'integration' },
   { name: 'pool-idle-teardown',         file: 'scripts/test/integration/pool-idle-teardown.mjs',         category: 'integration' },
   { name: 'eval-cache',                 file: 'scripts/test/integration/eval-cache.mjs',                 category: 'integration' },
+  { name: 'queue-newest-first',         file: 'scripts/test/integration/queue-newest-first.mjs',         category: 'integration' },
   { name: 'device-probe',               file: 'scripts/test/integration/device-probe.mjs',               category: 'integration' },
   { name: 'visibility-throttle',        file: 'scripts/test/integration/visibility-throttle.mjs',        category: 'integration' },
 
@@ -43,6 +44,7 @@ export const BROWSER_TESTS = [
   // --- Importing + persistence ------------------------------------
   { name: 'dexie-v10-wipe',             file: 'scripts/test/integration/dexie-v10-wipe.mjs',             category: 'integration' },
   { name: 'repertoire-practice',        file: 'scripts/test/integration/repertoire-practice.mjs',        category: 'integration' },
+  { name: 'repertoire-bulk-add-stamp',  file: 'scripts/test/integration/repertoire-bulk-add-stamp.mjs',  category: 'integration' },
   { name: 'backup',                     file: 'scripts/test/integration/backup.mjs',                     category: 'integration' },
   { name: 'phase2',                     file: 'scripts/test/integration/phase2.mjs',                     category: 'integration' },
   { name: 'auto-import',                file: 'scripts/test/integration/auto-import.mjs',                category: 'integration' },

@@ -123,13 +123,16 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
   const [ratingMode, setRatingMode] = useState<ModeSelection>(null);
   const [accuracyRange, setAccuracyRange] = useState<RangeKey>('all');
   const [accuracyMode, setAccuracyMode] = useState<ModeSelection>(null);
+  // The win-rate-by-opening card uses the same chip-bar contract as the
+  // rating + accuracy charts. Independent state so a user filtering one
+  // doesn't leak into the others.
+  const [openingMode, setOpeningMode] = useState<ModeSelection>(null);
 
   const ratingsAll = useMemo(() => ratingTrend(games), [games]);
   // We deliberately compute the unfiltered series first to feed the
   // mode picker (which needs to know what classes are available); the
   // filtered version is computed below once we know the effective mode.
   const accuracyAllNoFilter = useMemo(() => accuracyTrend(games, 'all'), [games]);
-  const openings = useMemo(() => winRateByOpening(games, 10), [games]);
 
   // Time classes that actually appear in the rating data, sorted by our
   // canonical order with any unknown classes appended at the end.
@@ -154,6 +157,24 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
     return ordered;
   }, [accuracyAllNoFilter]);
 
+  // Time classes that contribute to the opening table. Same shape as
+  // `availableModes` but derived directly from the games array — we
+  // need to consider every imported game (the opening card doesn't
+  // require analysis to display W/D/L), and we only count classes
+  // attached to games that have at least an opening name.
+  const availableOpeningModes = useMemo(() => {
+    const present = new Set<string>();
+    for (const g of games) {
+      if (!g.opening) continue;
+      present.add(g.timeClass ?? 'other');
+    }
+    const ordered = MODE_ORDER.filter((m) => present.has(m));
+    for (const m of present) {
+      if (!ordered.includes(m)) ordered.push(m);
+    }
+    return ordered;
+  }, [games]);
+
   // Drop any explicitly-selected modes the user no longer has data for
   // (e.g. they renamed an account; chips for the old data hung around).
   // `null` means "all available" — always valid.
@@ -165,12 +186,29 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
     accuracyMode == null
       ? null
       : accuracyMode.filter((m) => availableAccuracyModes.includes(m));
+  const effectiveOpeningMode: ModeSelection =
+    openingMode == null
+      ? null
+      : openingMode.filter((m) => availableOpeningModes.includes(m));
 
   const ratingAllSelected = isAllSelected(effectiveRatingMode, availableModes);
   const accuracyAllSelected = isAllSelected(
     effectiveAccuracyMode,
     availableAccuracyModes,
   );
+  const openingAllSelected = isAllSelected(
+    effectiveOpeningMode,
+    availableOpeningModes,
+  );
+
+  const openings = useMemo(() => {
+    if (openingAllSelected) return winRateByOpening(games, 10);
+    return winRateByOpening(
+      games,
+      10,
+      effectiveOpeningMode ?? availableOpeningModes,
+    );
+  }, [games, openingAllSelected, effectiveOpeningMode, availableOpeningModes]);
 
   const ratings = useMemo(() => {
     const inRange = withinRange(
@@ -383,11 +421,32 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
       </div>
 
       <div className="card p-3">
-        <div className="text-xs uppercase tracking-wide text-text-muted mb-2">
-          Win rate by opening (top 10 by volume)
+        <div className="flex flex-wrap items-center justify-between mb-2 gap-2">
+          <div className="text-xs uppercase tracking-wide text-text-muted">
+            Win rate by opening (top 10 by volume)
+          </div>
+          {availableOpeningModes.length > 1 && (
+            <ModePicker
+              selection={effectiveOpeningMode}
+              modes={availableOpeningModes}
+              allActive={openingAllSelected}
+              onToggle={(m) =>
+                setOpeningMode(
+                  toggleMode(effectiveOpeningMode, availableOpeningModes, m),
+                )
+              }
+              onAll={() => setOpeningMode(openingAllSelected ? [] : null)}
+            />
+          )}
         </div>
         {openings.length === 0 ? (
-          <EmptyChart text="No opening data yet." />
+          <EmptyChart
+            text={
+              !openingAllSelected
+                ? 'No opening data for the selected time controls.'
+                : 'No opening data yet.'
+            }
+          />
         ) : (
           <OpeningWinRateList openings={openings} />
         )}

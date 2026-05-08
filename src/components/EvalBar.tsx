@@ -4,13 +4,43 @@ export interface EvalBarProps {
   /** Centipawn eval from White's perspective. `null` while engine is
    *  still thinking and there's nothing to render yet. */
   cpWhite: number | null;
-  /** Optional mate score (positive = White mates in N, negative = Black). */
+  /** Optional mate score, expressed from White's perspective:
+   *    +N → White mates in N (bar fills fully white).
+   *    -N → Black mates in N (bar fills fully black).
+   *
+   *  The Stockfish wire format gives mate scores from the *side-to-
+   *  move's* perspective, which means the same "mate" can flip sign
+   *  every ply as the turn changes. Callers must convert from STM to
+   *  White before passing this prop, otherwise the bar will swap to
+   *  the opposite side after every move played in exploration / free-
+   *  play mode. See `mateForWhite()` below. */
   mate?: number;
   /** Board orientation. White-on-bottom by default; flipped boards put
    *  White at the top of the bar. */
   orientation?: 'white' | 'black';
   /** Pixel height to match the adjacent `<Board>` (which is square). */
   className?: string;
+}
+
+/**
+ * Convert a Stockfish `scoreMate` reading (STM-perspective) into the
+ * White-perspective integer the EvalBar expects. The engine reports a
+ * positive value when the side-to-move at `fen` mates the opponent and
+ * a negative value when the side-to-move is being mated. The EvalBar
+ * needs sign-relative-to-White so the bar fill stays anchored to the
+ * winning *colour* across plies. We flip the sign when STM is Black.
+ *
+ * Returns `undefined` when no mate is in play, so callers can spread it
+ * directly into `<EvalBar mate={mateForWhite(...)} />` without an extra
+ * conditional.
+ */
+export function mateForWhite(
+  mateStm: number | undefined,
+  fenWithStm: string,
+): number | undefined {
+  if (mateStm == null || mateStm === 0) return undefined;
+  const stm = fenWithStm.split(' ')[1];
+  return stm === 'b' ? -mateStm : mateStm;
 }
 
 /**
