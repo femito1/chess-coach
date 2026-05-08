@@ -51,21 +51,47 @@ await runBrowserTest({
     await page.goto(appendBypass(`${DEFAULT_URL}review/${id}`), { waitUntil: 'networkidle' });
     await page.waitForTimeout(800);
 
-    // Don't step through the mainline — go straight to off-mainline from
-    // move 0 (the starting position). White to move; a2-a4 is a known
-    // non-best-but-not-terrible move (engine prefers e4/d4/Nf3).
+    // Step past the book phase before going off-mainline. The whole
+    // 5-move Italian Game in the test's PGN is in the openings book,
+    // and the book classifier short-circuits in `classifyMove`
+    // (engine/classify.ts) when both `fenBefore` and `fenAfter` are
+    // recognised book FENs — including any sensible deviation from
+    // the start position. If we branch from move 0, the classifier
+    // returns 'book', which renders the `bg-book` badge — which used
+    // to be `bg-slate-500` and was renamed in the move-list-color
+    // refactor without the assertion list being updated.
+    //
+    // Stepping through 4 mainline plies puts us at move 5 (white to
+    // move after 4. O-O Nf6), well past the book cutoff (`ply <= 10`
+    // gate plus the actual book-FEN check). Now an off-mainline
+    // move classifies as a real grade (best / good / inaccuracy /
+    // mistake / blunder).
+    for (let i = 0; i < 4; i++) {
+      await page.keyboard.press('ArrowRight');
+      await page.waitForTimeout(150);
+    }
+
+    // Capture mainline ply for diagnostics.
+    const plyBefore = await page.evaluate(() => {
+      const m = document.body.innerText.match(/Ply (\d+)\/(\d+)/);
+      return m ? { current: Number(m[1]), total: Number(m[2]) } : null;
+    });
+    console.log('Mainline ply before exploration:', plyBefore);
+
+    // White to move from the post-`4. O-O Nf6` position. h2-h4 is a
+    // well-defined non-book move and the engine readily classifies it.
     const boardBox = await page.locator('.cg-wrap').boundingBox();
     expect(boardBox, 'board bounding box').toBeTruthy();
     const sq = boardBox.width / 8;
-    // White orientation: a1 bottom-left. a2 = file 0, rank 6 from top.
-    const a2x = boardBox.x + sq * 0 + sq / 2;
-    const a2y = boardBox.y + sq * 6 + sq / 2;
-    const a4x = boardBox.x + sq * 0 + sq / 2;
-    const a4y = boardBox.y + sq * 4 + sq / 2;
+    // White orientation: a1 bottom-left. h2 = file 7, rank 6 from top.
+    const h2x = boardBox.x + sq * 7 + sq / 2;
+    const h2y = boardBox.y + sq * 6 + sq / 2;
+    const h4x = boardBox.x + sq * 7 + sq / 2;
+    const h4y = boardBox.y + sq * 4 + sq / 2;
 
-    await page.mouse.move(a2x, a2y);
+    await page.mouse.move(h2x, h2y);
     await page.mouse.down();
-    await page.mouse.move(a4x, a4y, { steps: 6 });
+    await page.mouse.move(h4x, h4y, { steps: 6 });
     await page.mouse.up();
 
     // Wait long enough for the live engine to settle on the new position
@@ -73,29 +99,42 @@ await runBrowserTest({
     await page.waitForTimeout(8000);
 
     const result = await page.evaluate(() => {
-  // Check for the classification badge: it's rendered as an absolutely
-  // positioned span with the bg-* class (see CLASSIFICATION_BADGE in
-  // Board.tsx). We're looking for any badge bg-* class appearing on
-  // the board overlay container.
-  const badgeClasses = [
-    'bg-brilliant',
-    'bg-good',
-    'bg-mistake',
-    'bg-blunder',
-    'bg-inaccuracy',
-    'bg-miss',
-    'bg-slate-400',
-    'bg-slate-500',
-  ];
-  const badges = badgeClasses.flatMap((c) => Array.from(document.querySelectorAll(`.${c}`)));
+  // Select the badge by its stable `data-test-classification-badge`
+  // attribute (set in Board.tsx → BadgeOverlay) instead of by Tailwind
+  // class names. Class-name selectors broke twice in this repo:
+  //   1. `bg-good/80` (used for `excellent`) contains `/`, which a
+  //      plain `.bg-good` selector won't match.
+  //   2. `bg-book` was renamed from `bg-slate-500` in the move-list-
+  //      color refactor (commit 51a8cd0) — anything keyed on the old
+  //      name silently went stale.
+  // The data-attribute is renamer-proof and carries the classification
+  // name itself, so failures show *what* classification rendered.
+  const badges = Array.from(
+    document.querySelectorAll('[data-test-classification-badge]'),
+  );
   const exploring = document.body.innerText.includes('Exploring (+');
-      return {
-        badgeCount: badges.length,
-        exploring,
-        sampleBadgeHtml: badges[0]?.outerHTML?.slice(0, 200) ?? null,
-      };
+  // Diagnostic: pull the full body text + a snapshot of the relevant
+  // parts of the move-insight panel to figure out what state the page
+  // is actually in. We see "exploring: true" but no badge — likely
+  // means `explorationInsight` returned undefined, which can happen
+  // if `liveEval` is still running or `moverWinrateBefore` couldn't
+  // be resolved.
+  const insightPanel = document.querySelector('[data-test-move-insight]')?.textContent ?? null;
+  const bodyText = document.body.innerText;
+  const evalAfterMatch = bodyText.match(/Eval after:[^\n]*/);
+  return {
+    badgeCount: badges.length,
+    badgeClassifications: badges.map((b) =>
+      b.getAttribute('data-test-classification-badge'),
+    ),
+    exploring,
+    sampleBadgeHtml: badges[0]?.outerHTML?.slice(0, 200) ?? null,
+    insightPanel,
+    evalAfter: evalAfterMatch?.[0] ?? null,
+    bodySnippet: bodyText.slice(0, 600),
+  };
     });
-    console.log('Result:', result);
+    console.log('Result:', JSON.stringify(result, null, 2));
 
     if (errors.length > 0) {
       console.error('Console errors:');

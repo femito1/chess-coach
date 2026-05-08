@@ -497,11 +497,18 @@ export function Board({
         destShareCount={knightOverlay.destShareCount}
         orientation={orientation}
       />
-      {badge && lastMoveUci && (
+      {badge && lastMoveUci && lastMoveClassification && (
         <BadgeOverlay
           square={lastMoveUci.slice(2, 4)}
           orientation={orientation}
           className={`${badge.bg} ${badge.fg}`}
+          // Stable hook for e2e tests. Tailwind classes like `bg-good/80`
+          // contain `/`, which CSS selectors can't query with a plain
+          // `.bg-good`, and renames (e.g. `bg-slate-500` → `bg-book` in
+          // the move-list-color refactor) silently invalidate any
+          // class-based assertion in the e2e suite. A `data-` attribute
+          // tied to the classification name is renamer-proof.
+          classification={lastMoveClassification}
         >
           {badge.symbol}
         </BadgeOverlay>
@@ -747,11 +754,13 @@ function BadgeOverlay({
   square,
   orientation,
   className,
+  classification,
   children,
 }: {
   square: string;
   orientation: 'white' | 'black';
   className: string;
+  classification: Classification;
   children: React.ReactNode;
 }) {
   // Convert algebraic to 0..7 file/rank indices.
@@ -775,6 +784,7 @@ function BadgeOverlay({
       <span
         className={`inline-flex items-center justify-center rounded-full text-[11px] font-bold shadow-md border border-black/20 ${className}`}
         style={{ width: 28, height: 28, lineHeight: 1 }}
+        data-test-classification-badge={classification}
       >
         {children}
       </span>
