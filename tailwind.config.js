@@ -23,6 +23,13 @@ export default {
         good: '#7bc47f',
         brilliant: '#26c2a3',
         excellent: '#7bc47f',
+        // Light-brown for "book" / theory moves, mirroring chess.com's
+        // book badge colour. Used by the on-board badge background
+        // (`Board.tsx`), the inline glyph in the move list
+        // (`MoveList.tsx`), and any future surface that needs to mark
+        // a move as theory (currently none, but kept centralised so
+        // the colour stays in sync).
+        book: '#a88865',
         inaccuracy: '#f0c36d',
         miss: '#c678dd',
         mistake: '#e69138',

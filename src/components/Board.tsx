@@ -68,7 +68,14 @@ const CLASSIFICATION_BADGE: Record<
   best: { symbol: '★', bg: 'bg-good', fg: 'text-white' },
   excellent: { symbol: '!', bg: 'bg-good/80', fg: 'text-white' },
   good: { symbol: '✓', bg: 'bg-slate-400', fg: 'text-white' },
-  book: { symbol: 'o', bg: 'bg-slate-500', fg: 'text-white' },
+  // U+1F56E "Book" + U+FE0E "text variation selector" — flat
+  // monochrome Unicode symbol (NOT the colourful 📖 emoji). Background
+  // is the centralised `book` token (`tailwind.config.js`) — a
+  // chess.com-style light brown. White glyph reads cleanly on it.
+  // See `CLASSIFICATION_SYMBOL` in `engine/classify.ts` for the same
+  // glyph used in the move list, and `MoveList.tsx` for the matching
+  // text colour applied there.
+  book: { symbol: '🕮\uFE0E', bg: 'bg-book', fg: 'text-white' },
   inaccuracy: { symbol: '?!', bg: 'bg-inaccuracy', fg: 'text-black' },
   miss: { symbol: 'x', bg: 'bg-miss', fg: 'text-white' },
   mistake: { symbol: '?', bg: 'bg-mistake', fg: 'text-black' },

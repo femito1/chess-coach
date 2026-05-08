@@ -303,7 +303,13 @@ export const CLASSIFICATION_SYMBOL: Record<Classification, string> = {
   best: '★',
   excellent: '!',
   good: '✓',
-  book: 'o',
+  // U+1F56E "Book" + U+FE0E "text variation selector" — forces the
+  // flat monochrome glyph (matching `★`, `✓`, `?`, etc.) instead of
+  // the colourful 📖 emoji that some platforms substitute by
+  // default. Inherits the surrounding `color:` so the move list and
+  // the on-board badge both pick up the same muted-white tone they
+  // already use for `book`.
+  book: '🕮\uFE0E',
   inaccuracy: '?!',
   miss: 'x',
   mistake: '?',

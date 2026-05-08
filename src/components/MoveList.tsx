@@ -15,7 +15,7 @@ const classToneClass: Record<Classification, string> = {
   best: 'text-good',
   excellent: 'text-good/80',
   good: 'text-text',
-  book: 'text-text-muted',
+  book: 'text-book',
   inaccuracy: 'text-inaccuracy',
   miss: 'text-miss',
   mistake: 'text-mistake',
