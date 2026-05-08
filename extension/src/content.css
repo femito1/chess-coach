@@ -1,0 +1,101 @@
+/* Chess Coach — Review After Game (content styles) */
+
+#chess-coach-prompt {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483647; /* sit above chess.com modals */
+  font-family:
+    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+#chess-coach-prompt .cc-card {
+  width: 320px;
+  border-radius: 12px;
+  background: #161a22;
+  color: #e6e8eb;
+  border: 1px solid #2a313d;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  padding: 12px 14px 14px;
+  animation: cc-slide-in 180ms ease-out;
+}
+
+@keyframes cc-slide-in {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+#chess-coach-prompt .cc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+#chess-coach-prompt .cc-title {
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+}
+
+#chess-coach-prompt .cc-close {
+  background: transparent;
+  border: none;
+  color: #9aa3b2;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+#chess-coach-prompt .cc-close:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e6e8eb;
+}
+
+#chess-coach-prompt .cc-body {
+  font-size: 12.5px;
+  color: #9aa3b2;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+#chess-coach-prompt .cc-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+#chess-coach-prompt .cc-actions button {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+#chess-coach-prompt .cc-primary {
+  background: #7aa2f7;
+  color: #0f1115;
+  border-color: #7aa2f7;
+}
+#chess-coach-prompt .cc-primary:hover {
+  filter: brightness(1.05);
+}
+
+#chess-coach-prompt .cc-secondary {
+  background: transparent;
+  color: #e6e8eb;
+  border-color: #2a313d;
+}
+#chess-coach-prompt .cc-secondary:hover {
+  background: rgba(255, 255, 255, 0.04);
+}

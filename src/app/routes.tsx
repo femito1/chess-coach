@@ -4,6 +4,7 @@ import { AuthGate } from './AuthGate';
 import { ClerkRootLayout } from '@/lib/clerk';
 import { DashboardPage } from '@/features/dashboard/DashboardPage';
 import { ImportPage } from '@/features/import/ImportPage';
+import { ImportAndReviewPage } from '@/features/import/ImportAndReviewPage';
 import { GamesPage } from '@/features/games/GamesPage';
 import { ReviewPage } from '@/features/review/ReviewPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
@@ -18,6 +19,7 @@ import { BackupPage } from '@/features/backup/BackupPage';
 import { SignInPage } from '@/features/auth/SignInPage';
 import { OnboardingPage } from '@/features/onboarding/OnboardingPage';
 import { OnboardingGate } from '@/features/onboarding/OnboardingGate';
+import { PrivacyPage } from '@/features/legal/PrivacyPage';
 
 /**
  * Route tree:
@@ -48,6 +50,11 @@ export const router = createBrowserRouter([
     element: <ClerkRootLayout />,
     children: [
       { path: 'sign-in/*', element: <SignInPage /> },
+      // Public privacy policy. Outside AuthGate so the Chrome Web
+      // Store reviewer (and search engines) can load it without
+      // signing in. The URL `/privacy` is what we paste into the
+      // dev console's "Privacy policy" field.
+      { path: 'privacy', element: <PrivacyPage /> },
       {
         element: <AuthGate />,
         children: [
@@ -64,6 +71,7 @@ export const router = createBrowserRouter([
                   { index: true, element: <Navigate to="/dashboard" replace /> },
                   { path: 'dashboard', element: <DashboardPage /> },
                   { path: 'import', element: <ImportPage /> },
+                  { path: 'review-by-url', element: <ImportAndReviewPage /> },
                   { path: 'games', element: <GamesPage /> },
                   { path: 'review/:id', element: <ReviewPage /> },
                   { path: 'weaknesses', element: <WeaknessesPage /> },

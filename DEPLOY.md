@@ -35,6 +35,48 @@ WASM access).
 
 ---
 
+## 0. Going live — quick checklist
+
+The fastest "make Chess Coach + the chrome extension live for real
+people" path. Each step links to the section that goes deep:
+
+1. **Deploy the app** (§1–§3): create the CF Pages project, paste in
+   the three Clerk + Supabase env vars, click Deploy. First green
+   build gets you a `https://<project>.pages.dev` URL.
+2. **Verify the deploy** (§3): one console check
+   (`crossOriginIsolated === true`), one hard-refresh check, one
+   sign-in round-trip. Five minutes.
+3. **Update Clerk allow-list**: add the `pages.dev` URL (and any
+   custom domain) to Clerk → Domains and to every OAuth provider's
+   redirect URLs. Without this, sign-in loops.
+4. **(Optional) Custom domain** (§5): if you want `chess.example.com`
+   instead of the `.pages.dev` URL, do this **before** sharing the
+   URL with anyone — IndexedDB is keyed by origin and migrating
+   later costs each user a backup-export-restore.
+5. **Build the chrome extension for that origin**:
+   ```bash
+   npm run extension:build -- --coach-origin=https://<your-prod-host>
+   ```
+   Produces `dist-extension/chess-coach-<version>.zip` with your
+   production URL baked in as the default `coachOrigin`. First-time
+   installs land with the right URL preconfigured — no options-page
+   visit required for a working install.
+6. **Distribute the extension**:
+   - **Personal / a few friends**: send them the zip. They unzip
+     locally and Load Unpacked from `chrome://extensions`.
+   - **Public install**: upload the zip to the Chrome Web Store
+     dashboard (`https://chrome.google.com/webstore/devconsole`).
+     One-time $5 developer registration; review takes ~1–3 days.
+7. **Smoke-test the live loop** end-to-end: open Chrome with the
+   extension installed, finish any chess.com game, click "Review",
+   confirm the deep link lands on `https://<your-prod-host>/review/<id>`
+   and analysis kicks off.
+
+Everything below is the deeper version of these steps plus
+operational notes (rolling back, cache busting, troubleshooting).
+
+---
+
 ## 1. Prerequisites
 
 - A GitHub repo for this project (push access).
@@ -304,3 +346,85 @@ doesn't have to change.
 - **New build script**: update CF Pages **Build command** AND keep
   `npm run typecheck` / `npm test` working in CI; both pipelines must
   agree on what "build green" means.
+
+## 9. Chrome extension distribution
+
+The extension lives at `extension/` and pairs with the deployed app
+via the `/review-by-url` deep-link route. There are three install
+paths, ordered from "least friction for you" to "least friction for
+your users".
+
+### 9a. Personal / dev install (load-unpacked)
+
+For your own use against `npm run dev`:
+
+1. `chrome://extensions` → Developer mode on → Load unpacked → pick
+   `extension/`.
+2. Options page opens automatically. Fill in your Chess.com username;
+   leave the URL at the localhost default.
+
+The source tree's default origin is `http://localhost:5173`. That's
+the right thing for a maintainer running `npm run dev`; it's the
+wrong thing for a real user installing from a zip you sent them. For
+those, use 9b.
+
+### 9b. Side-loaded zip with production URL baked in
+
+```bash
+npm run extension:build -- --coach-origin=https://<your-prod-host>
+```
+
+Produces `dist-extension/chess-coach-<version>.zip`. The build
+script:
+
+- Copies `extension/` to a clean staging directory (drops
+  `README.md`, dotfiles, `.DS_Store`).
+- Rewrites the `DEFAULT_COACH_ORIGIN` constant in `options.js` to
+  the URL you passed.
+- Validates the URL with `new URL(...)`, strips trailing slash,
+  fails fast on a typo.
+- Zips with the manifest at root (Chrome Web Store requires this).
+
+Recipients unzip the file and Load Unpacked from `chrome://extensions`.
+First-time install lands with your production URL preconfigured;
+they only need to enter their Chess.com username.
+
+`--output=path/to/foo.zip` overrides the output path if you want to
+publish a custom-named zip.
+
+### 9c. Chrome Web Store publish
+
+For wide distribution. One-time setup: create a developer account at
+`https://chrome.google.com/webstore/devconsole` ($5 registration).
+
+For each release:
+
+1. Bump `extension/manifest.json`'s `version` field (semver-ish,
+   chrome only enforces `x.y.z.w` numeric form).
+2. `npm run extension:build -- --coach-origin=https://<your-prod-host>`.
+3. Upload `dist-extension/chess-coach-<version>.zip` to the
+   developer console → your item → New version → Upload package.
+4. First-ever submission also asks for: a 128×128 icon, 1280×800
+   screenshots, a privacy policy URL, and a "Single Purpose"
+   declaration. The single purpose for this extension is: **"Detect
+   the end of a Chess.com game and offer a deep link into the user's
+   own Chess Coach review tool."** Keep that wording — it matches
+   what the extension actually does, which is the Web Store's
+   sole acceptance criterion.
+5. Review usually takes 1–3 business days. Updates after the first
+   approval are typically auto-approved within hours.
+
+### Updating the live extension
+
+The extension does not auto-pull from the source tree once installed.
+If you change `content.js` or `options.html`:
+
+- **Side-loaded users**: send them the new zip; they remove + Load
+  Unpacked again, or click "Update" in `chrome://extensions` if they
+  loaded from a folder.
+- **Web Store users**: bump the manifest version, rebuild, upload.
+  Chrome auto-pushes within 24h once approved.
+
+Bumping the manifest version on every change is cheap (one digit)
+and pays for itself the first time you have to debug "is the user on
+the new content script or the old one?".

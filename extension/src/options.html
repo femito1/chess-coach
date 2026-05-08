@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Chess Coach — Options</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        font-family:
+          'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        background: #0f1115;
+        color: #e6e8eb;
+        margin: 0;
+        padding: 20px 22px;
+        min-width: 360px;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      p.lead {
+        margin: 0 0 18px;
+        font-size: 12.5px;
+        color: #9aa3b2;
+      }
+      label {
+        display: block;
+        margin-top: 14px;
+        font-size: 13px;
+        font-weight: 500;
+      }
+      label .hint {
+        display: block;
+        font-weight: 400;
+        font-size: 12px;
+        color: #9aa3b2;
+        margin-top: 2px;
+      }
+      input[type='text'],
+      input[type='url'] {
+        width: 100%;
+        margin-top: 6px;
+        padding: 8px 10px;
+        background: #161a22;
+        color: #e6e8eb;
+        border: 1px solid #2a313d;
+        border-radius: 8px;
+        font: inherit;
+        box-sizing: border-box;
+      }
+      input[type='checkbox'] {
+        accent-color: #7aa2f7;
+        margin-right: 6px;
+      }
+      .row-toggle {
+        display: flex;
+        align-items: center;
+        margin-top: 16px;
+        font-size: 13px;
+      }
+      .actions {
+        margin-top: 22px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      button {
+        font-size: 13px;
+        font-weight: 500;
+        padding: 8px 14px;
+        border-radius: 8px;
+        cursor: pointer;
+        border: 1px solid #2a313d;
+        background: transparent;
+        color: #e6e8eb;
+      }
+      button.primary {
+        background: #7aa2f7;
+        color: #0f1115;
+        border-color: #7aa2f7;
+      }
+      button.primary:hover {
+        filter: brightness(1.05);
+      }
+      .status {
+        font-size: 12px;
+        color: #7bc47f;
+        margin-left: 6px;
+      }
+      .status.error {
+        color: #e06c75;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Chess Coach — Review After Game</h1>
+    <p class="lead">
+      When you finish a game on Chess.com, this extension offers a one-click
+      "Review in Chess Coach" prompt that deep-links into your local app.
+    </p>
+
+    <label>
+      Chess.com username
+      <span class="hint">
+        Used in the deep link so Chess Coach knows whose archive to pull.
+      </span>
+      <input type="text" id="username" autocomplete="off" spellcheck="false" />
+    </label>
+
+    <label>
+      Chess Coach URL
+      <span class="hint">
+        Where your Chess Coach app is running. Defaults to the local dev server.
+        Use your hosted URL (e.g. https://chess-coach.pages.dev) once deployed.
+      </span>
+      <input type="url" id="coachOrigin" autocomplete="off" spellcheck="false" />
+    </label>
+
+    <div class="row-toggle">
+      <label style="margin: 0; font-weight: 400">
+        <input type="checkbox" id="enabled" />
+        Show the prompt after every finished game
+      </label>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="save">Save</button>
+      <button id="test">Test connection</button>
+      <span class="status" id="status"></span>
+    </div>
+
+    <script src="options.js"></script>
+  </body>
+</html>

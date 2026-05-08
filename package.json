@@ -14,7 +14,10 @@
     "test:e2e": "node scripts/run-tests.mjs --e2e",
     "test:live": "node scripts/run-tests.mjs --live",
     "test:all": "node scripts/run-tests.mjs --all",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:extension": "node scripts/test-extension.mjs",
+    "extension:icons": "node scripts/build-extension-icons.mjs",
+    "extension:build": "node scripts/build-extension-icons.mjs && node scripts/build-extension.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.6",

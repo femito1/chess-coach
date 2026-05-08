@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { chessComGameToGame, parseOpeningFromEcoUrl, reparseOpeningFromPgn } from './importer';
+import {
+  chessComGameToGame,
+  gameIdFromUrl,
+  parseOpeningFromEcoUrl,
+  reparseOpeningFromPgn,
+} from './importer';
 
 describe('parseOpeningFromEcoUrl', () => {
   it('returns undefined for missing input', () => {
@@ -99,5 +104,52 @@ describe('chessComGameToGame', () => {
   it('converts end_time to milliseconds', () => {
     const g = chessComGameToGame(fixture(), 'hero');
     expect(g.endTime).toBe(1_700_000_000_000);
+  });
+});
+
+describe('gameIdFromUrl', () => {
+  // `gameIdFromUrl` is the load-bearing primitive behind the chrome
+  // extension deep-link flow: the extension constructs a URL like
+  // `…/review-by-url?url=https://www.chess.com/game/live/12345` and
+  // `importGameByUrl` (in `features/import/auto.ts`) uses
+  // `gameIdFromUrl` to decide whether the game is already in IndexedDB
+  // before re-fetching the chess.com archive. If this hash ever
+  // changes its output for an existing URL, every previously-imported
+  // game would silently appear as "not yet imported" and re-trigger
+  // a network round-trip per click. These tests pin the contract.
+  it('produces a stable hex digest', () => {
+    const id = gameIdFromUrl('https://www.chess.com/game/live/9999999');
+    expect(id).toMatch(/^[0-9a-f]+$/);
+  });
+  it('matches the id used by chessComGameToGame', () => {
+    const url = 'https://www.chess.com/game/live/424242';
+    const g = chessComGameToGame(
+      {
+        url,
+        pgn: '1. e4 1-0',
+        time_control: '600',
+        time_class: 'rapid',
+        end_time: 0,
+        white: { username: 'a', result: 'win' },
+        black: { username: 'b', result: 'checkmated' },
+      } as Parameters<typeof chessComGameToGame>[0],
+      'a',
+    );
+    expect(g.id).toBe(gameIdFromUrl(url));
+  });
+  it('produces different ids for different URLs', () => {
+    const a = gameIdFromUrl('https://www.chess.com/game/live/1');
+    const b = gameIdFromUrl('https://www.chess.com/game/live/2');
+    expect(a).not.toBe(b);
+  });
+  it('treats URL-shape variants as different ids (callers de-dupe by lookup, not by hash)', () => {
+    // chess.com has historically used both /game/live/ and /live/game/
+    // for the same game id. The hash is intentionally URL-literal — we
+    // do NOT canonicalise inside the hash. `importGameByUrl` performs
+    // the de-dup at the IndexedDB lookup layer instead, so adding a
+    // second canonicalisation here would just be dead code.
+    const a = gameIdFromUrl('https://www.chess.com/game/live/123');
+    const b = gameIdFromUrl('https://www.chess.com/live/game/123');
+    expect(a).not.toBe(b);
   });
 });

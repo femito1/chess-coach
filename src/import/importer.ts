@@ -1,10 +1,19 @@
 import type { ChessComGame } from '@/api/chesscom';
 import type { Game, GameResult } from '@/db/schema';
 
-function hash(input: string): string {
+/**
+ * FNV-1a 32-bit hash. Used to derive a deterministic, URL-stable
+ * `Game.id` from the public chess.com game URL — the chrome extension
+ * relies on this being predictable so it can deep-link to a game by
+ * URL without first having to round-trip through an import. Exported
+ * (rather than file-local) so callers that need the same id (e.g.
+ * `importGameByUrl` in `src/features/import/auto.ts`) don't have to
+ * re-implement the algorithm and silently drift.
+ */
+export function gameIdFromUrl(url: string): string {
   let h = 2166136261 >>> 0;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
+  for (let i = 0; i < url.length; i++) {
+    h ^= url.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
   return (h >>> 0).toString(16);
@@ -98,7 +107,7 @@ export function chessComGameToGame(g: ChessComGame, username: string): Game {
     pgnHeader(g.pgn, 'Opening') ?? parseOpeningFromEcoUrl(ecoUrl);
 
   return {
-    id: hash(g.url),
+    id: gameIdFromUrl(g.url),
     url: g.url,
     source: 'chesscom',
     username,

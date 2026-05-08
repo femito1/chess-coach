@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "Chess Coach — Review After Game",
+  "short_name": "Chess Coach",
+  "version": "0.1.0",
+  "description": "Detect the end of a Chess.com game and offer a one-click deep link into your Chess Coach analysis tool.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://www.chess.com/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.chess.com/*"
+      ],
+      "js": ["src/content.js"],
+      "css": ["src/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": false
+  },
+  "action": {
+    "default_title": "Chess Coach — Review After Game",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

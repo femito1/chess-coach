@@ -1,5 +1,7 @@
 node_modules
 dist
+dist-extension
+extension-test-*.png
 .vite
 .DS_Store
 *.log
