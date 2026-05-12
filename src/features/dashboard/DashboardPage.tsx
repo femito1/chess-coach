@@ -62,14 +62,14 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
           <p className="text-sm text-text-muted">
             Import games, let the engine analyze in the background, and review what to fix.
           </p>
         </div>
-        <Link to="/import" className="btn-primary">
+        <Link to="/import" className="btn-primary self-start sm:self-auto">
           Import games
         </Link>
       </div>

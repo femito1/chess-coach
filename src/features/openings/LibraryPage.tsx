@@ -180,7 +180,15 @@ export function LibraryPage() {
             />
           ) : (
             <div className="card p-8 text-sm text-text-muted text-center">
-              Pick a family on the left, or search by name / ECO.
+              {/* Wording uses "above" on phones (where the family list
+                  stacks above the preview pane via the
+                  `lg:grid-cols-[340px_minmax(0,1fr)]` collapse) and
+                  "to the left" on desktop. `lg:` matches the breakpoint
+                  the parent grid uses so the copy always agrees with
+                  the layout the user sees. */}
+              Pick a family <span className="lg:hidden">above</span>
+              <span className="hidden lg:inline">to the left</span>, or
+              search by name / ECO.
             </div>
           )}
         </section>

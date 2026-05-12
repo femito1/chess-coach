@@ -69,7 +69,7 @@ export function QueueIndicator() {
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-20 card flex items-center gap-3 text-xs px-3 py-2 shadow-lg whitespace-nowrap tabular-nums"
+      className="fixed bottom-3 right-3 sm:bottom-4 sm:right-4 z-20 card flex items-center gap-2 sm:gap-3 text-[11px] sm:text-xs px-2.5 sm:px-3 py-1.5 sm:py-2 shadow-lg whitespace-nowrap tabular-nums max-w-[calc(100vw-1.5rem)]"
       role="status"
       aria-live="polite"
     >

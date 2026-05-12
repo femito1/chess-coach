@@ -7,6 +7,7 @@ import type { DrawShape } from 'chessground/draw';
 import { Chess, type Square } from 'chess.js';
 import type { Classification } from '@/db/schema';
 import { PRIMARY_BOARD_MAX_PX } from './BoardFrame';
+import { ClassificationIcon } from './ClassificationIcon';
 
 /** Available brushes for `<Board arrows={...} />`. The first four mirror
  *  chessground's built-ins and respect any user theme; `engineBest` is a
@@ -60,26 +61,26 @@ export interface BoardProps {
 const CHESS_COM_RED = '#dc4a4a';
 const ENGINE_BEST_GREEN = '#15781B';
 
+// Per-classification badge background + foreground. The icon glyph
+// itself comes from `<ClassificationIcon>` (inline SVG, inherits
+// `currentColor`), so we no longer keep a `symbol` field here. Text
+// glyphs (`!!`, `??`, `🕮`) used to live here and broke across
+// platforms — see ClassificationIcon for the full story.
 const CLASSIFICATION_BADGE: Record<
   Classification,
-  { symbol: string; bg: string; fg: string }
+  { bg: string; fg: string }
 > = {
-  brilliant: { symbol: '!!', bg: 'bg-brilliant', fg: 'text-white' },
-  best: { symbol: '★', bg: 'bg-good', fg: 'text-white' },
-  excellent: { symbol: '!', bg: 'bg-good/80', fg: 'text-white' },
-  good: { symbol: '✓', bg: 'bg-slate-400', fg: 'text-white' },
-  // U+1F56E "Book" + U+FE0E "text variation selector" — flat
-  // monochrome Unicode symbol (NOT the colourful 📖 emoji). Background
-  // is the centralised `book` token (`tailwind.config.js`) — a
-  // chess.com-style light brown. White glyph reads cleanly on it.
-  // See `CLASSIFICATION_SYMBOL` in `engine/classify.ts` for the same
-  // glyph used in the move list, and `MoveList.tsx` for the matching
-  // text colour applied there.
-  book: { symbol: '🕮\uFE0E', bg: 'bg-book', fg: 'text-white' },
-  inaccuracy: { symbol: '?!', bg: 'bg-inaccuracy', fg: 'text-black' },
-  miss: { symbol: 'x', bg: 'bg-miss', fg: 'text-white' },
-  mistake: { symbol: '?', bg: 'bg-mistake', fg: 'text-black' },
-  blunder: { symbol: '??', bg: 'bg-blunder', fg: 'text-white' },
+  brilliant: { bg: 'bg-brilliant', fg: 'text-white' },
+  best: { bg: 'bg-good', fg: 'text-white' },
+  excellent: { bg: 'bg-good/80', fg: 'text-white' },
+  good: { bg: 'bg-slate-400', fg: 'text-white' },
+  // Background is the centralised `book` token (`tailwind.config.js`)
+  // — a chess.com-style light brown. White glyph reads cleanly on it.
+  book: { bg: 'bg-book', fg: 'text-white' },
+  inaccuracy: { bg: 'bg-inaccuracy', fg: 'text-black' },
+  miss: { bg: 'bg-miss', fg: 'text-white' },
+  mistake: { bg: 'bg-mistake', fg: 'text-black' },
+  blunder: { bg: 'bg-blunder', fg: 'text-white' },
 };
 
 function computeDests(fen: string): Map<Key, Key[]> {
@@ -472,6 +473,194 @@ export function Board({
     );
   }, [arrows]);
 
+  // ── Long-press → annotation arrow (touch-screen fallback) ──────────────
+  //
+  // Chessground triggers its annotation-arrow draw mode on right-click
+  // (mouse) or shift+click (keyboard). Touch screens have neither, so
+  // mobile users couldn't draw the chess.com-style red arrows that
+  // power our review / weakness flows at all.
+  //
+  // The standard touch-UI fix is "long-press" — hold a finger on the
+  // board for ~350 ms without moving, and the gesture switches from
+  // "drag a piece" to "draw an arrow". We implement it by watching
+  // touchstart on the wrapper and, if the finger stays close to its
+  // starting point for `LONG_PRESS_MS`, cancel any drag chessground
+  // may have started, then drive chessground's own draw API
+  // (`api.setShapes`) from subsequent touchmove + touchend events.
+  //
+  // We intentionally don't pre-empt the touchstart: short taps (tap to
+  // select / drop a piece) still flow through chessground unchanged.
+  // Only after we're confident this is a long-press do we steal the
+  // gesture. Haptic feedback (`navigator.vibrate(15)`) signals the
+  // mode switch the way iOS / Android system pickers do.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    // Long-press → arrow works on every board, even read-only ones —
+    // chessground's drawable.enabled is set unconditionally during
+    // init, so users can annotate the openings library / weakness
+    // previews / cards trainer answer state too. Piece-drag is the
+    // separate concern gated by `viewOnly`, and we don't intercept
+    // short taps regardless of `viewOnly` state.
+
+    const LONG_PRESS_MS = 350;
+    const MOVE_TOLERANCE_PX = 12;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let startX = 0;
+    let startY = 0;
+    let drawing = false;
+    let origKey: Key | null = null;
+
+    function clearTimer() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    }
+
+    function exitDrawMode() {
+      drawing = false;
+      origKey = null;
+    }
+
+    function onTouchStart(e: TouchEvent) {
+      if (e.touches.length !== 1) return;
+      clearTimer();
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      drawing = false;
+      origKey = null;
+
+      timer = setTimeout(() => {
+        const cg = api.current;
+        if (!cg) return;
+        // Use chessground's own square-resolver so the orig square
+        // matches whatever pixel math the rest of the board uses.
+        const orig = cg.getKeyAtDomPos([startX, startY]);
+        if (!orig) return;
+        // Cancel any drag chessground may have started in the
+        // interim — we're stealing the gesture for annotation.
+        cg.cancelMove();
+        drawing = true;
+        origKey = orig;
+        // Render the start-square ring immediately so the user gets
+        // visual confirmation the mode switched. (Chessground draws
+        // the same ring during a normal right-click draw.)
+        cg.setShapes([
+          ...cg.state.drawable.shapes,
+          { orig, brush: 'red' } as DrawShape,
+        ]);
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+          try {
+            navigator.vibrate?.(15);
+          } catch {
+            /* noop — Vibration API rejected by user / unsupported */
+          }
+        }
+      }, LONG_PRESS_MS);
+    }
+
+    function onTouchMove(e: TouchEvent) {
+      if (e.touches.length !== 1) {
+        clearTimer();
+        return;
+      }
+      const t = e.touches[0];
+      if (!drawing) {
+        // Cancel the long-press timer if the finger drifts past the
+        // tolerance — that's a normal drag, not a hold.
+        const dx = Math.abs(t.clientX - startX);
+        const dy = Math.abs(t.clientY - startY);
+        if (dx > MOVE_TOLERANCE_PX || dy > MOVE_TOLERANCE_PX) {
+          clearTimer();
+        }
+        return;
+      }
+      // We're drawing: prevent chessground from interpreting this as a
+      // drag, and update the preview shape with the current dest square.
+      e.preventDefault();
+      e.stopPropagation();
+      const cg = api.current;
+      if (!cg || !origKey) return;
+      const dest = cg.getKeyAtDomPos([t.clientX, t.clientY]);
+      const next: DrawShape =
+        dest && dest !== origKey
+          ? { orig: origKey, dest, brush: 'red' }
+          : { orig: origKey, brush: 'red' };
+      // Replace the *last* shape (our preview) so we don't pile up a
+      // new arrow on every pixel of movement.
+      const shapes = cg.state.drawable.shapes.slice();
+      // Drop the previously-rendered preview (it's the last `red`
+      // shape sharing our origin). If nothing matches, just append.
+      for (let i = shapes.length - 1; i >= 0; i--) {
+        const s = shapes[i];
+        if (s.orig === origKey && s.brush === 'red') {
+          shapes.splice(i, 1);
+          break;
+        }
+      }
+      shapes.push(next);
+      cg.setShapes(shapes);
+    }
+
+    function onTouchEnd(e: TouchEvent) {
+      clearTimer();
+      if (!drawing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const cg = api.current;
+      if (cg) {
+        // Drop dest-less ring previews: a "ring at orig with no dest"
+        // is the visual mid-drag preview, not a final shape. Real
+        // right-click drags only commit either an arrow (orig+dest) or
+        // an explicit click-on-square ring (orig === dest). If the
+        // user lifted off without moving, treat it as no-op.
+        const finalShapes = cg.state.drawable.shapes.filter((s) => {
+          if (!(s.orig === origKey && s.brush === 'red')) return true;
+          return !!s.dest;
+        });
+        cg.setShapes(finalShapes);
+        // chessground's `setShapes` does NOT fire `drawable.onChange`
+        // (only `draw.end` does). Manually invoke so our Board-level
+        // onChange — which routes knight arrows into an L-overlay and
+        // dedups same-shape redraws — runs the same code path it would
+        // for a real right-click commit.
+        cg.state.drawable.onChange?.(cg.state.drawable.shapes);
+      }
+      exitDrawMode();
+    }
+
+    function onTouchCancel() {
+      clearTimer();
+      if (drawing) {
+        // Drop the preview shape that we tentatively pushed.
+        const cg = api.current;
+        if (cg && origKey) {
+          const shapes = cg.state.drawable.shapes.filter(
+            (s) => !(s.orig === origKey && s.brush === 'red' && !s.dest),
+          );
+          cg.setShapes(shapes);
+        }
+        exitDrawMode();
+      }
+    }
+
+    wrap.addEventListener('touchstart', onTouchStart, { passive: true });
+    wrap.addEventListener('touchmove', onTouchMove, { passive: false });
+    wrap.addEventListener('touchend', onTouchEnd, { passive: false });
+    wrap.addEventListener('touchcancel', onTouchCancel, { passive: true });
+
+    return () => {
+      clearTimer();
+      wrap.removeEventListener('touchstart', onTouchStart);
+      wrap.removeEventListener('touchmove', onTouchMove);
+      wrap.removeEventListener('touchend', onTouchEnd);
+      wrap.removeEventListener('touchcancel', onTouchCancel);
+    };
+  }, []);
+
   useEffect(() => {
     return () => {
       api.current?.destroy();
@@ -510,7 +699,11 @@ export function Board({
           // tied to the classification name is renamer-proof.
           classification={lastMoveClassification}
         >
-          {badge.symbol}
+          <ClassificationIcon
+            classification={lastMoveClassification}
+            size={18}
+            aria-label={lastMoveClassification}
+          />
         </BadgeOverlay>
       )}
     </div>

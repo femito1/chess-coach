@@ -85,8 +85,12 @@ export function GamesPage() {
         />
       </div>
 
-      <div className="card overflow-hidden">
-        <table className="w-full text-sm">
+      {/* Card wraps an overflow-x-auto scroller so the 8-column table
+          can horizontal-scroll on phones instead of breaking layout.
+          `min-w-[640px]` on the table forces the horizontal scroll on
+          narrow viewports while still letting the table fill wide ones. */}
+      <div className="card overflow-x-auto">
+        <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-bg-raised text-text-muted text-xs">
             <tr>
               <th className="text-left p-2 font-medium">Date</th>

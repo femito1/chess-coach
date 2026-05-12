@@ -56,6 +56,9 @@ export const BROWSER_TESTS = [
   { name: 'exploration',                file: 'scripts/test/e2e/exploration.mjs',                        category: 'e2e' },
   { name: 'exploration-classification', file: 'scripts/test/e2e/exploration-classification.mjs',         category: 'e2e' },
   { name: 'knight-arrow-toggle',        file: 'scripts/test/e2e/knight-arrow-toggle.mjs',                category: 'e2e' },
+  { name: 'mobile-audit',               file: 'scripts/test/e2e/mobile-audit.mjs',                       category: 'e2e' },
+  { name: 'mobile-review',              file: 'scripts/test/e2e/mobile-review.mjs',                      category: 'e2e' },
+  { name: 'touch-longpress-arrow',      file: 'scripts/test/e2e/touch-longpress-arrow.mjs',              category: 'e2e' },
 ];
 
 export const CATEGORIES = ['unit', 'integration', 'e2e', 'live'];

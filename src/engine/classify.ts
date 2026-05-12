@@ -298,18 +298,26 @@ export function classifyMove(input: ClassifyInput): Classification {
   return 'excellent';
 }
 
+/**
+ * Short text glyphs per classification. Historically these doubled as
+ * the rendered icon in the move list and on the board badge, but
+ * Unicode glyphs broke across platforms — `🕮` (U+1F56E) is missing
+ * from many phone/Mac fonts and rendered as "tofu" stacked rectangles,
+ * and `!!` / `??` / `?!` get auto-promoted to colourful Apple emoji
+ * even with a U+FE0E variation selector. UI surfaces now render the
+ * icon via `<ClassificationIcon>` (inline SVG, font-independent).
+ *
+ * This map is kept for non-visual callers — analytics exports, plain-
+ * text logs, accessibility fallbacks. The values are deliberately
+ * 7-bit ASCII for the same reason: any caller that does render them
+ * gets identical output everywhere.
+ */
 export const CLASSIFICATION_SYMBOL: Record<Classification, string> = {
   brilliant: '!!',
-  best: '★',
+  best: '*',
   excellent: '!',
-  good: '✓',
-  // U+1F56E "Book" + U+FE0E "text variation selector" — forces the
-  // flat monochrome glyph (matching `★`, `✓`, `?`, etc.) instead of
-  // the colourful 📖 emoji that some platforms substitute by
-  // default. Inherits the surrounding `color:` so the move list and
-  // the on-board badge both pick up the same muted-white tone they
-  // already use for `book`.
-  book: '🕮\uFE0E',
+  good: '+',
+  book: 'B',
   inaccuracy: '?!',
   miss: 'x',
   mistake: '?',

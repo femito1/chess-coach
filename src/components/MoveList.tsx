@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { MoveEval, Classification } from '@/db/schema';
-import { CLASSIFICATION_SYMBOL } from '@/engine/classify';
+import { ClassificationIcon } from './ClassificationIcon';
 
 export interface MoveListProps {
   moves: MoveEval[];
@@ -93,7 +93,6 @@ function MoveCell({
   if (!move) return <span className="flex-1" />;
   const isCurrent = move.ply === currentPly;
   const tone = classToneClass[move.classification];
-  const sym = CLASSIFICATION_SYMBOL[move.classification];
   return (
     <button
       ref={isCurrent ? activeRef : undefined}
@@ -105,7 +104,11 @@ function MoveCell({
       title={`${move.classification} · eval ${formatCp(move.evalCpAfter)}`}
     >
       {move.san}
-      {sym && <span className="ml-0.5 text-xs opacity-80">{sym}</span>}
+      <ClassificationIcon
+        classification={move.classification}
+        size="0.85em"
+        className="ml-1 inline-block align-[-0.12em] opacity-90"
+      />
     </button>
   );
 }
