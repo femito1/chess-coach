@@ -95,23 +95,95 @@ await runBrowserTest({
     // backup test runs after others. 'overwrite' replaces colliding rows
     // and lets new ones land, which is what we actually want to assert
     // here ("backup → restore is lossless").
+    //
+    // Also asserts the new compression contract: the blob `exportBackup`
+    // produces is gzipped (first two bytes are the gzip magic header
+    // 0x1f 0x8b) and `restoreBackup` decompresses it transparently.
     const roundTrip = await page.evaluate(async () => {
       const { db } = await import('/src/db/schema.ts');
       const m = await import('/src/db/backup.ts');
       const before = await db.importRecords.count();
       const blob = await m.exportBackup();
+      const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+      const isGzip = await m.isGzipBlob(blob);
       // Wipe importRecords only (don't blow up the rest of the DB the
       // dev server may have populated).
       await db.importRecords.clear();
       const cleared = await db.importRecords.count();
       await m.restoreBackup(blob, 'overwrite');
       const after = await db.importRecords.count();
-      return { before, cleared, after, blobSize: blob.size };
+      return {
+        before,
+        cleared,
+        after,
+        blobSize: blob.size,
+        magic0: head[0],
+        magic1: head[1],
+        isGzip,
+      };
     });
     expect(roundTrip.before, 'pre-export count matches').toBe(2);
     expect(roundTrip.cleared, 'records cleared between export and restore').toBe(0);
     expect(roundTrip.after, 'merge restore re-populates cleared records').toBe(2);
     expect(roundTrip.blobSize, 'export produced a non-empty blob').toBeGreaterThan(0);
+    expect(roundTrip.magic0, 'export blob first byte is gzip magic 0x1f').toBe(0x1f);
+    expect(roundTrip.magic1, 'export blob second byte is gzip magic 0x8b').toBe(0x8b);
+    expect(roundTrip.isGzip, 'isGzipBlob recognises the export').toBe(true);
+
+    // 3b. Backwards compatibility: a legacy plain-JSON backup (the
+    // pre-compression format) must still restore. We synthesize one
+    // by calling dexie-export-import directly so the test doesn't
+    // depend on a literal pre-compression `exportBackup` ever being
+    // re-introduced. `restoreBackup` should sniff the leading bytes,
+    // see that it's NOT gzipped, and pass the blob through unchanged
+    // to `db.import`.
+    const legacy = await page.evaluate(async () => {
+      const { db } = await import('/src/db/schema.ts');
+      const m = await import('/src/db/backup.ts');
+      // Snapshot the raw, un-gzipped JSON blob the way pre-compression
+      // exports looked.
+      const raw = await db.export({ prettyJson: false, numRowsPerChunk: 1000 });
+      const head = new Uint8Array(await raw.slice(0, 2).arrayBuffer());
+      const looksGzipped = await m.isGzipBlob(raw);
+      await db.importRecords.clear();
+      const cleared = await db.importRecords.count();
+      // Same call site users hit when they pick a `.json` file from
+      // their old backup folder.
+      await m.restoreBackup(raw, 'overwrite');
+      const restored = await db.importRecords.count();
+      return {
+        rawSize: raw.size,
+        head0: head[0],
+        head1: head[1],
+        looksGzipped,
+        cleared,
+        restored,
+      };
+    });
+    expect(legacy.rawSize, 'legacy plain-JSON export is non-empty').toBeGreaterThan(0);
+    expect(legacy.head0, 'legacy export starts with `{` not gzip magic').toBe(0x7b); // '{'
+    expect(legacy.looksGzipped, 'isGzipBlob returns false on plain JSON').toBe(false);
+    expect(legacy.cleared, 'records cleared before legacy restore').toBe(0);
+    expect(legacy.restored, 'legacy plain-JSON restore re-populates the table').toBe(2);
+
+    // 3c. Bonus assertion: gzipped export is meaningfully smaller
+    // than the equivalent plain JSON. The whole point of compression
+    // is "use less bytes for the cloud-backup payload"; this catches a
+    // future regression where someone wires the export to skip the
+    // compression step. We use a soft floor (gzipped < plain) rather
+    // than a strict ratio because tiny test DBs compress less
+    // dramatically than real libraries.
+    const sizes = await page.evaluate(async () => {
+      const { db } = await import('/src/db/schema.ts');
+      const m = await import('/src/db/backup.ts');
+      const plain = await db.export({ prettyJson: false, numRowsPerChunk: 1000 });
+      const compressed = await m.exportBackup();
+      return { plain: plain.size, compressed: compressed.size };
+    });
+    expect(
+      sizes.compressed,
+      `gzipped export (${sizes.compressed} B) is smaller than plain JSON (${sizes.plain} B)`,
+    ).toBeLessThan(sizes.plain);
 
     // 4. Settings persists username (the foundational "track user" assumption).
     const settings = await page.evaluate(async () => {

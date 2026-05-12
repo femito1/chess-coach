@@ -59,6 +59,15 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Production build parity: Cloudflare Pages owns the real production
+      # build, but we don't want a Vite-only break (plugin misconfig,
+      # missing import, runtime-only code path that survives `tsc`) to
+      # surface for the first time in CF's build log on a deploy. Running
+      # `vite build` in CI is cheap on the same checkout (~10–20 s) and
+      # closes the gap. Output goes to `dist/`, which CI throws away.
+      - name: Production build
+        run: npm run build
+
       - name: Unit tests (vitest)
         run: npm run test:unit
 

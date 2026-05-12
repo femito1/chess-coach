@@ -141,6 +141,70 @@ export async function saveAnalysis(analysis: Analysis): Promise<void> {
   await db.analyses.put(analysis);
 }
 
+/**
+ * Analysis projection that omits the `moves` array. Use this anywhere
+ * the UI needs to know "is this game analyzed", "at what depth", or
+ * "how many moves did it have" but doesn't actually need to render or
+ * walk every `MoveEval`.
+ *
+ * Why this exists: a typical game has 40–100 `MoveEval` rows, each
+ * carrying multiple FENs (~100 chars), a UCI PV array, a `motifs`
+ * array, and a dozen number fields. Stringified that's ~30 KB per
+ * analysis on average; on a 1 k-game library a `db.analyses.toArray()`
+ * pulls ~30 MB of object graph into JS heap on every refire. Most
+ * call sites that hit `analyses` only want metadata and would much
+ * rather pay ~200 bytes per row.
+ *
+ * The shape is `Omit<Analysis, 'moves'> & { moveCount }`. We add
+ * `moveCount` because (a) it's the most-asked-for derived value off
+ * the move list, (b) cheaply derivable on read (no schema bump
+ * needed), and (c) lets the type system catch any consumer that
+ * tries to read `.moves.length` off a light row at compile time.
+ *
+ * Pages that actually need the full move list (review, weaknesses,
+ * puzzle generation, classification recompute) keep using
+ * `getAnalysis` / `db.analyses.bulkGet`.
+ *
+ * NOTE: like `GameLight`, the projection is *post-fetch* — Dexie has
+ * no native "select-without-field". That's still a meaningful win
+ * because the heavy cost is the JS-heap allocation that survives the
+ * function (the row's lifetime in memory), not the IDB read itself.
+ * The dropped `moves` array is freed on the next GC.
+ */
+export type AnalysisLight = Omit<Analysis, 'moves'> & { moveCount: number };
+
+function stripMoves(a: Analysis): AnalysisLight {
+  const { moves, ...rest } = a;
+  return { ...rest, moveCount: moves.length };
+}
+
+export async function getAnalysisLight(
+  gameId: string,
+): Promise<AnalysisLight | undefined> {
+  const row = await db.analyses.get(gameId);
+  return row ? stripMoves(row) : undefined;
+}
+
+export async function bulkGetAnalysisLight(
+  gameIds: string[],
+): Promise<AnalysisLight[]> {
+  if (gameIds.length === 0) return [];
+  const rows = await db.analyses.bulkGet(gameIds);
+  const out: AnalysisLight[] = [];
+  for (const a of rows) if (a) out.push(stripMoves(a));
+  return out;
+}
+
+export async function listAnalysesLight(): Promise<AnalysisLight[]> {
+  const rows = await db.analyses.toArray();
+  return rows.map(stripMoves);
+}
+
+/** Exported for unit-testing the shape contract. Not for production
+ *  use — call `getAnalysisLight` / `bulkGetAnalysisLight` /
+ *  `listAnalysesLight` instead so the IDB read stays in one place. */
+export const __stripMovesForTests = stripMoves;
+
 export async function setAnalysisStatus(
   gameId: string,
   status: AnalysisStatus,

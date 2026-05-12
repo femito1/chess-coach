@@ -205,9 +205,12 @@ export function BackupPage() {
       <section className="card p-4 space-y-3">
         <h2 className="font-medium">Export</h2>
         <p className="text-sm text-text-muted">
-          Downloads a single JSON file with every table. The format is the official
+          Downloads a single gzip-compressed JSON file with every table. The
+          uncompressed format is the official
           <code className="mx-1">dexie-export-import</code>
-          shape and includes the schema version, so it restores cleanly even after future upgrades.
+          shape and includes the schema version, so it restores cleanly even
+          after future upgrades. Restore accepts both this <code>.json.gz</code>
+          and any older <code>.json</code> backup.
         </p>
         <div>
           <button
@@ -276,7 +279,7 @@ export function BackupPage() {
         <input
           ref={fileRef}
           type="file"
-          accept="application/json,.json"
+          accept="application/json,.json,application/gzip,.gz,.json.gz"
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
