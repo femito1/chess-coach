@@ -533,12 +533,21 @@ function RunnerStatusBar({
     expectedSan,
     hintShown,
     revealShown,
-    onRetry,
+    mistakeMade,
+    wrongFlash,
     onHint,
     onReveal,
     onPlayReveal,
     onRestart,
   } = control;
+  // Same auto-retry + sticky-affordances flow as the practice page:
+  // after the first wrong attempt on a line, both Hint and Show-answer
+  // stay visible; pre-mistake the row only carries the always-on
+  // Hint button.
+  const showHintButton = isUserTurn && status === 'thinking' && !hintShown;
+  const showRevealButton =
+    isUserTurn && status === 'thinking' && mistakeMade && !revealShown;
+  const showPlayItButton = revealShown && isUserTurn && status === 'thinking';
   return (
     <div className="card p-3 space-y-2">
       <div className="text-sm min-h-[1.5rem]">
@@ -551,26 +560,30 @@ function RunnerStatusBar({
             Opponent moves… ({userColor === 'white' ? 'Black' : 'White'} to move)
           </span>
         ) : status === 'thinking' ? (
-          <span className="text-text-muted">
-            {ply === 0
-              ? `${userColor === 'white' ? 'White' : 'Black'} to move. Play your prep.`
-              : `Your move (${Math.floor(ply / 2) + 1}${ply % 2 === 0 ? '.' : '…'})`}
-            {hintShown && expectedSan && (
+          <>
+            {wrongFlash ? (
+              <span className="text-blunder">
+                Not your prep here — try again.
+              </span>
+            ) : (
+              <span className="text-text-muted">
+                {ply === 0
+                  ? `${userColor === 'white' ? 'White' : 'Black'} to move. Play your prep.`
+                  : `Your move (${Math.floor(ply / 2) + 1}${ply % 2 === 0 ? '.' : '…'})`}
+              </span>
+            )}
+            {revealShown && expectedSan && (
+              <span className="ml-2 text-text-muted">
+                · The line goes{' '}
+                <span className="font-mono text-good">{expectedSan}</span>.
+              </span>
+            )}
+            {hintShown && !revealShown && expectedSan && (
               <span className="ml-2 text-accent">
                 · Hint: move the highlighted piece
               </span>
             )}
-          </span>
-        ) : status === 'wrong' ? (
-          <span className="text-blunder">
-            Not your prep here.
-            {revealShown && expectedSan && (
-              <>
-                {' '}
-                The line goes <span className="font-mono text-good">{expectedSan}</span>.
-              </>
-            )}
-          </span>
+          </>
         ) : (
           <span className="text-good">
             {expectedSan && (
@@ -582,31 +595,21 @@ function RunnerStatusBar({
         )}
       </div>
       <div className="flex flex-wrap gap-2">
-        {status === 'wrong' ? (
-          <>
-            <button type="button" className="btn-primary text-xs" onClick={onRetry}>
-              Try again
-            </button>
-            {!hintShown && (
-              <button type="button" className="btn text-xs" onClick={onHint}>
-                Hint
-              </button>
-            )}
-            {!revealShown ? (
-              <button type="button" className="btn text-xs" onClick={onReveal}>
-                Show answer
-              </button>
-            ) : (
-              <button type="button" className="btn text-xs" onClick={onPlayReveal}>
-                Play it for me
-              </button>
-            )}
-          </>
-        ) : status === 'thinking' && isUserTurn && !hintShown ? (
+        {showHintButton && (
           <button type="button" className="btn text-xs" onClick={onHint}>
             Hint
           </button>
-        ) : null}
+        )}
+        {showRevealButton && (
+          <button type="button" className="btn text-xs" onClick={onReveal}>
+            Show answer
+          </button>
+        )}
+        {showPlayItButton && (
+          <button type="button" className="btn text-xs" onClick={onPlayReveal}>
+            Play it for me
+          </button>
+        )}
         <div className="ml-auto flex flex-wrap gap-2">
           <button type="button" className="btn text-xs" onClick={onBackToLines}>
             Pick another line

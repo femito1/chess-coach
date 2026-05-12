@@ -172,6 +172,16 @@ function PuzzleSolver({
 }) {
   const [fen, setFen] = useState(puzzle.fen);
   const [solvedIdx, setSolvedIdx] = useState(0);
+  /** Status drives `viewOnly` on the board. We collapse the old
+   *  "wrong → click try-again" two-step flow into a single state:
+   *  a wrong attempt no longer locks the board into a `'wrong'` state
+   *  with a Try-again button. Instead it bumps `attempts`, flips a
+   *  short-lived `mistakeFlash` for the status-row copy, and leaves
+   *  the user back in `'solving'` so they can immediately try again
+   *  on the same board. The only path that still uses `'wrong'` is
+   *  the "Reveal" route below — the user has explicitly given up, so
+   *  the board goes view-only and the solution playback takes over.
+   */
   const [status, setStatus] = useState<'solving' | 'wrong' | 'solved'>('solving');
   const [attempts, setAttempts] = useState(0);
   const [showSolution, setShowSolution] = useState(false);
@@ -182,6 +192,13 @@ function PuzzleSolver({
    *  so a hint-assisted solve can't inflate the schedule. */
   const [hintShown, setHintShown] = useState(false);
   const [hintUsed, setHintUsed] = useState(false);
+  /** Sticky for the puzzle's lifetime: once the user has made any
+   *  wrong attempt, surface the "Hint" + "Reveal" buttons alongside the
+   *  status row from then on, even after they go on to play correct
+   *  moves. Lets the user fall back to a hint or reveal at any later
+   *  point in the same line without having to deliberately make
+   *  another mistake first. */
+  const [mistakeMade, setMistakeMade] = useState(false);
   /** Solution-playback cursor for the "Reveal" simulation. Reused on
    *  the same main board (no second mini-board pops up next to it). */
   const [playbackIdx, setPlaybackIdx] = useState(0);
@@ -202,6 +219,7 @@ function PuzzleSolver({
     setLastUci(undefined);
     setHintShown(false);
     setHintUsed(false);
+    setMistakeMade(false);
     setPlaybackIdx(0);
   }, [puzzle.id]);
 
@@ -237,11 +255,18 @@ function PuzzleSolver({
     });
     if (result.kind === 'rejected') {
       if (result.reason === 'no-expected') return false;
-      // Treat both 'wrong-move' and 'illegal' as a wrong attempt so the
-      // user gets the wrong-state UI (Retry / Hint / Reveal) and an
-      // attempt counter bump.
+      // Wrong attempt: bump the counter and unlock the always-on Hint
+      // + Reveal buttons via `mistakeMade`, but DON'T switch into a
+      // `'wrong'` state. The board's previous accepted FEN /
+      // `solvedIdx` are untouched (chessground already snapped the
+      // wrong piece back via the `Board onMove → false` revert), so
+      // the user is effectively in "try again from your last correct
+      // move" state on the next click — exactly what the old
+      // Try-again button did, just without the click. Reveal is the
+      // only path that still flips into the locked `'wrong'` state
+      // (see `revealAndFail` below).
       setAttempts((n) => n + 1);
-      setStatus('wrong');
+      setMistakeMade(true);
       return false;
     }
     setFen(result.fen);
@@ -258,29 +283,11 @@ function PuzzleSolver({
   }
 
   /**
-   * "Try again" after a wrong attempt. Crucially, this does NOT reset
-   * `fen` / `solvedIdx` / `lastUci` — those still hold the LAST
-   * ACCEPTED state of the line (a wrong attempt is rejected by
-   * `applyPuzzleMove` before any of them advance), so resuming from
-   * here means the user picks up exactly where their first mistake
-   * was without having to replay every correctly-played move that
-   * came before it.
-   *
-   * Previously this function snapped back to `puzzle.fen` + `solvedIdx
-   * = 0`, which was the source of the "ugh, now I have to redo the
-   * whole line just because I messed up move 3" complaint.
-   */
-  function retry() {
-    setStatus('solving');
-    setHintShown(false);
-  }
-
-  /**
    * "Restart" — full reset back to the puzzle's starting position.
-   * Distinct from `retry()` because some users prefer to redo the
-   * whole line when a wrong move pops up (e.g. they want a fresh look
-   * at the position rather than picking up where they slipped).
-   * Kept around as a secondary action in the wrong / solving states.
+   * Surface this as a secondary action once the user has played at
+   * least one correct move they'd be throwing away, so the primary
+   * affordance stays "keep solving from here". Restart also clears
+   * the wrong-attempt counter so the user gets a clean slate.
    */
   function restart() {
     setFen(puzzle.fen);
@@ -288,15 +295,12 @@ function PuzzleSolver({
     setStatus('solving');
     setLastUci(undefined);
     setHintShown(false);
+    setAttempts(0);
   }
 
   function showHint() {
     setHintShown(true);
     setHintUsed(true);
-    // The 'wrong' state stops the user from interacting with the board.
-    // Returning to 'solving' (without resetting fen / solvedIdx, since
-    // a wrong attempt never advances them) lets them act on the hint.
-    if (status === 'wrong') setStatus('solving');
   }
 
   function revealAndFail() {
@@ -363,21 +367,35 @@ function PuzzleSolver({
           <div className="text-sm min-h-[1.25rem]">
             {status === 'solving' && (
               <span className="text-text-muted">
-                {solverColor === 'white' ? 'White' : 'Black'} to move. Find the best line.
+                {/* When the user has at least one wrong attempt under
+                    their belt, lead with the wrong-attempt callout so
+                    the eye lands on it; otherwise show the neutral
+                    prompt. The board is already back in the last
+                    accepted state so the implicit "try again" is
+                    immediate (no Try-again button needed). */}
+                {attempts > 0 ? (
+                  <>
+                    <span className="text-blunder">
+                      Not quite &mdash; try again
+                      {solvedIdx > 0 ? ' from here.' : '.'}
+                    </span>
+                    <span className="ml-2">
+                      {attempts} wrong so far
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    {solverColor === 'white' ? 'White' : 'Black'} to move. Find the best line.
+                  </>
+                )}
                 {hintShown && (
                   <span className="ml-2 text-accent">· Hint: move the highlighted piece</span>
                 )}
-                {attempts > 0 && <span className="text-blunder"> · {attempts} wrong so far</span>}
               </span>
             )}
             {status === 'wrong' && (
               <span className="text-blunder">
-                Not quite.{' '}
-                {showSolution
-                  ? 'Full solution shown on the right.'
-                  : solvedIdx > 0
-                    ? "Try again from here \u2014 your earlier moves are kept."
-                    : 'Try again, hint, or reveal.'}
+                Not quite. Full solution shown below.
               </span>
             )}
             {status === 'solved' && (
@@ -390,26 +408,20 @@ function PuzzleSolver({
             )}
           </div>
           <div className="flex gap-1">
-            {status === 'wrong' && !showSolution && (
-              <button
-                type="button"
-                className="btn-primary text-xs"
-                onClick={retry}
-                title={
-                  solvedIdx > 0
-                    ? 'Try again from your last correct move'
-                    : 'Try again from the puzzle start'
-                }
-              >
-                Try again
-              </button>
-            )}
-            {(status === 'solving' || (status === 'wrong' && !showSolution)) && !hintShown && (
+            {/* Hint + Reveal are surfaced any time the user has made
+                at least one wrong attempt, even after they've gone on
+                to play correct moves on the same line — the user
+                explicitly asked for "from that point on have the
+                reveal button and the hint button always show".
+                Pre-mistake we keep the action row clean (Hint only,
+                no Reveal) so the puzzle starts as a low-pressure
+                solve-or-step-on-it. */}
+            {status === 'solving' && !hintShown && (
               <button type="button" className="btn text-xs" onClick={showHint}>
                 Hint
               </button>
             )}
-            {status === 'wrong' && !showSolution && (
+            {status === 'solving' && mistakeMade && (
               <button type="button" className="btn text-xs" onClick={revealAndFail}>
                 Reveal
               </button>
@@ -418,18 +430,16 @@ function PuzzleSolver({
                 primary affordance is "keep going from here" — only
                 surface it once the user has actually played a move
                 they'd be throwing away (i.e. solvedIdx > 0). */}
-            {(status === 'wrong' || status === 'solving') &&
-              !showSolution &&
-              solvedIdx > 0 && (
-                <button
-                  type="button"
-                  className="btn text-xs text-text-muted"
-                  onClick={restart}
-                  title="Restart the puzzle from the beginning"
-                >
-                  Restart
-                </button>
-              )}
+            {status === 'solving' && solvedIdx > 0 && (
+              <button
+                type="button"
+                className="btn text-xs text-text-muted"
+                onClick={restart}
+                title="Restart the puzzle from the beginning"
+              >
+                Restart
+              </button>
+            )}
           </div>
         </div>
       </div>

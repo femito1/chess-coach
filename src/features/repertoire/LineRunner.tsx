@@ -8,6 +8,17 @@ import {
   type RepertoireLine,
 } from './store';
 
+/**
+ * `wrong` is no longer a status the user can sit in. A wrong move
+ * auto-retries: chessground snaps the piece back, we bump the
+ * session-stats counter, and we stay in `thinking` so the user can
+ * just play again on the same board with no button click. The status
+ * still appears in the union for legacy callers that switch on it,
+ * but it's not produced by the state machine anymore. (Earlier
+ * versions of the runner locked into `wrong` and required a "Try
+ * again" button click; the puzzles flow shipped the same auto-retry
+ * change first, this is the repertoire equivalent.)
+ */
 export type LineStatus = 'thinking' | 'wrong' | 'right' | 'done';
 
 export interface SessionStats {
@@ -41,6 +52,18 @@ export interface LineRunnerControlState {
   expectedSan: string | undefined;
   hintShown: boolean;
   revealShown: boolean;
+  /** Sticky for the line's lifetime: true once the user has made any
+   *  wrong attempt on this line. Renderers use this to keep the Hint
+   *  + Show-answer buttons surfaced after the first mistake, even
+   *  after the user goes on to play correct moves. Cleared by
+   *  `onRestart`. */
+  mistakeMade: boolean;
+  /** True for one frame after a wrong move (the `wrongUci` state is
+   *  set; chessground has reverted the piece and the board is back
+   *  in the previous accepted state). Renderers use this to flash a
+   *  "Not your prep here" status. Cleared on the next move attempt
+   *  / hint / reveal / restart. */
+  wrongFlash: boolean;
   sessionStats: SessionStats;
   onRetry: () => void;
   onHint: () => void;
@@ -78,6 +101,14 @@ export function LineRunner({
   const [hintShown, setHintShown] = useState(false);
   const [revealShown, setRevealShown] = useState(false);
   const [wrongUci, setWrongUci] = useState<string | null>(null);
+  /** Sticky for the line's lifetime: once the user has made any
+   *  wrong attempt on this line, surface the Hint + Show-answer
+   *  buttons alongside the always-on row from then on, even after
+   *  they go on to play correct moves. Mirrors the puzzles
+   *  `mistakeMade` contract — once you've slipped on a line, you
+   *  should be able to fall back to a hint or reveal at any later
+   *  ply without having to deliberately make another mistake. */
+  const [mistakeMade, setMistakeMade] = useState(false);
   const [sessionStats, setSessionStats] = useState<SessionStats>({
     total: 0,
     wrong: 0,
@@ -159,8 +190,16 @@ export function LineRunner({
       }, 350);
       return true;
     }
-    setStatus('wrong');
+    // Wrong move: bump the counters and unlock the sticky Hint +
+    // Show-answer affordances via `mistakeMade`, but DON'T flip into a
+    // `'wrong'` status. The Board's `onMove → false` revert path
+    // already snaps the piece back to its source, so we stay in
+    // `'thinking'` and the user can just re-drag — no Try-again button
+    // click required. The red `wrong-square` highlight is preserved
+    // for one frame of feedback (cleared on the next attempt or by
+    // the hint/reveal flow). Mirrors the puzzles auto-retry change.
     setWrongUci(played);
+    setMistakeMade(true);
     setSessionStats((s) => ({ ...s, wrong: s.wrong + 1 }));
     void recordLineMove(repertoireId, line, 'wrong').then(() => {
       onStatsChanged?.();
@@ -168,20 +207,30 @@ export function LineRunner({
     return false;
   }
 
+  /**
+   * Kept around for the `LineRunnerControlState.onRetry` slot so
+   * existing renderControls callers can still wire up a "Try again"
+   * button if they want to. With the auto-retry flow there's no
+   * reason to render one — the board is already back in the previous
+   * accepted state — so both shipping callsites
+   * (`PracticeStatusBar` + `RunnerStatusBar`) stop rendering it.
+   * Calling it just clears the wrong-square highlight without
+   * touching `mistakeMade`, matching the previous behaviour for any
+   * external consumer that still surfaces it.
+   */
   function retry() {
-    setStatus('thinking');
     setWrongUci(null);
   }
 
   function showHint() {
     setHintShown(true);
-    setStatus('thinking');
     setWrongUci(null);
     setSessionStats((s) => ({ ...s, hintsUsed: s.hintsUsed + 1 }));
   }
 
   function reveal() {
     setRevealShown(true);
+    setWrongUci(null);
   }
 
   function playRevealedMove() {
@@ -203,6 +252,7 @@ export function LineRunner({
     setHintShown(false);
     setRevealShown(false);
     setWrongUci(null);
+    setMistakeMade(false);
     setSessionStats({ total: 0, wrong: 0, hintsUsed: 0 });
   }
 
@@ -212,8 +262,14 @@ export function LineRunner({
   const highlightSquares =
     hintShown && expectedFromSquare && status === 'thinking'
       ? [{ square: expectedFromSquare, color: 'hint' as const }]
-      : status === 'wrong' && wrongUci
-        ? [{ square: wrongUci.slice(0, 2), color: 'wrong' as const }]
+      : wrongUci && status === 'thinking'
+        ? // Brief red ring on the wrong from-square so the user
+          // gets visual feedback even though we don't lock into a
+          // `'wrong'` state anymore. Cleared on the next move
+          // attempt (`tryMove` resets `wrongUci` on the success
+          // branch; the wrong branch overwrites it with the new
+          // wrong square) or by the hint / reveal flow.
+          [{ square: wrongUci.slice(0, 2), color: 'wrong' as const }]
         : [];
 
   const controlState: LineRunnerControlState = {
@@ -224,6 +280,8 @@ export function LineRunner({
     expectedSan,
     hintShown,
     revealShown,
+    mistakeMade,
+    wrongFlash: wrongUci !== null && status === 'thinking',
     sessionStats,
     onRetry: retry,
     onHint: showHint,

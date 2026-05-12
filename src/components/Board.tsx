@@ -203,6 +203,19 @@ export function Board({
       viewOnly: false,
       turnColor: turn,
       coordinates: true,
+      // Have chessground publish its resolved board size via CSS custom
+      // properties (`---cg-width` / `---cg-height`) on our outer wrapper.
+      // chessground floors the container to a multiple of 8 pixels (so
+      // every square is integer-sized and pieces align to whole pixels;
+      // see `updateBounds` in chessground/render.ts), which means a
+      // wrapper sized at e.g. 348 px ends up with chessground rendering
+      // at 344 px. Without these CSS vars our percentage-based hint
+      // overlay sized off the *outer* wrapper drifts a few pixels off
+      // chessground's actual squares — visible as the "off-center hint
+      // ring" complaint. The overlay now uses these vars to share
+      // chessground's exact square geometry. See `SquareHighlightOverlay`
+      // for the consuming side.
+      addDimensionsCssVarsTo: wrapRef.current ?? undefined,
       animation: { enabled: true, duration: 80 },
       draggable: { enabled: !viewOnly },
       movable: {
@@ -865,17 +878,25 @@ const HIGHLIGHT_COLOR: Record<NonNullable<NonNullable<BoardProps['highlightSquar
  * and feedback (red/green) during repertoire training and puzzles.
  *
  * Implementation note: we used to draw this as an SVG circle with
- * `viewBox="0 0 100 100" preserveAspectRatio="none"`. That looked fine on
- * pixel-perfect 8-multiple board widths, but a non-multiple width (the
- * puzzle page caps the board at `min(560px, calc(100vh - 280px))`, which
- * is rarely a multiple of 8 in practice) forced the SVG to fractionally
- * stretch and pushed the ring noticeably off-centre relative to the
- * pieces chessground was rendering inside its own per-square divs.
+ * `viewBox="0 0 100 100" preserveAspectRatio="none"`, then as a stack of
+ * absolutely-positioned `div`s sized at 12.5% × 12.5% of the *outer
+ * wrapper*. Both still drifted a few pixels off-centre on viewport
+ * widths that aren't multiples of 8: chessground floors its inner
+ * container to a multiple of 8 px (`updateBounds` in
+ * chessground/render.ts) so each square stays integer-sized, which
+ * means the chessground content is up to 7 px narrower than the outer
+ * wrapper. Our percentage overlay sized off the wrapper would land 1–4
+ * px past where the actual piece sits — that's the "circle is off
+ * centre" complaint.
  *
- * Switching to a stack of absolutely-positioned `div`s, each sized at
- * exactly 12.5% × 12.5% (the same percentage chessground uses for its
- * pieces), makes the ring share chessground's rounding and stay glued to
- * the square center on every viewport size.
+ * Fix: chessground publishes its resolved board dimensions on our
+ * wrapper via CSS custom properties (`---cg-width` / `---cg-height`,
+ * three dashes — chessground's literal name). The overlay sizes itself
+ * to those exact pixel dimensions and the per-cell children stay at the
+ * same 12.5% percentages, so they share chessground's rounding and the
+ * ring stays glued to the square centre on every viewport. Falls back
+ * to `100%` before chessground has a chance to set the vars (first
+ * paint), which matches the previous behaviour for that one frame.
  */
 function SquareHighlightOverlay({
   squares,
@@ -887,8 +908,15 @@ function SquareHighlightOverlay({
   if (squares.length === 0) return null;
   return (
     <div
-      className="absolute inset-0 pointer-events-none"
-      style={{ zIndex: 9 }}
+      className="pointer-events-none"
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: 'var(---cg-width, 100%)',
+        height: 'var(---cg-height, 100%)',
+        zIndex: 9,
+      }}
     >
       {squares.map((sq, i) => {
         const fileIdx = sq.square.charCodeAt(0) - 'a'.charCodeAt(0);
