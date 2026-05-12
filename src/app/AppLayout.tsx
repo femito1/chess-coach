@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { startAnalysisQueue } from '@/engine/queue';
 import { ProfileChip } from './ProfileChip';
 import { ProfileSyncBanner } from '@/features/auth/ProfileSyncBanner';
+import { NewGamesBanner } from '@/features/import/NewGamesBanner';
 
 const NAV_ITEMS: { to: string; label: string }[] = [
   { to: '/dashboard', label: 'Dashboard' },
@@ -114,6 +115,10 @@ export function AppLayout() {
       {/* Renders nothing in the steady state; surfaces only when a
           different Clerk user signs in on this browser profile. */}
       <ProfileSyncBanner />
+      {/* Self-checks Chess.com once per browser session for games
+          played since the last import; shows nothing on the steady
+          ("all caught up") path. */}
+      <NewGamesBanner />
       <main className="flex-1">
         <div className="max-w-screen-2xl mx-auto px-4 lg:px-8 pt-5 pb-12">
           <Outlet />
