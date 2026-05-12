@@ -15,6 +15,7 @@ import {
   lineKey,
   type RepertoireLine,
 } from './store';
+import type { RepertoireLineStats } from '@/db/schema';
 import { identifyOpening } from '@/features/openings/library';
 import { LineRunner, type LineRunnerControlState } from './LineRunner';
 import {
@@ -50,6 +51,72 @@ function decorate(lines: RepertoireLine[]): DecoratedLine[] {
       .toLowerCase();
     return { line, family, variation, eco, searchHaystack };
   });
+}
+
+interface FamilyAggregate {
+  family: string;
+  indices: number[];
+  totalLines: number;
+  attempts: number;
+  completions: number;
+  perfectCompletions: number;
+  movesPlayed: number;
+  correctMoves: number;
+  wrongMoves: number;
+}
+
+/**
+ * Roll persisted per-line stats up to family-level. Ported from the
+ * legacy `/repertoire/:id/lines` page (`RepertoireLineTrainer`'s
+ * `aggregateFamilyStats`) so the family-aggregate view doesn't go
+ * away with that page. Pure over `(decoratedLines, statsMap)`.
+ */
+function aggregateByFamily(
+  decoratedLines: DecoratedLine[],
+  stats: Map<string, RepertoireLineStats> | null | undefined,
+): FamilyAggregate[] {
+  const byFamily = new Map<string, FamilyAggregate>();
+  decoratedLines.forEach((d, idx) => {
+    let agg = byFamily.get(d.family);
+    if (!agg) {
+      agg = {
+        family: d.family,
+        indices: [],
+        totalLines: 0,
+        attempts: 0,
+        completions: 0,
+        perfectCompletions: 0,
+        movesPlayed: 0,
+        correctMoves: 0,
+        wrongMoves: 0,
+      };
+      byFamily.set(d.family, agg);
+    }
+    agg.indices.push(idx);
+    agg.totalLines += 1;
+    const s = stats?.get(lineKey(d.line.uci));
+    if (s) {
+      agg.attempts += s.attempts;
+      agg.completions += s.completions;
+      agg.perfectCompletions += s.perfectCompletions;
+      agg.movesPlayed += s.movesPlayed;
+      agg.correctMoves += s.correctMoves;
+      agg.wrongMoves += s.wrongMoves;
+    }
+  });
+  // Stable order: alphabetical by family, "Unidentified" pushed last.
+  // Same convention as the legacy page so users coming from there
+  // don't experience a re-shuffle.
+  return Array.from(byFamily.values()).sort((a, b) => {
+    if (a.family === 'Unidentified' && b.family !== 'Unidentified') return 1;
+    if (b.family === 'Unidentified' && a.family !== 'Unidentified') return -1;
+    return a.family.localeCompare(b.family);
+  });
+}
+
+function familyAccuracyPct(agg: FamilyAggregate): number | null {
+  if (agg.movesPlayed === 0) return null;
+  return agg.correctMoves / agg.movesPlayed;
 }
 
 /**
@@ -427,6 +494,12 @@ function ActivePractice({
             session={session}
             totalLines={decoratedLines.length}
           />
+          <FamilyStats
+            decoratedLines={decoratedLines}
+            stats={stats ?? null}
+            selected={selected}
+            onSelectFamily={(indices) => setSelected(new Set(indices))}
+          />
           <LinePicker
             decoratedLines={decoratedLines}
             filteredIndices={filteredIndices}
@@ -667,6 +740,125 @@ function SessionSummary({
         {session.selectedIndices.length} / {totalLines} selected ·{' '}
         {PRACTICE_MODE_LABEL[session.mode]} mode
       </div>
+    </div>
+  );
+}
+
+/**
+ * Family-aggregate stats panel. Ported from the legacy
+ * `/repertoire/:id/lines` page (`FamilyPickerView`) when that page was
+ * removed in favour of the unified Practice flow. Collapsed by default
+ * so it doesn't clutter the picker; clicking a family row narrows the
+ * selection to just that family's lines so the user can drill into a
+ * specific opening from here.
+ */
+function FamilyStats({
+  decoratedLines,
+  stats,
+  selected,
+  onSelectFamily,
+}: {
+  decoratedLines: DecoratedLine[];
+  stats: Map<string, RepertoireLineStats> | null;
+  selected: Set<number>;
+  onSelectFamily: (indices: number[]) => void;
+}) {
+  const aggregates = useMemo(
+    () => aggregateByFamily(decoratedLines, stats),
+    [decoratedLines, stats],
+  );
+  // Collapsed by default. The picker below is the primary surface;
+  // family-level stats are a secondary "where am I weakest?" view.
+  const [open, setOpen] = useState(false);
+  // Only render the panel if there's meaningful aggregate data —
+  // either >1 family, or any persisted attempts on the single family.
+  // A brand-new repertoire with one family and zero plays would just
+  // show "0 / 0 / 0%" which is noise.
+  const hasAnyAttempts = aggregates.some((a) => a.attempts > 0);
+  if (aggregates.length <= 1 && !hasAnyAttempts) return null;
+  return (
+    <div className="card p-3 space-y-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between gap-2 text-left"
+        aria-expanded={open}
+      >
+        <span className="text-xs uppercase tracking-wide text-text-muted">
+          Family stats
+        </span>
+        <span className="text-xs text-text-muted">
+          {aggregates.length} famil{aggregates.length === 1 ? 'y' : 'ies'}
+          {' \u00b7 '}
+          {open ? 'Hide' : 'Show'}
+        </span>
+      </button>
+      {open && (
+        <ul className="space-y-1.5">
+          {aggregates.map((agg) => {
+            const acc = familyAccuracyPct(agg);
+            const allSelected = agg.indices.every((i) => selected.has(i));
+            return (
+              <li key={agg.family} className="space-y-0.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <div className="text-sm font-medium truncate">
+                    {agg.family}
+                  </div>
+                  <button
+                    type="button"
+                    className="text-[11px] text-accent hover:underline shrink-0"
+                    onClick={() => onSelectFamily(agg.indices)}
+                    title={
+                      allSelected
+                        ? 'Already the only family selected'
+                        : `Drill only ${agg.family}`
+                    }
+                    disabled={allSelected && selected.size === agg.indices.length}
+                  >
+                    Drill only this
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-x-3 gap-y-0 text-[11px] text-text-muted">
+                  <span>
+                    {agg.totalLines} line{agg.totalLines === 1 ? '' : 's'}
+                  </span>
+                  {agg.attempts > 0 ? (
+                    <>
+                      <span>
+                        {agg.attempts} attempt
+                        {agg.attempts === 1 ? '' : 's'}
+                      </span>
+                      <span>
+                        {agg.completions} done
+                        {agg.perfectCompletions > 0 && (
+                          <span className="text-good">
+                            {' '}({agg.perfectCompletions} perfect)
+                          </span>
+                        )}
+                      </span>
+                      {acc !== null && (
+                        <span
+                          className={
+                            acc >= 0.9
+                              ? 'text-good'
+                              : acc < 0.6
+                                ? 'text-blunder'
+                                : ''
+                          }
+                        >
+                          {(acc * 100).toFixed(0)}% acc
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="italic">Not yet drilled</span>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

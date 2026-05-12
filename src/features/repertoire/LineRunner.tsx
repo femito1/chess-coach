@@ -77,16 +77,17 @@ export interface LineRunnerControlState {
  * Pure "play through one repertoire line" widget. Owns its board state,
  * per-attempt hints/reveal/retry logic, and the persistence of per-line
  * stats. Doesn't know anything about *which* line comes next — the
- * surrounding page (RepertoireLineTrainer or PracticePage) drives that
- * via `key={line.uci.join(' ')}` to force a fresh mount per line, plus
- * the `onLineFinished` callback for "done" transitions.
+ * surrounding page (PracticePage) drives that via
+ * `key={line.uci.join(' ')}` to force a fresh mount per line, plus the
+ * `onLineFinished` callback for "done" transitions.
  *
- * Extracted from RepertoireLineTrainer.tsx as a no-op refactor so the
- * new practice page can reuse it without forking. The behaviour is
- * identical to the inlined version that shipped before — same state
- * machine, same persistence calls, same hint/reveal/retry semantics.
- * Only the surrounding callbacks differ (`onLineFinished` is new; was
- * previously inlined into the parent's "next line" button).
+ * Originally extracted from the legacy `RepertoireLineTrainer.tsx`
+ * (the `/repertoire/:id/lines` page), which was removed 2026-05-12
+ * when the practice page became the canonical drill flow. The
+ * behaviour is identical to the inlined version that shipped before —
+ * same state machine, same persistence calls, same hint/reveal/retry
+ * semantics. Only the surrounding callbacks differ (`onLineFinished`
+ * is new; was previously inlined into the parent's "next line" button).
  */
 export function LineRunner({
   repertoireId,

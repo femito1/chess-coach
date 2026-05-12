@@ -128,26 +128,30 @@ function RepertoireCard({
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
+        {/*
+         * Two distinct study modes, surfaced as the only buttons on
+         * the card. "Drill lines" is the default — play through the
+         * prep one move at a time. "Review due" is the spaced-repetition
+         * scheduler over individual positions; it leads with the due
+         * count because that's the actual user-facing question
+         * ("what's due today?"). The legacy "Lines" button — which
+         * duplicated Drill-lines with a clunkier picker — was removed
+         * 2026-05-12; its only unique feature, the family-aggregate
+         * stats card, was ported into the practice page's right aside.
+         */}
         <Link
           to={`/practice?rep=${encodeURIComponent(rep.id)}`}
           className="btn-primary text-xs"
-          title="Practice the lines in this repertoire"
+          title="Play through the lines in this repertoire"
         >
-          Practice
+          Drill lines
         </Link>
         <Link
           to={`/repertoire/${rep.id}/train`}
-          className="btn text-xs"
+          className={dueCount > 0 ? 'btn-primary text-xs' : 'btn text-xs'}
           title="Spaced-repetition cards drilling individual positions"
         >
-          Cards {dueCount > 0 ? `(${dueCount})` : ''}
-        </Link>
-        <Link
-          to={`/repertoire/${rep.id}/lines`}
-          className="btn text-xs"
-          title="Legacy line picker (kept for backwards-compat)"
-        >
-          Lines
+          {dueCount > 0 ? `Review due (${dueCount})` : 'Review (no cards due)'}
         </Link>
         <button
           type="button"
