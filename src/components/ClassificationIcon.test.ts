@@ -71,4 +71,32 @@ describe('<ClassificationIcon>', () => {
     expect(props.height).toBe(32);
     expect(props.className).toBe('opacity-50');
   });
+
+  it('keys the SVG by classification so React remounts on change', () => {
+    // Mobile-review-icon-color regression guard. When the icon
+    // switches classifications (e.g. user navigates from an
+    // `inaccuracy` ply to a `best` ply), React previously reused the
+    // existing `<svg>` and diff'd its children — but the children are
+    // heterogeneous across classifications (a single `<path>` for
+    // `best`, a `<rect>`+`<circle>` pair for `excellent`, four
+    // elements for `inaccuracy`/`blunder`). On iOS Safari and
+    // Android Chrome that produced a one-frame paint where the
+    // *previous* glyph appeared inside the *new* badge background,
+    // matching the user's "the colour of the previous icon affects
+    // the current" report. Forcing a stable per-classification key
+    // on the `<svg>` makes React unmount + remount the subtree so
+    // every paint is atomic. This test pins that contract — flipping
+    // it to a constant or removing it would silently re-introduce
+    // the bug.
+    for (const c of CLASSIFICATION_ORDER) {
+      const el = ClassificationIcon({ classification: c }) as ReactElement;
+      expect(el.key, `ClassificationIcon(${c}).key`).toBe(c);
+    }
+    // And every distinct classification produces a distinct key —
+    // otherwise the remount-on-change semantics break.
+    const keys = CLASSIFICATION_ORDER.map(
+      (c) => (ClassificationIcon({ classification: c }) as ReactElement).key,
+    );
+    expect(new Set(keys).size).toBe(keys.length);
+  });
 });

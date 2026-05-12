@@ -45,6 +45,21 @@ export function ClassificationIcon({
   const path = ICON_PATHS[classification];
   return (
     <svg
+      // `key` on the <svg> forces React to unmount + remount when the
+      // classification changes. Without it, switching classifications
+      // re-uses the same `<svg>` and just diffs its children — but the
+      // children are heterogeneous across classifications (some are
+      // single `<path>`s, others are `<rect>`+`<circle>` fragments),
+      // and we hit a rendering glitch on iOS Safari / Android Chrome
+      // where the previous classification's glyph briefly painted
+      // *inside* the new classification's coloured badge background
+      // (the "previous icon's color affects the current" symptom the
+      // user reported during mobile review). Forcing a remount keeps
+      // every paint atomic: bg + glyph always come from the same
+      // classification. Cost: one extra DOM node per icon transition,
+      // which is irrelevant — there's at most one badge on screen at a
+      // time and the move list is virtualised.
+      key={classification}
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 24 24"
       width={size}
