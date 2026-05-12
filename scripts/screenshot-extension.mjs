@@ -439,7 +439,7 @@ async function capturePromptShot(ctx) {
   const page = await ctx.newPage();
   await page.setViewportSize(VIEWPORT);
 
-  // Stub the chess.com URL — same trick as test-extension.mjs.
+  // Stub the chess.com URL — same trick as scripts/test/integration/extension.mjs.
   await page.route('https://www.chess.com/**', async (route) => {
     if (route.request().resourceType() === 'document') {
       return route.fulfill({

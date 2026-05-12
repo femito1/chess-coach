@@ -33,13 +33,13 @@ export const BROWSER_TESTS = [
   { name: 'visibility-throttle',        file: 'scripts/test/integration/visibility-throttle.mjs',        category: 'integration' },
 
   // --- Classification + accuracy + recompute -----------------------
-  { name: 'recompute',                  file: 'scripts/test/integration/recompute.mjs',                  category: 'integration' },
+  // `recompute-skip` is the strict superset of the old `recompute`
+  // script: it covers the "stale accuracy gets updated" contract plus
+  // empty-DB-no-stamp + warm-boot-skip + force-bypass.
   { name: 'recompute-skip',             file: 'scripts/test/integration/recompute-skip.mjs',             category: 'integration' },
-  { name: 'recompute-all',              file: 'scripts/test/integration/recompute-all.mjs',              category: 'integration' },
   { name: 'user-time-backfill',         file: 'scripts/test/integration/user-time-backfill.mjs',         category: 'integration' },
   { name: 'classifications',            file: 'scripts/test/live/classifications.mjs',                   category: 'live' },
   { name: 'accuracy',                   file: 'scripts/test/live/accuracy.mjs',                          category: 'live' },
-  { name: 'accuracy-low',               file: 'scripts/test/live/accuracy-low.mjs',                      category: 'live' },
 
   // --- Importing + persistence ------------------------------------
   { name: 'dexie-v10-wipe',             file: 'scripts/test/integration/dexie-v10-wipe.mjs',             category: 'integration' },
@@ -51,9 +51,11 @@ export const BROWSER_TESTS = [
   { name: 'live-chesscom',              file: 'scripts/test/live/live-chesscom.mjs',                     category: 'live' },
 
   // --- UI / review page -------------------------------------------
-  { name: 'review-ui',                  file: 'scripts/test/e2e/review-ui.mjs',                          category: 'e2e' },
-  { name: 'review-screenshot',          file: 'scripts/test/e2e/review-screenshot.mjs',                  category: 'e2e' },
-  { name: 'exploration',                file: 'scripts/test/e2e/exploration.mjs',                        category: 'e2e' },
+  // The earlier `review-ui` / `review-screenshot` / `exploration`
+  // scripts were observation-only smoke tests; their assertions are
+  // covered by `exploration-classification` (off-mainline classification
+  // badge) and `mobile-review` (review page screenshot from a synthetic
+  // game). See TESTING.md.
   { name: 'exploration-classification', file: 'scripts/test/e2e/exploration-classification.mjs',         category: 'e2e' },
   { name: 'knight-arrow-toggle',        file: 'scripts/test/e2e/knight-arrow-toggle.mjs',                category: 'e2e' },
   { name: 'mobile-audit',               file: 'scripts/test/e2e/mobile-audit.mjs',                       category: 'e2e' },

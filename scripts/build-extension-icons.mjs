@@ -267,7 +267,8 @@ async function main() {
   }
   // Single source of truth: the same KNIGHT_16 grid drives the web
   // app's favicon. Anyone updating the silhouette only edits one
-  // file and re-runs `npm run extension:icons`.
+  // file and re-runs `node scripts/build-extension-icons.mjs`
+  // (or `npm run extension:build`, which calls it first).
   await fs.mkdir(path.dirname(OUT_FAVICON), { recursive: true });
   const svg = renderFaviconSvg();
   await fs.writeFile(OUT_FAVICON, svg);

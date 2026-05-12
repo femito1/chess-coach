@@ -16,7 +16,12 @@
 // confirmation.
 //
 // Run from the repo root:
-//   node scripts/test-extension.mjs
+//   node scripts/test/integration/extension.mjs
+//
+// NOT included in the manifest / default `npm test` run, because
+// chrome extensions require a real Chrome head (headless: false in
+// `chromium.launchPersistentContext`) which isn't available in the
+// CI environment. Run on demand when the extension changes.
 //
 // Doesn't require `npm run dev` — the deep link is built but not
 // followed.
@@ -28,8 +33,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const EXT_DIR = path.resolve(__dirname, '..', 'extension');
-const SCREENSHOT_DIR = path.resolve(__dirname, '..');
+const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
+const EXT_DIR = path.join(REPO_ROOT, 'extension');
+const SCREENSHOT_DIR = REPO_ROOT;
 
 /**
  * Synthetic-page templates. Each scenario serves an HTML doc that
