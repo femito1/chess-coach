@@ -25,6 +25,10 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const OUT_DIR = path.join(REPO_ROOT, 'extension', 'icons');
+// Same design also drives the web app's favicon so the browser-tab
+// icon and the chrome-extension icon read as the same product. Vite
+// auto-copies anything in `public/` into `dist/` at the same path.
+const OUT_FAVICON = path.join(REPO_ROOT, 'public', 'favicon.svg');
 
 const SIZES = [16, 32, 48, 128];
 
@@ -209,6 +213,49 @@ function isInsideRoundedRect(x, y, w, h, r) {
   return dx * dx + dy * dy <= r * r;
 }
 
+/**
+ * Render the same KNIGHT_16 design as a vector SVG. Geometry:
+ *   - viewBox is 16×16, one unit per grid cell, so the glyph cells
+ *     line up to integer pixels at favicon sizes (16/32/48/64) and
+ *     stay crisp without anti-alias smudging.
+ *   - Rounded-rect radius is 2 viewbox units (= size/8 at any
+ *     rendered pixel size), matching the PNG renderer's
+ *     `radius = max(2, size/8)` rule.
+ *   - The glyph is a single `<path>` of unit squares, clipped to
+ *     the background rounded rect via a `<clipPath>` so the same
+ *     "glyph is masked at the corners" behaviour as the PNG.
+ *
+ * Why colour-channel `[r, g, b, a]` arrays here: they're the same
+ * tuples the PNG renderer uses; we just translate to CSS hex.
+ */
+function rgbaToHex([r, g, b]) {
+  const h = (n) => n.toString(16).padStart(2, '0');
+  return `#${h(r)}${h(g)}${h(b)}`;
+}
+
+function renderFaviconSvg() {
+  const bg = rgbaToHex(COLOR_BG);
+  const fg = rgbaToHex(COLOR_GLYPH);
+  // Build a single path from all "1" cells: M x y h1 v1 h-1 z per
+  // cell. One path is smaller and faster for the renderer than 100+
+  // individual <rect>s.
+  const cmds = [];
+  for (let gy = 0; gy < 16; gy++) {
+    for (let gx = 0; gx < 16; gx++) {
+      if (KNIGHT_16[gy][gx] !== '1') continue;
+      cmds.push(`M${gx} ${gy}h1v1h-1z`);
+    }
+  }
+  const glyphPath = cmds.join('');
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">`,
+    `<clipPath id="r"><rect width="16" height="16" rx="2" ry="2"/></clipPath>`,
+    `<rect width="16" height="16" rx="2" ry="2" fill="${bg}"/>`,
+    `<path d="${glyphPath}" fill="${fg}" clip-path="url(#r)"/>`,
+    `</svg>`,
+  ].join('') + '\n';
+}
+
 async function main() {
   await fs.mkdir(OUT_DIR, { recursive: true });
   for (const size of SIZES) {
@@ -218,6 +265,16 @@ async function main() {
     // eslint-disable-next-line no-console
     console.log(`  ✓ ${path.relative(REPO_ROOT, out)} (${buf.length} bytes)`);
   }
+  // Single source of truth: the same KNIGHT_16 grid drives the web
+  // app's favicon. Anyone updating the silhouette only edits one
+  // file and re-runs `npm run extension:icons`.
+  await fs.mkdir(path.dirname(OUT_FAVICON), { recursive: true });
+  const svg = renderFaviconSvg();
+  await fs.writeFile(OUT_FAVICON, svg);
+  // eslint-disable-next-line no-console
+  console.log(
+    `  ✓ ${path.relative(REPO_ROOT, OUT_FAVICON)} (${Buffer.byteLength(svg)} bytes)`,
+  );
 }
 
 main().catch((err) => {

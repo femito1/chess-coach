@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "test:extension": "node scripts/test-extension.mjs",
     "extension:icons": "node scripts/build-extension-icons.mjs",
+    "extension:screenshots": "node scripts/screenshot-extension.mjs",
     "extension:build": "node scripts/build-extension-icons.mjs && node scripts/build-extension.mjs"
   },
   "dependencies": {
