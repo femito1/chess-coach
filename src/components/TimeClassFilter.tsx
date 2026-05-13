@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import type {
   TimeClass,
   TimeClassFilter,
@@ -7,9 +8,9 @@ import { TIME_CLASS_ORDER } from '@/db/schema';
 import {
   availableTimeClasses,
   isAllTimeClasses,
-  labelFor,
   toggleTimeClass,
 } from '@/lib/timeClass';
+import { tTimeClass } from '@/i18n/chess';
 
 /**
  * Multi-select chip bar for picking one or more time controls.
@@ -55,6 +56,7 @@ export function TimeClassChips({
    *  time classes with zero items so the bar doesn't grow stale UI. */
   available: Array<{ timeClass?: string }>;
 }) {
+  const { t } = useTranslation();
   const present = availableTimeClasses(available);
   // Always render currently-selected chips even if their bucket is
   // momentarily empty (e.g. the user has zero rapid games right now
@@ -123,11 +125,11 @@ export function TimeClassChips({
 
   return (
     <div className="flex flex-wrap gap-1 items-center">
-      <Chip label="All" active={allActive} onClick={onAllClick} />
+      <Chip label={t('timeClass.all')} active={allActive} onClick={onAllClick} />
       {chipsToRender.map((tc) => (
         <Chip
           key={tc}
-          label={labelFor(tc)}
+          label={tTimeClass(t, tc)}
           active={chipActive(tc)}
           onClick={() => onChipClick(tc)}
         />
@@ -177,6 +179,7 @@ export function TimeClassFilterSelect({
   available: Array<{ timeClass?: string }>;
   allowAll?: boolean;
 }) {
+  const { t } = useTranslation();
   const present = availableTimeClasses(available);
   const options: TimeClass[] =
     value !== 'all' && !present.includes(value as TimeClass)
@@ -189,10 +192,10 @@ export function TimeClassFilterSelect({
       value={value}
       onChange={(e) => onChange(e.target.value as TimeClassFilter)}
     >
-      {allowAll && <option value="all">All time controls</option>}
+      {allowAll && <option value="all">{t('timeClass.allTimeControls')}</option>}
       {options.map((tc) => (
         <option key={tc} value={tc}>
-          {labelFor(tc)}
+          {tTimeClass(t, tc)}
         </option>
       ))}
     </select>

@@ -224,6 +224,25 @@ export interface Settings {
    *  field). Not indexed, so no Dexie version bump is required —
    *  same pattern as `onboardingCompletedAt`. */
   extensionPromoDismissedAt?: number;
+  /** User-selected UI language. One of the `SupportedLocale` values
+   *  in `src/i18n/index.ts` (today: `'en' | 'pt-BR'`). When undefined
+   *  the i18n LanguageDetector falls back to navigator.language and
+   *  then English. We store as a free-form string rather than a typed
+   *  enum so adding a new locale doesn't require a schema migration —
+   *  the runtime guard in `isSupportedLocale` rejects unknown values
+   *  and falls back to detection. Not indexed; no Dexie version bump
+   *  required (same pattern as `onboardingCompletedAt`).
+   *
+   *  Persistence layering: the localStorage entry written by the
+   *  language picker is the load-bearing layer (read synchronously
+   *  during i18next init before React mounts, so the very first paint
+   *  is in the right language). This Dexie field is the secondary
+   *  source-of-truth that will sync across devices once Phase 2 ships;
+   *  for now it's mirrored from localStorage by the picker, and a
+   *  one-shot hydration pass writes it back to localStorage on app
+   *  boot so a freshly-installed device picks up the cloud-side
+   *  preference once Settings finishes loading. */
+  locale?: string;
 }
 
 /* =======================================================================

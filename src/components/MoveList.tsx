@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { MoveEval, Classification } from '@/db/schema';
 import { ClassificationIcon } from './ClassificationIcon';
+import { tClassification } from '@/i18n/chess';
 
 export interface MoveListProps {
   moves: MoveEval[];
@@ -23,6 +25,7 @@ const classToneClass: Record<Classification, string> = {
 };
 
 export function MoveList({ moves, currentPly, onSelect, explorationFromPly }: MoveListProps) {
+  const { t } = useTranslation();
   const activeRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -58,7 +61,7 @@ export function MoveList({ moves, currentPly, onSelect, explorationFromPly }: Mo
       className="card font-mono text-sm divide-y divide-border/40 max-h-[70vh] overflow-y-auto overscroll-contain"
     >
       {rows.length === 0 && (
-        <div className="text-text-muted text-center py-6">No moves analyzed yet.</div>
+        <div className="text-text-muted text-center py-6">{t('review.moveListEmpty')}</div>
       )}
       {rows.map((row) => {
         const ply = (row.white ?? row.black)?.ply ?? 0;
@@ -90,6 +93,7 @@ function MoveCell({
   onSelect: (ply: number) => void;
   activeRef: React.MutableRefObject<HTMLButtonElement | null>;
 }) {
+  const { t } = useTranslation();
   if (!move) return <span className="flex-1" />;
   const isCurrent = move.ply === currentPly;
   const tone = classToneClass[move.classification];
@@ -101,7 +105,7 @@ function MoveCell({
       className={`flex-1 text-left px-1.5 py-0.5 rounded ${tone} ${
         isCurrent ? 'bg-accent/20' : 'hover:bg-bg-raised'
       }`}
-      title={`${move.classification} · eval ${formatCp(move.evalCpAfter)}`}
+      title={`${tClassification(t, move.classification)} · eval ${formatCp(move.evalCpAfter)}`}
     >
       {move.san}
       <ClassificationIcon

@@ -5,9 +5,11 @@ import type { Config as CgConfig } from 'chessground/config';
 import type { Color as CgColor, Key } from 'chessground/types';
 import type { DrawShape } from 'chessground/draw';
 import { Chess, type Square } from 'chess.js';
+import { useTranslation } from 'react-i18next';
 import type { Classification } from '@/db/schema';
 import { PRIMARY_BOARD_MAX_PX } from './BoardFrame';
 import { ClassificationIcon } from './ClassificationIcon';
+import { tClassification } from '@/i18n/chess';
 
 /** Available brushes for `<Board arrows={...} />`. The first four mirror
  *  chessground's built-ins and respect any user theme; `engineBest` is a
@@ -143,6 +145,7 @@ export function Board({
   onMove,
   highlightSquares = [],
 }: BoardProps) {
+  const { t } = useTranslation();
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const api = useRef<CgApi | null>(null);
@@ -715,7 +718,7 @@ export function Board({
           <ClassificationIcon
             classification={lastMoveClassification}
             size={18}
-            aria-label={lastMoveClassification}
+            aria-label={tClassification(t, lastMoveClassification)}
           />
         </BadgeOverlay>
       )}

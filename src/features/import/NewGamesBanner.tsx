@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { getSettings, type Settings } from '@/db/schema';
 import { listImportRecordsFor, recordImport } from '@/db/imports';
 import { fetchArchives, fetchMonth, parseArchiveUrl } from '@/api/chesscom';
@@ -76,6 +78,7 @@ const CHECKING_GRACE_MS = 700;
 const DONE_AUTO_HIDE_MS = 6000;
 
 export function NewGamesBanner() {
+  const { t } = useTranslation();
   const [state, setState] = useState<State>({ kind: 'hidden' });
   const [showCheckingUi, setShowCheckingUi] = useState(false);
   const startedRef = useRef(false);
@@ -85,8 +88,8 @@ export function NewGamesBanner() {
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    void boot(setState, setShowCheckingUi);
-  }, []);
+    void boot(setState, setShowCheckingUi, t);
+  }, [t]);
 
   // Auto-hide the "Imported N — analysis running" success after a few
   // seconds. The user already saw their action succeed; pinning the
@@ -153,22 +156,20 @@ function BannerIcon({ kind }: { kind: State['kind'] }) {
 }
 
 function BannerCopy({ state }: { state: State }) {
+  const { t } = useTranslation();
   if (state.kind === 'checking') {
     return (
-      <div className="font-medium text-text">Checking Chess.com for new games…</div>
+      <div className="font-medium text-text">{t('newGamesBanner.checking')}</div>
     );
   }
   if (state.kind === 'prompting') {
     return (
       <>
         <div className="font-medium text-text">
-          {state.count === 1
-            ? '1 new game on Chess.com'
-            : `${state.count} new games on Chess.com`}
+          {t('newGamesBanner.newGame', { count: state.count })}
         </div>
         <p className="text-text-muted mt-0.5 text-xs sm:text-sm">
-          Import &amp; analyze them now? Analysis runs in the background — you
-          can keep using the app.
+          {t('newGamesBanner.newGameDesc')}
         </p>
       </>
     );
@@ -177,10 +178,10 @@ function BannerCopy({ state }: { state: State }) {
     return (
       <>
         <div className="font-medium text-text">
-          Importing… {state.done}/{state.total} game{state.total === 1 ? '' : 's'}
+          {t('newGamesBanner.importing', { done: state.done, total: state.total, count: state.total })}
         </div>
         <p className="text-text-muted mt-0.5 text-xs sm:text-sm">
-          Analysis will start automatically as games land.
+          {t('newGamesBanner.importingDesc')}
         </p>
       </>
     );
@@ -189,8 +190,8 @@ function BannerCopy({ state }: { state: State }) {
     return (
       <div className="font-medium text-text">
         {state.added > 0
-          ? `Imported ${state.added} new game${state.added === 1 ? '' : 's'} — analysis is running.`
-          : 'All caught up.'}
+          ? t('newGamesBanner.imported', { count: state.added })
+          : t('newGamesBanner.allCaughtUp')}
       </div>
     );
   }
@@ -199,8 +200,8 @@ function BannerCopy({ state }: { state: State }) {
       <>
         <div className="font-medium text-text">
           {state.count > 0
-            ? `Couldn't import the ${state.count} new game${state.count === 1 ? '' : 's'}`
-            : `Couldn't check Chess.com`}
+            ? t('newGamesBanner.couldNotImport', { count: state.count })
+            : t('newGamesBanner.couldNotCheck')}
         </div>
         <p className="text-text-muted mt-0.5 break-words text-xs sm:text-sm">
           {state.message}
@@ -220,6 +221,7 @@ function MobileCloseButton({
   state: State;
   setState: SetState;
 }) {
+  const { t } = useTranslation();
   if (state.kind !== 'prompting' && state.kind !== 'error' && state.kind !== 'done') {
     return null;
   }
@@ -235,7 +237,7 @@ function MobileCloseButton({
         }
         setState({ kind: 'hidden' });
       }}
-      aria-label="Dismiss"
+      aria-label={t('newGamesBanner.ariaDismiss')}
     >
       <span aria-hidden className="text-base leading-none">×</span>
     </button>
@@ -249,6 +251,7 @@ function BannerActions({
   state: State;
   setState: SetState;
 }) {
+  const { t } = useTranslation();
   // Buttons are full-width on phones (one per row) and inline-right
   // on >= sm. The 36 px-tall (`h-9`) targets match the existing
   // hamburger / chip conventions in the app.
@@ -262,9 +265,9 @@ function BannerActions({
         <button
           type="button"
           className={`${baseBtn} border-accent/60 bg-accent/20 text-accent hover:bg-accent/30 font-medium`}
-          onClick={() => void doImport(state.count, state.archiveUrls, setState)}
+          onClick={() => void doImport(state.count, state.archiveUrls, setState, t)}
         >
-          Import &amp; analyze
+          {t('newGamesBanner.importAndAnalyze')}
         </button>
         <button
           type="button"
@@ -274,7 +277,7 @@ function BannerActions({
             setState({ kind: 'hidden' });
           }}
         >
-          Not now
+          {t('newGamesBanner.notNow')}
         </button>
       </div>
     );
@@ -285,17 +288,17 @@ function BannerActions({
         <button
           type="button"
           className={`${baseBtn} border-border bg-bg-soft text-text-muted hover:text-text`}
-          onClick={() => void doImport(state.count, state.archiveUrls, setState)}
+          onClick={() => void doImport(state.count, state.archiveUrls, setState, t)}
           disabled={state.count <= 0}
         >
-          Try again
+          {t('newGamesBanner.tryAgain')}
         </button>
         <button
           type="button"
           className={`hidden sm:inline-flex ${baseBtn} border-border bg-bg-soft text-text-muted hover:text-text`}
           onClick={() => setState({ kind: 'hidden' })}
         >
-          Dismiss
+          {t('newGamesBanner.dismiss')}
         </button>
       </div>
     );
@@ -323,6 +326,7 @@ function BannerActions({
 async function boot(
   setState: SetState,
   setShowCheckingUi: (b: boolean) => void,
+  t: TFunction,
 ): Promise<void> {
   let settings: Settings;
   try {
@@ -366,7 +370,7 @@ async function boot(
   });
   if (!ok) return;
 
-  await runCheck(username, latestRecord, setState, setShowCheckingUi);
+  await runCheck(username, latestRecord, setState, setShowCheckingUi, t);
 }
 
 async function runCheck(
@@ -374,6 +378,7 @@ async function runCheck(
   latestRecord: { archiveUrl: string; year: number; month: number; gameCount: number; importedAt: number },
   setState: SetState,
   setShowCheckingUi: (b: boolean) => void,
+  _t: TFunction,
 ): Promise<void> {
   // Show a spinner only if the check takes more than ~700 ms, so a
   // hot-cache "no new games" path stays invisible even on the first
@@ -455,6 +460,7 @@ async function doImport(
   expectedCount: number,
   archiveUrls: string[],
   setState: SetState,
+  t: TFunction,
 ): Promise<void> {
   setState({ kind: 'importing', total: archiveUrls.length, done: 0 });
 
@@ -474,7 +480,7 @@ async function doImport(
   if (!username) {
     setState({
       kind: 'error',
-      message: 'No Chess.com username configured. Open the Import page to set one.',
+      message: t('newGamesBanner.noUsernameError'),
       count: expectedCount,
       archiveUrls,
     });

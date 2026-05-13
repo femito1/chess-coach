@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import { useEffectiveAuth, useEffectiveUser } from '@/lib/testAuth';
 import { useSupabase } from '@/lib/supabase';
 import {
@@ -36,6 +37,7 @@ import { runProfileSync } from '@/features/auth/useProfileSync';
  * `PASS4_PLAN.md § Pass 4.5`.
  */
 export function OnboardingPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { userId } = useEffectiveAuth();
   const { user } = useEffectiveUser();
@@ -90,7 +92,7 @@ export function OnboardingPage() {
           <span className="text-accent">♞</span> Chess Coach
         </h1>
         <p className="text-sm text-text-muted mt-2">
-          Let&rsquo;s get your games imported and analyzed.
+          {t('onboarding.tagline')}
         </p>
       </div>
 
@@ -141,10 +143,11 @@ export function OnboardingPage() {
 }
 
 function Stepper({ current }: { current: 'username' | 'preset' | 'importing' }) {
+  const { t } = useTranslation();
   const steps: Array<{ id: 'username' | 'preset' | 'importing'; label: string }> = [
-    { id: 'username', label: 'Username' },
-    { id: 'preset', label: 'Choose import' },
-    { id: 'importing', label: 'Import' },
+    { id: 'username', label: t('onboarding.stepUsername') },
+    { id: 'preset', label: t('onboarding.stepImport') },
+    { id: 'importing', label: t('onboarding.stepImporting') },
   ];
   const currentIdx = steps.findIndex((s) => s.id === current);
   return (
@@ -213,6 +216,7 @@ function UsernameStep({
   onConfirm: (u: string) => void | Promise<void>;
   onSkip: () => void | Promise<void>;
 }) {
+  const { t } = useTranslation();
   const { user } = useEffectiveUser();
   const [suggestion, setSuggestion] = useState<ChessComPlayerProfile | null>(null);
   const [suggestionPending, setSuggestionPending] = useState(true);
@@ -284,22 +288,21 @@ function UsernameStep({
   return (
     <div className="card p-6 space-y-5">
       <div>
-        <h2 className="text-lg font-medium">What&rsquo;s your Chess.com username?</h2>
+        <h2 className="text-lg font-medium">{t('onboarding.username.title')}</h2>
         <p className="text-sm text-text-muted mt-1">
-          We&rsquo;ll pull your games via the public Chess.com API. Nothing
-          gets posted on your behalf.
+          {t('onboarding.username.subtitle')}
         </p>
       </div>
 
       {suggestionPending && (
-        <div className="text-sm text-text-muted">Looking for likely matches…</div>
+        <div className="text-sm text-text-muted">{t('onboarding.username.looking')}</div>
       )}
 
       {!suggestionPending && suggestion && (
         <PlayerCard
           profile={suggestion}
-          headline="Is this you?"
-          actionLabel={confirming ? 'Confirming…' : 'Yes, that’s me'}
+          headline={t('onboarding.username.isThisYou')}
+          actionLabel={confirming ? t('onboarding.username.confirming') : t('onboarding.username.yesItsMe')}
           onAction={() => confirm(suggestion.username)}
           disabled={confirming}
         />
@@ -307,14 +310,14 @@ function UsernameStep({
 
       {!suggestionPending && !suggestion && (
         <div className="text-sm text-text-muted">
-          Couldn&rsquo;t guess your handle. No worries — type it in below.
+          {t('onboarding.username.couldntGuess')}
         </div>
       )}
 
       <div className="border-t border-border pt-4 space-y-3">
         <label className="block text-sm">
           <div className="mb-1 text-text-muted">
-            {suggestion ? 'Or enter a different username' : 'Enter your Chess.com username'}
+            {suggestion ? t('onboarding.username.orEnter') : t('onboarding.username.enter')}
           </div>
           <input
             className="input"
@@ -326,18 +329,18 @@ function UsernameStep({
         </label>
 
         {manualResult.kind === 'pending' && (
-          <div className="text-xs text-text-muted">Checking…</div>
+          <div className="text-xs text-text-muted">{t('onboarding.username.checking')}</div>
         )}
         {manualResult.kind === 'notFound' && (
           <div className="text-xs text-blunder">
-            No Chess.com user found with that name.
+            {t('onboarding.username.notFound')}
           </div>
         )}
         {manualResult.kind === 'found' && (
           <PlayerCard
             profile={manualResult.profile}
-            headline={`Found "${manualResult.profile.username}"`}
-            actionLabel={confirming ? 'Confirming…' : 'Use this account'}
+            headline={t('onboarding.username.found', { username: manualResult.profile.username })}
+            actionLabel={confirming ? t('onboarding.username.confirming') : t('onboarding.username.useThis')}
             onAction={() => confirm(manualResult.profile.username)}
             disabled={confirming}
           />
@@ -350,9 +353,9 @@ function UsernameStep({
           className="text-xs text-text-muted hover:text-text"
           onClick={() => void onSkip()}
         >
-          Skip — I&rsquo;ll do this later
+          {t('onboarding.username.skip')}
         </button>
-        <span className="text-xs text-text-muted">Step 1 of 2</span>
+        <span className="text-xs text-text-muted">{t('onboarding.username.step1of2')}</span>
       </div>
     </div>
   );
@@ -371,6 +374,7 @@ function PlayerCard({
   onAction: () => void;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation();
   const country = profile.country
     ? profile.country.replace('https://api.chess.com/pub/country/', '')
     : null;
@@ -392,7 +396,7 @@ function PlayerCard({
         <div className="text-xs text-text-muted">{headline}</div>
         <div className="font-medium truncate">{profile.username}</div>
         <div className="text-xs text-text-muted truncate">
-          {[profile.name, country].filter(Boolean).join(' · ') || 'Chess.com player'}
+          {[profile.name, country].filter(Boolean).join(' · ') || t('onboarding.username.playerCardFallback')}
         </div>
       </div>
       <button
@@ -413,16 +417,16 @@ function PlayerCard({
 
 interface PresetOption {
   id: '1m' | '3m' | '12m' | 'all';
-  label: string;
+  labelKey: string;
   months: number;
   emphasis?: boolean;
 }
 
 const PRESETS: PresetOption[] = [
-  { id: '1m', label: 'Last month', months: 1, emphasis: true },
-  { id: '3m', label: 'Last 3 months', months: 3 },
-  { id: '12m', label: 'Last 12 months', months: 12 },
-  { id: 'all', label: 'All games', months: Infinity },
+  { id: '1m', labelKey: 'onboarding.preset.lastMonth', months: 1, emphasis: true },
+  { id: '3m', labelKey: 'onboarding.preset.last3Months', months: 3 },
+  { id: '12m', labelKey: 'onboarding.preset.last12Months', months: 12 },
+  { id: 'all', labelKey: 'onboarding.preset.allGames', months: Infinity },
 ];
 
 interface ArchiveCount {
@@ -443,6 +447,7 @@ function PresetStep({
   onStart: (months: number) => void | Promise<void>;
   onSkipImport: () => void | Promise<void>;
 }) {
+  const { t } = useTranslation();
   const [archives, setArchives] = useState<ArchiveCount[] | null>(null);
   const [archivesError, setArchivesError] = useState<string | null>(null);
   const [msPerGame, setMsPerGame] = useState<number | null>(null);
@@ -555,17 +560,19 @@ function PresetStep({
   return (
     <div className="card p-6 space-y-5">
       <div>
-        <h2 className="text-lg font-medium">How much history should we import?</h2>
+        <h2 className="text-lg font-medium">{t('onboarding.preset.title')}</h2>
         <p className="text-sm text-text-muted mt-1">
-          Importing for <span className="text-text">{username}</span>. Each
-          game gets analyzed in the background after it lands — you can
-          start using the app right away.
+          <Trans
+            i18nKey="onboarding.preset.intro"
+            values={{ username }}
+            components={{ 1: <span className="text-text" /> }}
+          />
         </p>
       </div>
 
       {archivesError && (
         <div className="text-sm text-blunder border border-blunder/40 rounded-md p-3 bg-blunder/10">
-          Couldn&rsquo;t load Chess.com archives: {archivesError}
+          {t('onboarding.preset.fetchError', { error: archivesError })}
         </div>
       )}
 
@@ -592,20 +599,20 @@ function PresetStep({
               }`}
             >
               <div className="flex items-center justify-between">
-                <span className="font-medium">{p.label}</span>
+                <span className="font-medium">{t(p.labelKey)}</span>
                 {p.emphasis && !isChosen && (
                   <span className="text-[10px] uppercase tracking-wider text-accent">
-                    Recommended
+                    {t('onboarding.preset.recommended')}
                   </span>
                 )}
               </div>
               <div className="text-xs text-text-muted mt-2">
                 {games == null
-                  ? 'Loading…'
-                  : `${exact ? '' : '≈'}${games.toLocaleString()} game${games === 1 ? '' : 's'}`}
+                  ? t('onboarding.preset.loading')
+                  : t(exact ? 'onboarding.preset.gameCount' : 'onboarding.preset.approxGameCount', { count: games, games: games.toLocaleString() })}
               </div>
               <div className="text-xs text-text-muted">
-                {estimate ? `Analysis: ${estimate.label}` : ' '}
+                {estimate ? t('onboarding.preset.analysisLabel', { label: estimate.label }) : ' '}
               </div>
             </button>
           );
@@ -614,8 +621,7 @@ function PresetStep({
 
       {msPerGame === null && (
         <div className="text-[11px] text-text-muted">
-          Calibrating engine speed in the background — estimates may
-          tighten up in a moment.
+          {t('onboarding.preset.calibrating')}
         </div>
       )}
 
@@ -625,7 +631,7 @@ function PresetStep({
           className="text-xs text-text-muted hover:text-text"
           onClick={() => void onSkipImport()}
         >
-          Skip import for now
+          {t('onboarding.preset.skipImport')}
         </button>
         <button
           type="button"
@@ -633,7 +639,7 @@ function PresetStep({
           disabled={starting || archives === null}
           onClick={() => void start()}
         >
-          {starting ? 'Starting…' : 'Start import'}
+          {starting ? t('onboarding.preset.starting') : t('onboarding.preset.startImport')}
         </button>
       </div>
     </div>
@@ -699,6 +705,7 @@ function ImportingStep({
   done: { added: number; skipped: number } | null;
   onDone: () => void | Promise<void>;
 }) {
+  const { t } = useTranslation();
   // Auto-advance once the import wraps. The 600ms delay lets the user
   // briefly see the success summary instead of being whisked away the
   // millisecond the last archive lands.
@@ -713,27 +720,35 @@ function ImportingStep({
   return (
     <div className="card p-6 space-y-4">
       <h2 className="text-lg font-medium">
-        {done ? 'Imported!' : 'Importing your games…'}
+        {done ? t('onboarding.importing.imported') : t('onboarding.importing.title')}
       </h2>
       <p className="text-sm text-text-muted">
-        Pulling games for <span className="text-text">{username}</span> from
-        Chess.com. Analysis will run in the background once this finishes.
+        <Trans
+          i18nKey="onboarding.importing.intro"
+          values={{ username }}
+          components={{ 1: <span className="text-text" /> }}
+        />
       </p>
       {!done ? (
         <div className="flex items-center gap-3 text-sm">
           <span className="inline-block w-3 h-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
-          <span className="text-text-muted">This usually takes a few seconds.</span>
+          <span className="text-text-muted">{t('onboarding.importing.usuallyTakes')}</span>
         </div>
       ) : (
         <div className="text-sm">
-          Added <span className="text-good">{done.added}</span>
+          <Trans
+            i18nKey="onboarding.importing.added"
+            values={{ added: done.added }}
+            components={{ good: <span className="text-good" /> }}
+          />
           {done.skipped > 0 && (
-            <>
-              , skipped <span className="text-text-muted">{done.skipped}</span>
-              &nbsp;duplicates
-            </>
+            <Trans
+              i18nKey="onboarding.importing.skipped"
+              values={{ skipped: done.skipped }}
+              components={{ neutral: <span className="text-text-muted" /> }}
+            />
           )}
-          .
+          {t('onboarding.importing.period')}
         </div>
       )}
     </div>

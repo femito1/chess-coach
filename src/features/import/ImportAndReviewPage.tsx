@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { importGameByUrl } from '@/features/import/auto';
@@ -51,6 +52,7 @@ import { EngineCockpit } from '@/engine/EngineCockpit';
  *     stuck games up next boot.
  */
 export function ImportAndReviewPage() {
+  const { t } = useTranslation();
   const [params] = useSearchParams();
   const navigate = useNavigate();
 
@@ -73,16 +75,14 @@ export function ImportAndReviewPage() {
     let cancelled = false;
     void (async () => {
       try {
-        if (!gameUrl) throw new Error('Missing `url` parameter');
+        if (!gameUrl) throw new Error(t('importAndReview.missingUrl'));
         let u = usernameParam.trim();
         if (!u) {
           const settings = await getSettings();
           u = settings.username;
         }
         if (!u) {
-          throw new Error(
-            'No Chess.com username found. Open Settings → set a username, then retry the link.',
-          );
+          throw new Error(t('importAndReview.noUsernameSettings'));
         }
         const { gameId } = await importGameByUrl(u, gameUrl, { endTime });
         if (cancelled) return;
@@ -115,10 +115,10 @@ export function ImportAndReviewPage() {
       setPhase('error');
       setErrorMsg(
         game.analysisError ??
-          'Stockfish errored while analyzing this game. Open the dashboard and click Retry to try again.',
+          t('importAndReview.engineErrored'),
       );
     }
-  }, [game, importedGameId, navigate]);
+  }, [game, importedGameId, navigate, t]);
 
   if (phase === 'error') {
     return <ErrorCard message={errorMsg} />;
@@ -129,9 +129,9 @@ export function ImportAndReviewPage() {
       <div className="flex min-h-[60vh] items-center justify-center">
         <div className="rounded-lg border border-border bg-bg-soft px-8 py-6 text-center max-w-sm">
           <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          <h1 className="text-lg font-semibold">Pulling your game from Chess.com…</h1>
+          <h1 className="text-lg font-semibold">{t('importAndReview.fetchingTitle')}</h1>
           <p className="mt-1 text-sm text-text-muted">
-            Just the archive download — analysis starts immediately after.
+            {t('importAndReview.fetchingSubtitle')}
           </p>
         </div>
       </div>
@@ -142,8 +142,8 @@ export function ImportAndReviewPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-3">
       <EngineCockpit
-        title="Analyzing your game"
-        subtitle="Stockfish is going through every move. You'll be auto-redirected when it's done — or jump in early."
+        title={t('importAndReview.analyzingTitle')}
+        subtitle={t('importAndReview.analyzingSubtitle')}
         gameId={importedGameId ?? undefined}
         pgn={game?.pgn}
       />
@@ -156,7 +156,7 @@ export function ImportAndReviewPage() {
             navigate(`/review/${importedGameId}`, { replace: true })
           }
         >
-          Skip to review now
+          {t('importAndReview.skipToReview')}
         </button>
       </div>
     </div>
@@ -164,21 +164,22 @@ export function ImportAndReviewPage() {
 }
 
 function ErrorCard({ message }: { message: string | null }) {
+  const { t } = useTranslation();
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <div className="max-w-md rounded-lg border border-border bg-bg-soft px-6 py-5">
-        <h1 className="text-lg font-semibold text-text">Couldn&rsquo;t import that game</h1>
+        <h1 className="text-lg font-semibold text-text">{t('importAndReview.errorTitle')}</h1>
         <p className="mt-2 text-sm text-text-muted">
-          {message ?? 'Unknown error.'}
+          {message ?? t('importAndReview.unknownError')}
         </p>
         <p className="mt-4 text-sm">
           <a
             href="/import"
             className="text-accent underline-offset-2 hover:underline"
           >
-            Open the manual import page
+            {t('importAndReview.openManualImport')}
           </a>
-          {' '}— if the game is in a recent month it&rsquo;ll show up there.
+          {t('importAndReview.errorPostlude')}
         </p>
       </div>
     </div>

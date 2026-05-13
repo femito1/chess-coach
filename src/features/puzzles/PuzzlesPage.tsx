@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   db,
@@ -18,13 +19,15 @@ import { useLiveEval } from '@/features/review/LiveEval';
 import { regeneratePuzzles } from './generate';
 import { applyPuzzleMove } from './solve';
 import { gradeSrs, isDue, newSrsState, summarizeIntervals, type Grade } from '@/srs/sm2';
-import { MOTIF_LABEL, MOTIF_ORDER } from '@/engine/motifs';
+import { MOTIF_ORDER } from '@/engine/motifs';
+import { tMotifLabel } from '@/i18n/chess';
 import { TimeClassChips } from '@/components/TimeClassFilter';
 import { gameMatchesSelection } from '@/lib/timeClass';
 
 type Filter = 'due' | 'all' | 'unsolved';
 
 export function PuzzlesPage() {
+  const { t } = useTranslation();
   const puzzles = useLiveQuery(() => db.puzzles.toArray(), []);
   const [filter, setFilter] = useState<Filter>('due');
   const [motifFilter, setMotifFilter] = useState<Motif | 'all'>('all');
@@ -46,10 +49,10 @@ export function PuzzlesPage() {
       const s = await getSettings();
       setGenerating(true);
       const n = await regeneratePuzzles(s.puzzleMinSwingCp ?? 200);
-      setGenerateMsg(n === 0 ? 'No puzzle-worthy mistakes found yet.' : `Generated ${n} puzzles.`);
+      setGenerateMsg(n === 0 ? t('puzzles.noMistakesFound') : t('puzzles.generated', { count: n }));
       setGenerating(false);
     })();
-  }, [puzzles]);
+  }, [puzzles, t]);
 
   const filtered = useMemo(() => {
     if (!puzzles) return [];
@@ -88,7 +91,7 @@ export function PuzzlesPage() {
     const s = await getSettings();
     const n = await regeneratePuzzles(s.puzzleMinSwingCp ?? 200);
     setGenerateMsg(
-      n === 0 ? 'No new puzzles; all candidates already exist.' : `Added ${n} new puzzles.`,
+      n === 0 ? t('puzzles.noNew') : t('puzzles.added', { count: n }),
     );
     setGenerating(false);
   }
@@ -97,15 +100,13 @@ export function PuzzlesPage() {
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Puzzles</h1>
-          <p className="text-xs text-text-muted">
-            Generated from your own blunders, mistakes, and misses.
-          </p>
+          <h1 className="text-xl font-semibold tracking-tight">{t('puzzles.title')}</h1>
+          <p className="text-xs text-text-muted">{t('puzzles.subtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
           {generateMsg && <span className="text-xs text-text-muted">{generateMsg}</span>}
           <button type="button" className="btn text-xs" onClick={onGenerate} disabled={generating}>
-            {generating ? 'Generating…' : 'Regenerate'}
+            {generating ? t('puzzles.generating') : t('puzzles.regenerate')}
           </button>
         </div>
       </div>
@@ -121,24 +122,24 @@ export function PuzzlesPage() {
           value={filter}
           onChange={(e) => setFilter(e.target.value as Filter)}
         >
-          <option value="due">Due now</option>
-          <option value="unsolved">Never solved</option>
-          <option value="all">All</option>
+          <option value="due">{t('puzzles.filters.dueNow')}</option>
+          <option value="unsolved">{t('puzzles.filters.neverSolved')}</option>
+          <option value="all">{t('puzzles.filters.all')}</option>
         </select>
         <select
           className="input w-auto"
           value={motifFilter}
           onChange={(e) => setMotifFilter(e.target.value as Motif | 'all')}
         >
-          <option value="all">All motifs</option>
+          <option value="all">{t('puzzles.filters.allMotifs')}</option>
           {availableMotifs.map((m) => (
             <option key={m} value={m}>
-              {MOTIF_LABEL[m]}
+              {tMotifLabel(t, m)}
             </option>
           ))}
         </select>
         <div className="ml-auto text-text-muted self-center">
-          {filtered.length} puzzle{filtered.length === 1 ? '' : 's'}
+          {t('puzzles.count', { count: filtered.length })}
         </div>
       </div>
 
@@ -152,9 +153,7 @@ export function PuzzlesPage() {
         />
       ) : (
         <div className="card p-8 text-center text-text-muted">
-          {puzzles && puzzles.length > 0
-            ? 'Nothing due. Check back later or switch to "All".'
-            : 'No puzzles yet. Import and analyze some games first.'}
+          {puzzles && puzzles.length > 0 ? t('puzzles.nothingDue') : t('puzzles.noneYet')}
         </div>
       )}
     </div>
@@ -170,6 +169,7 @@ function PuzzleSolver({
   onGraded: () => void;
   hasNext: boolean;
 }) {
+  const { t } = useTranslation();
   const [fen, setFen] = useState(puzzle.fen);
   const [solvedIdx, setSolvedIdx] = useState(0);
   /** Status drives `viewOnly` on the board. We collapse the old
@@ -360,7 +360,7 @@ function PuzzleSolver({
             idx={playbackIdx}
             onIdxChange={setPlaybackIdx}
             onClose={() => setShowSolution(false)}
-            title="Solution playthrough"
+            title={t('puzzles.solver.solutionPlaythrough')}
           />
         )}
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -376,33 +376,29 @@ function PuzzleSolver({
                 {attempts > 0 ? (
                   <>
                     <span className="text-blunder">
-                      Not quite &mdash; try again
-                      {solvedIdx > 0 ? ' from here.' : '.'}
+                      {t('puzzles.solver.notQuite')}
+                      {solvedIdx > 0 ? t('puzzles.solver.fromHere') : '.'}
                     </span>
                     <span className="ml-2">
-                      {attempts} wrong so far
+                      {t('puzzles.solver.wrongCount', { count: attempts })}
                     </span>
                   </>
                 ) : (
-                  <>
-                    {solverColor === 'white' ? 'White' : 'Black'} to move. Find the best line.
-                  </>
+                  <>{t('puzzles.solver.toMove', { color: solverColor === 'white' ? t('common.white') : t('common.black') })}</>
                 )}
                 {hintShown && (
-                  <span className="ml-2 text-accent">· Hint: move the highlighted piece</span>
+                  <span className="ml-2 text-accent">{t('puzzles.solver.hint')}</span>
                 )}
               </span>
             )}
             {status === 'wrong' && (
-              <span className="text-blunder">
-                Not quite. Full solution shown below.
-              </span>
+              <span className="text-blunder">{t('puzzles.solver.wrongFull')}</span>
             )}
             {status === 'solved' && (
               <span className="text-good">
-                Solved!
+                {t('puzzles.solver.solved')}
                 {hintUsed && (
-                  <span className="ml-2 text-text-muted text-xs">(with a hint)</span>
+                  <span className="ml-2 text-text-muted text-xs">{t('puzzles.solver.withHint')}</span>
                 )}
               </span>
             )}
@@ -418,12 +414,12 @@ function PuzzleSolver({
                 solve-or-step-on-it. */}
             {status === 'solving' && !hintShown && (
               <button type="button" className="btn text-xs" onClick={showHint}>
-                Hint
+                {t('puzzles.solver.hint_btn')}
               </button>
             )}
             {status === 'solving' && mistakeMade && (
               <button type="button" className="btn text-xs" onClick={revealAndFail}>
-                Reveal
+                {t('puzzles.solver.reveal')}
               </button>
             )}
             {/* "Restart" is a secondary, less-prominent action so the
@@ -435,9 +431,9 @@ function PuzzleSolver({
                 type="button"
                 className="btn text-xs text-text-muted"
                 onClick={restart}
-                title="Restart the puzzle from the beginning"
+                title={t('puzzles.solver.restartTitle')}
               >
-                Restart
+                {t('puzzles.solver.restart')}
               </button>
             )}
           </div>
@@ -447,11 +443,11 @@ function PuzzleSolver({
       <aside className="space-y-3">
         <div className="card p-3 space-y-2 text-sm">
           <div className="flex justify-between items-baseline">
-            <div className="text-xs uppercase tracking-wide text-text-muted">Source</div>
-            <div className="text-xs text-text-muted">swing {(puzzle.swingCp / 100).toFixed(1)}</div>
+            <div className="text-xs uppercase tracking-wide text-text-muted">{t('puzzles.solver.source')}</div>
+            <div className="text-xs text-text-muted">{t('puzzles.solver.swing', { value: (puzzle.swingCp / 100).toFixed(1) })}</div>
           </div>
           <div>
-            vs <span className="font-medium">{puzzle.opponent}</span>
+            {t('puzzles.solver.vs')} <span className="font-medium">{puzzle.opponent}</span>
           </div>
           <div className="flex flex-wrap gap-1">
             {puzzle.motifs.map((m) => (
@@ -459,20 +455,20 @@ function PuzzleSolver({
                 key={m}
                 className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-bg-raised text-text-muted"
               >
-                {MOTIF_LABEL[m]}
+                {tMotifLabel(t, m)}
               </span>
             ))}
           </div>
           <div className="text-xs text-text-muted">
             {puzzle.srs
-              ? `Due every ${summarizeIntervals(puzzle.srs.intervalDays)}, ease ${puzzle.srs.ease.toFixed(2)}, ${puzzle.srs.lapses} lapses`
-              : 'Never reviewed.'}
+              ? t('puzzles.solver.dueEvery', { intervals: summarizeIntervals(puzzle.srs.intervalDays), ease: puzzle.srs.ease.toFixed(2), lapses: puzzle.srs.lapses })
+              : t('puzzles.solver.neverReviewed')}
           </div>
         </div>
 
         {status === 'solved' && !showSolution && (
           <div className="card p-3 space-y-1 text-sm">
-            <div className="text-xs uppercase tracking-wide text-text-muted">Solution</div>
+            <div className="text-xs uppercase tracking-wide text-text-muted">{t('puzzles.solver.solution')}</div>
             <div className="font-mono text-text">
               {puzzle.solutionSan.map((s, i) => (
                 <span
@@ -492,7 +488,7 @@ function PuzzleSolver({
                 setPlaybackIdx(0);
               }}
             >
-              Replay step-by-step
+              {t('puzzles.solver.replayStepByStep')}
             </button>
           </div>
         )}
@@ -505,18 +501,18 @@ function PuzzleSolver({
             scheduling, without offering Hard/Good/Easy. */}
         {status === 'solved' && (
           <div className="card p-3 space-y-2">
-            <div className="text-xs uppercase tracking-wide text-text-muted">How well did you know it?</div>
+            <div className="text-xs uppercase tracking-wide text-text-muted">{t('puzzles.solver.howWell')}</div>
             <div className={`grid gap-2 ${hintUsed ? 'grid-cols-3' : 'grid-cols-2'}`}>
-              <GradeButton label="Again" grade="again" onGrade={grade} tone="bad" />
-              <GradeButton label="Hard" grade="hard" onGrade={grade} />
-              <GradeButton label="Good" grade="good" onGrade={grade} />
+              <GradeButton label={t('puzzles.solver.again')} grade="again" onGrade={grade} tone="bad" />
+              <GradeButton label={t('puzzles.solver.hard')} grade="hard" onGrade={grade} />
+              <GradeButton label={t('puzzles.solver.good')} grade="good" onGrade={grade} />
               {!hintUsed && (
-                <GradeButton label="Easy" grade="easy" onGrade={grade} tone="good" />
+                <GradeButton label={t('puzzles.solver.easy')} grade="easy" onGrade={grade} tone="good" />
               )}
             </div>
             {hintUsed && (
               <div className="text-[11px] text-text-muted">
-                &ldquo;Easy&rdquo; is hidden because you used a hint.
+                {t('puzzles.solver.easyHidden')}
               </div>
             )}
           </div>
@@ -524,18 +520,17 @@ function PuzzleSolver({
         {status === 'wrong' && showSolution && (
           <div className="card p-3 space-y-2">
             <div className="text-xs uppercase tracking-wide text-text-muted">
-              Lapse logged
+              {t('puzzles.solver.lapseLogged')}
             </div>
             <div className="text-xs text-text-muted">
-              You revealed the answer, so this puzzle gets re-queued for
-              another go soon.
+              {t('puzzles.solver.lapseDesc')}
             </div>
             <button
               type="button"
               className="btn border-blunder/40 text-blunder hover:bg-blunder/10 w-full"
               onClick={() => grade('again')}
             >
-              Schedule again
+              {t('puzzles.solver.scheduleAgain')}
             </button>
           </div>
         )}

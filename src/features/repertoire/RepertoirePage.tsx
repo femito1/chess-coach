@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Repertoire } from '@/db/schema';
@@ -20,6 +21,7 @@ import { deleteRepertoire, dueCards } from './store';
  * the family flow.
  */
 export function RepertoirePage() {
+  const { t } = useTranslation();
   const reps = useLiveQuery(
     () => db.repertoires.orderBy('updatedAt').reverse().toArray(),
     [],
@@ -40,35 +42,35 @@ export function RepertoirePage() {
     <div className="space-y-4">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Repertoire</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{t('repertoire.title')}</h1>
           <p className="text-sm text-text-muted">
-            One repertoire per opening family. Add lines from the{' '}
+            {t('repertoire.subtitle1')}
             <Link to="/openings" className="text-accent hover:underline">
-              openings library
-            </Link>{' '}
-            to build a family&rsquo;s repertoire, then drill it on the{' '}
-            <Link to="/practice" className="text-accent hover:underline">
-              practice page
+              {t('repertoire.subtitle2')}
             </Link>
-            .
+            {t('repertoire.subtitle3')}
+            <Link to="/practice" className="text-accent hover:underline">
+              {t('repertoire.subtitle4')}
+            </Link>
+            {t('repertoire.subtitlePeriod')}
           </p>
         </div>
         <Link to="/openings" className="btn-primary text-xs">
-          Browse openings
+          {t('repertoire.browseOpenings')}
         </Link>
       </div>
 
       {!reps ? (
-        <div className="card p-8 text-center text-text-muted">Loading…</div>
+        <div className="card p-8 text-center text-text-muted">{t('repertoire.loading')}</div>
       ) : reps.length === 0 ? (
         <div className="card p-8 text-center text-text-muted space-y-2">
-          <div className="text-lg">No repertoires yet.</div>
+          <div className="text-lg">{t('repertoire.noRepertoires')}</div>
           <p className="text-sm">
-            Pick an opening family and add a few lines from the{' '}
+            {t('repertoire.noRepertoiresHelp1')}
             <Link to="/openings" className="text-accent hover:underline">
-              openings library
-            </Link>{' '}
-            — the repertoire is created for you.
+              {t('repertoire.noRepertoiresHelp2')}
+            </Link>
+            {t('repertoire.noRepertoiresHelp3')}
           </p>
         </div>
       ) : (
@@ -93,6 +95,7 @@ function RepertoireCard({
   rep: Repertoire;
   dueCount: number;
 }) {
+  const { t } = useTranslation();
   const isFamily = rep.kind === 'family' || (rep.kind == null && Boolean(rep.family));
   return (
     <div className="card p-4 flex flex-col gap-3">
@@ -106,62 +109,51 @@ function RepertoireCard({
                 : 'bg-black text-white border-black'
             }`}
           >
-            {rep.color}
+            {rep.color === 'white' ? t('common.white') : t('common.black')}
           </span>
         </div>
         {!isFamily && (
           <div className="text-[11px] text-text-muted italic mt-0.5">
-            Custom (not bound to a single family)
+            {t('repertoire.card.custom')}
           </div>
         )}
         {rep.description && (
           <div className="text-xs text-text-muted mt-1">{rep.description}</div>
         )}
         <div className="text-xs text-text-muted mt-1">
-          Updated {new Date(rep.updatedAt).toLocaleDateString()}
+          {t('repertoire.card.updated', { date: new Date(rep.updatedAt).toLocaleDateString() })}
           {dueCount > 0 && (
             <>
               {' \u00b7 '}
-              <span className="text-accent">{dueCount} due</span>
+              <span className="text-accent">{t('repertoire.card.due', { count: dueCount })}</span>
             </>
           )}
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        {/*
-         * Two distinct study modes, surfaced as the only buttons on
-         * the card. "Drill lines" is the default — play through the
-         * prep one move at a time. "Review due" is the spaced-repetition
-         * scheduler over individual positions; it leads with the due
-         * count because that's the actual user-facing question
-         * ("what's due today?"). The legacy "Lines" button — which
-         * duplicated Drill-lines with a clunkier picker — was removed
-         * 2026-05-12; its only unique feature, the family-aggregate
-         * stats card, was ported into the practice page's right aside.
-         */}
         <Link
           to={`/practice?rep=${encodeURIComponent(rep.id)}`}
           className="btn-primary text-xs"
-          title="Play through the lines in this repertoire"
+          title={t('repertoire.card.drillLinesTitle')}
         >
-          Drill lines
+          {t('repertoire.card.drillLines')}
         </Link>
         <Link
           to={`/repertoire/${rep.id}/train`}
           className={dueCount > 0 ? 'btn-primary text-xs' : 'btn text-xs'}
-          title="Spaced-repetition cards drilling individual positions"
+          title={t('repertoire.card.reviewTitle')}
         >
-          {dueCount > 0 ? `Review due (${dueCount})` : 'Review (no cards due)'}
+          {dueCount > 0 ? t('repertoire.card.reviewDue', { count: dueCount }) : t('repertoire.card.reviewNoDue')}
         </Link>
         <button
           type="button"
           className="btn text-xs ml-auto text-blunder hover:text-blunder"
           onClick={() => {
-            if (confirm(`Delete repertoire "${rep.name}"?`))
+            if (confirm(t('repertoire.card.confirmDelete', { name: rep.name })))
               void deleteRepertoire(rep.id);
           }}
         >
-          Delete
+          {t('repertoire.card.delete')}
         </button>
       </div>
     </div>

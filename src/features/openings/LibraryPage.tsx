@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Board } from '@/components/Board';
@@ -24,6 +25,7 @@ type ColorFilter = 'all' | Color;
 const FAMILIES = getFamilies();
 
 export function LibraryPage() {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [colorFilter, setColorFilter] = useState<ColorFilter>('all');
   const [selectedFamily, setSelectedFamily] = useState<string | null>(null);
@@ -69,11 +71,9 @@ export function LibraryPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Openings Library</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{t('openings.title')}</h1>
         <p className="text-sm text-text-muted">
-          Browse {FAMILIES.reduce((n, f) => n + f.count, 0)} preloaded lines from the
-          Lichess opening database. Pick any line to preview it, then add it to a
-          repertoire for spaced-repetition drilling.
+          {t('openings.subtitle', { count: FAMILIES.reduce((n, f) => n + f.count, 0) })}
         </p>
       </div>
 
@@ -81,25 +81,25 @@ export function LibraryPage() {
         <aside className="card p-3 space-y-3">
           <input
             className="input"
-            placeholder='Search family or ECO (e.g. "Najdorf", "B90")'
+            placeholder={t('openings.searchPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
 
           <div className="flex gap-1 text-xs">
             <ColorFilterButton
-              label="Both sides"
+              label={t('openings.bothSides')}
               active={colorFilter === 'all'}
               onClick={() => setColorFilter('all')}
             />
             <ColorFilterButton
-              label="As White"
+              label={t('openings.asWhite')}
               active={colorFilter === 'white'}
               onClick={() => setColorFilter('white')}
               color="white"
             />
             <ColorFilterButton
-              label="As Black"
+              label={t('openings.asBlack')}
               active={colorFilter === 'black'}
               onClick={() => setColorFilter('black')}
               color="black"
@@ -109,7 +109,7 @@ export function LibraryPage() {
           {searchResults.length > 0 && (
             <div className="space-y-1 border-b border-border pb-2">
               <div className="text-xs uppercase tracking-wide text-text-muted">
-                Search results
+                {t('openings.searchResults')}
               </div>
               <ul className="max-h-48 overflow-auto divide-y divide-border scrollable pr-2">
                 {searchResults.map((r) => (
@@ -133,7 +133,7 @@ export function LibraryPage() {
 
           <div>
             <div className="text-xs uppercase tracking-wide text-text-muted mb-1">
-              Families ({filteredFamilies.length})
+              {t('openings.families', { count: filteredFamilies.length })}
             </div>
             <ul className="max-h-[60vh] overflow-auto divide-y divide-border scrollable pr-2">
               {filteredFamilies.map((f) => (
@@ -180,15 +180,8 @@ export function LibraryPage() {
             />
           ) : (
             <div className="card p-8 text-sm text-text-muted text-center">
-              {/* Wording uses "above" on phones (where the family list
-                  stacks above the preview pane via the
-                  `lg:grid-cols-[340px_minmax(0,1fr)]` collapse) and
-                  "to the left" on desktop. `lg:` matches the breakpoint
-                  the parent grid uses so the copy always agrees with
-                  the layout the user sees. */}
-              Pick a family <span className="lg:hidden">above</span>
-              <span className="hidden lg:inline">to the left</span>, or
-              search by name / ECO.
+              {t('openings.pickFamilyAbove')} <span className="lg:hidden">{t('openings.above')}</span>
+              <span className="hidden lg:inline">{t('openings.toTheLeft')}</span>{t('openings.orSearch')}
             </div>
           )}
         </section>
@@ -206,6 +199,7 @@ function VariationsList({
   variations: VariationEntry[];
   onPick: (line: OpeningLine) => void;
 }) {
+  const { t } = useTranslation();
   const color = familyColor(family);
   return (
     <div className="card p-3 space-y-3">
@@ -215,18 +209,15 @@ function VariationsList({
           <h2 className="text-lg font-medium truncate">{family}</h2>
         </div>
         <div className="text-xs text-text-muted shrink-0">
-          {variations.length} line{variations.length === 1 ? '' : 's'}
+          {t('openings.linesCount', { count: variations.length })}
         </div>
       </div>
       <div className="text-sm text-text-muted">
-        {color === 'white'
-          ? 'You play this opening with the White pieces. Pick a variation below to see how the line continues, then add it to your White repertoire.'
-          : 'You play this defense with the Black pieces — White starts, and you respond. Pick a variation below to see how it goes, then add it to your Black repertoire.'}
+        {color === 'white' ? t('openings.youPlayWhite') : t('openings.youPlayBlack')}
       </div>
       <div className="flex justify-between items-center gap-2 flex-wrap">
         <div className="text-xs text-text-muted">
-          Click a variation to preview, or seed a repertoire with every line
-          below in one click.
+          {t('openings.clickVariation')}
         </div>
         <AddFamilyButton family={family} defaultColor={color} />
       </div>
@@ -242,10 +233,10 @@ function VariationsList({
                 {v.eco}
               </span>
               <span className="flex-1 truncate">
-                {v.variation || <em className="text-text-muted">Main line</em>}
+                {v.variation || <em className="text-text-muted">{t('openings.mainLine')}</em>}
               </span>
               <span className="text-xs text-text-muted shrink-0">
-                {v.plies} ply
+                {t('openings.plyCount', { count: v.plies })}
               </span>
             </button>
           </li>
@@ -300,6 +291,7 @@ function LinePreview({
   ply: number;
   onPly: (ply: number) => void;
 }) {
+  const { t } = useTranslation();
   const hint = colorHint(line);
 
   return (
@@ -314,9 +306,7 @@ function LinePreview({
         >
           <ColorBadge color={hint} />
           <div className="text-sm">
-            {hint === 'white'
-              ? 'You are White. You play this opening to attack with these moves.'
-              : "You are Black. White starts; you respond with this defense."}
+            {hint === 'white' ? t('openings.youAreWhite') : t('openings.youAreBlack')}
           </div>
         </div>
         <BoardFrame
@@ -340,7 +330,7 @@ function LinePreview({
           </button>
           <button className="btn" onClick={() => onPly(fens.length - 1)}>⏭</button>
           <div className="ml-auto text-text-muted text-xs">
-            Ply {ply}/{fens.length - 1}
+            {t('openings.ply', { idx: ply, total: fens.length - 1 })}
           </div>
         </div>
       </div>
@@ -352,7 +342,7 @@ function LinePreview({
             <span className="font-mono">{line.eco}</span>
           </div>
           <div className="text-sm">
-            {line.variation || <em className="text-text-muted">Main line</em>}
+            {line.variation || <em className="text-text-muted">{t('openings.mainLine')}</em>}
           </div>
         </div>
 
@@ -375,9 +365,10 @@ function MoveListPreview({
   currentPly: number;
   onPly: (ply: number) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="card p-3 space-y-1">
-      <div className="text-xs uppercase tracking-wide text-text-muted">Moves</div>
+      <div className="text-xs uppercase tracking-wide text-text-muted">{t('openings.moves')}</div>
       <div className="flex flex-wrap gap-x-2 gap-y-0.5 font-mono text-sm">
         {sans.map((san, i) => {
           const moveNumber = Math.floor(i / 2) + 1;
@@ -422,6 +413,7 @@ function AddToRepertoirePanel({
   line: OpeningLine;
   defaultColor: Color;
 }) {
+  const { t } = useTranslation();
   const family = line.family;
   const color = familyColor(family);
   const [status, setStatus] = useState<{ msg: string; repId?: string } | null>(null);
@@ -437,8 +429,8 @@ function AddToRepertoirePanel({
       setStatus({
         msg:
           added > 0
-            ? `Added ${added} new move${added === 1 ? '' : 's'} to "${family}".`
-            : `Already in "${family}" — nothing to add.`,
+            ? t('openings.addedNew', { count: added, family })
+            : t('openings.alreadyIn', { family }),
         repId: rep.id,
       });
     } finally {
@@ -450,13 +442,12 @@ function AddToRepertoirePanel({
     <div className="card p-3 space-y-2">
       <div className="flex items-center justify-between">
         <div className="text-xs uppercase tracking-wide text-text-muted">
-          Add to {family}
+          {t('openings.addTo', { family })}
         </div>
         <ColorBadge color={color} size="xs" />
       </div>
       <p className="text-xs text-text-muted">
-        Lines are grouped by opening family — every Sicilian line goes
-        into your Sicilian Defense repertoire.
+        {t('openings.addLineDesc')}
       </p>
       <button
         type="button"
@@ -464,7 +455,7 @@ function AddToRepertoirePanel({
         onClick={handleAdd}
         disabled={busy}
       >
-        {busy ? 'Adding…' : `Add line`}
+        {busy ? t('openings.adding') : t('openings.addLine')}
       </button>
       {status && (
         <div className="text-xs text-text-muted flex items-center justify-between gap-2 flex-wrap">
@@ -474,7 +465,7 @@ function AddToRepertoirePanel({
               to="/practice"
               className="text-accent hover:underline shrink-0"
             >
-              Practice →
+              {t('openings.practice')}
             </Link>
           )}
         </div>
@@ -489,6 +480,7 @@ function AddFamilyButton({
   family: string;
   defaultColor?: Color;
 }) {
+  const { t } = useTranslation();
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [msg, setMsg] = useState<{ text: string; repId?: string } | null>(null);
 
@@ -524,17 +516,17 @@ function AddFamilyButton({
     });
     setProgress(null);
     setMsg({
-      text: `Added ${total} new moves across "${family}".`,
+      text: t('openings.addedAcrossFamily', { count: total, family }),
       repId: rep.id,
     });
   }
 
   const disabled = progress !== null || fullyCovered;
   const label = progress
-    ? `Adding ${progress.done}/${progress.total}…`
+    ? t('openings.addingProgress', { done: progress.done, total: progress.total })
     : fullyCovered
-      ? 'All lines added'
-      : `Add every line of "${family}"`;
+      ? t('openings.allLinesAdded')
+      : t('openings.addEveryLine', { family });
 
   return (
     <div className="flex flex-col gap-2 w-full">
@@ -551,7 +543,7 @@ function AddFamilyButton({
           <span>{msg.text}</span>
           {msg.repId && (
             <Link to="/practice" className="text-accent hover:underline shrink-0">
-              Practice →
+              {t('openings.practice')}
             </Link>
           )}
         </div>

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { listGamesLight, requeueGame } from '@/db/queries';
 import type {
@@ -14,6 +15,7 @@ type ResultFilter = 'all' | GameResult;
 type StatusFilter = 'all' | AnalysisStatus;
 
 export function GamesPage() {
+  const { t } = useTranslation();
   // Throttled + light projection: the page only needs metadata
   // (opponent, opening, result, accuracy, time class) for the table
   // rows. Without `pgn` the per-refire allocation drops from ~2 MB to
@@ -45,15 +47,15 @@ export function GamesPage() {
     <div className="space-y-4">
       <div className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Games</h1>
-          <p className="text-sm text-text-muted">{filtered.length} of {games?.length ?? 0} games</p>
+          <h1 className="text-2xl font-semibold tracking-tight">{t('games.title')}</h1>
+          <p className="text-sm text-text-muted">{t('games.filteredCount', { filtered: filtered.length, total: games?.length ?? 0 })}</p>
         </div>
       </div>
 
       <div className="card p-3 flex flex-wrap gap-2 items-center text-sm">
         <input
           className="input flex-1 min-w-[200px]"
-          placeholder="Search opponent, opening…"
+          placeholder={t('games.searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -62,21 +64,21 @@ export function GamesPage() {
           value={resultFilter}
           onChange={(e) => setResultFilter(e.target.value as ResultFilter)}
         >
-          <option value="all">All results</option>
-          <option value="win">Wins</option>
-          <option value="loss">Losses</option>
-          <option value="draw">Draws</option>
+          <option value="all">{t('games.filters.allResults')}</option>
+          <option value="win">{t('games.filters.wins')}</option>
+          <option value="loss">{t('games.filters.losses')}</option>
+          <option value="draw">{t('games.filters.draws')}</option>
         </select>
         <select
           className="input w-auto"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
         >
-          <option value="all">Any status</option>
-          <option value="pending">Pending</option>
-          <option value="running">Running</option>
-          <option value="done">Analyzed</option>
-          <option value="error">Error</option>
+          <option value="all">{t('games.filters.anyStatus')}</option>
+          <option value="pending">{t('games.filters.pending')}</option>
+          <option value="running">{t('games.filters.running')}</option>
+          <option value="done">{t('games.filters.analyzed')}</option>
+          <option value="error">{t('games.filters.error')}</option>
         </select>
         <TimeClassChips
           selection={timeClassSelection}
@@ -93,13 +95,13 @@ export function GamesPage() {
         <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-bg-raised text-text-muted text-xs">
             <tr>
-              <th className="text-left p-2 font-medium">Date</th>
-              <th className="text-left p-2 font-medium">Opponent</th>
-              <th className="text-left p-2 font-medium">Opening</th>
-              <th className="text-left p-2 font-medium">Result</th>
-              <th className="text-left p-2 font-medium">Time</th>
-              <th className="text-left p-2 font-medium">Accuracy</th>
-              <th className="text-left p-2 font-medium">Status</th>
+              <th className="text-left p-2 font-medium">{t('games.table.date')}</th>
+              <th className="text-left p-2 font-medium">{t('games.table.opponent')}</th>
+              <th className="text-left p-2 font-medium">{t('games.table.opening')}</th>
+              <th className="text-left p-2 font-medium">{t('games.table.result')}</th>
+              <th className="text-left p-2 font-medium">{t('games.table.time')}</th>
+              <th className="text-left p-2 font-medium">{t('games.table.accuracy')}</th>
+              <th className="text-left p-2 font-medium">{t('games.table.status')}</th>
               <th></th>
             </tr>
           </thead>
@@ -121,7 +123,7 @@ export function GamesPage() {
                       <span className="text-text-muted"> ({g.opponentRating})</span>
                     )}
                     <div className="text-xs text-text-muted">
-                      you as {g.userColor}
+                      {t('games.table.youAs', { color: g.userColor === 'white' ? t('common.white').toLowerCase() : t('common.black').toLowerCase() })}
                       {g.userRating ? ` (${g.userRating})` : ''}
                     </div>
                   </td>
@@ -143,11 +145,11 @@ export function GamesPage() {
                         className="btn text-xs py-0.5 px-2 mr-1"
                         onClick={() => requeueGame(g.id)}
                       >
-                        Retry
+                        {t('games.retry')}
                       </button>
                     )}
                     <Link to={`/review/${g.id}`} className="btn-primary text-xs py-0.5 px-2">
-                      Review
+                      {t('games.review')}
                     </Link>
                   </td>
                 </tr>
@@ -156,7 +158,7 @@ export function GamesPage() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={8} className="p-8 text-center text-text-muted">
-                  No games match your filters.
+                  {t('games.noMatches')}
                 </td>
               </tr>
             )}
@@ -168,17 +170,19 @@ export function GamesPage() {
 }
 
 function ResultBadge({ result }: { result: GameResult }) {
+  const { t } = useTranslation();
   const cls =
     result === 'win'
       ? 'bg-good/15 text-good'
       : result === 'loss'
         ? 'bg-blunder/15 text-blunder'
         : 'bg-bg-raised text-text-muted';
-  const label = result === 'unknown' ? '?' : result[0].toUpperCase() + result.slice(1);
+  const label = t(`games.result.${result}`);
   return <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{label}</span>;
 }
 
 function StatusBadge({ status, error }: { status: AnalysisStatus; error?: string }) {
+  const { t } = useTranslation();
   const map: Record<AnalysisStatus, string> = {
     pending: 'bg-bg-raised text-text-muted',
     running: 'bg-accent/15 text-accent',
@@ -187,7 +191,7 @@ function StatusBadge({ status, error }: { status: AnalysisStatus; error?: string
   };
   return (
     <span className={`px-2 py-0.5 rounded text-xs ${map[status]}`} title={error ?? ''}>
-      {status}
+      {t(`games.status.${status}`)}
     </span>
   );
 }

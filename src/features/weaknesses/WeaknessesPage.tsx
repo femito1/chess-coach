@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import {
   db,
@@ -9,17 +10,17 @@ import {
 import type { Analysis, TimeClassSelection } from '@/db/schema';
 import { listAllGamesLight } from '@/db/queries';
 import { aggregateMistakes, type MistakeRow } from './aggregate';
-import { MOTIF_EXPLANATION, MOTIF_LABEL } from '@/engine/motifs';
 import { TimeClassChips } from '@/components/TimeClassFilter';
 import { Board } from '@/components/Board';
 import { THUMBNAIL_BOARD_MAX_PX } from '@/components/BoardFrame';
 import { EvalBar } from '@/components/EvalBar';
-import { CLASSIFICATION_LABEL } from '@/engine/classify';
-import { gameMatchesSelection, labelForSelection } from '@/lib/timeClass';
+import { gameMatchesSelection } from '@/lib/timeClass';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
+import { tClassification, tMotifExplain, tMotifLabel, tTimeClassSelection } from '@/i18n/chess';
 import { Chess } from 'chess.js';
 
 export function WeaknessesPage() {
+  const { t } = useTranslation();
   // Throttled to 1 s: the analyzer can fire hundreds of `db.games`
   // writes per minute during a queue run. We pull a *light* projection
   // (no PGN) since the aggregator only needs metadata + the analyses
@@ -68,19 +69,20 @@ export function WeaknessesPage() {
   }
 
   if (!games || !analyses) {
-    return <div className="text-text-muted">Loading…</div>;
+    return <div className="text-text-muted">{t('common.loading')}</div>;
   }
 
   const analyzedGames = filteredGames.filter((g) => g.analysisStatus === 'done').length;
+  const filterLabel = tTimeClassSelection(t, filter).toLowerCase();
 
   const header = (
     <div className="flex items-end justify-between gap-4 flex-wrap">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Weaknesses</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{t('weaknesses.title')}</h1>
         <p className="text-sm text-text-muted">
           {analyzedGames === 0
-            ? 'Patterns across your analyzed games — what\u2019s costing you the most points.'
-            : `Patterns across ${analyzedGames} analyzed ${labelForSelection(filter).toLowerCase()} game${analyzedGames === 1 ? '' : 's'} — what\u2019s costing you the most points.`}
+            ? t('weaknesses.subtitleEmpty')
+            : t('weaknesses.subtitle', { count: analyzedGames, label: filterLabel })}
         </p>
       </div>
       <TimeClassChips
@@ -98,24 +100,19 @@ export function WeaknessesPage() {
         {header}
         <div className="card p-8 text-center text-text-muted space-y-2">
           <div className="text-lg">
-            No analyzed {isAll ? '' : labelForSelection(filter).toLowerCase()} games yet.
+            {isAll ? t('weaknesses.noAnalyzed') : t('weaknesses.noAnalyzedFiltered', { label: filterLabel })}
           </div>
           <div className="text-sm">
             {isAll ? (
-              <>
-                <Link to="/import" className="text-accent">
-                  Import some games
-                </Link>{' '}
-                and let the engine finish, then come back.
-              </>
+              <Trans
+                i18nKey="weaknesses.noAnalyzedHelpAll"
+                components={{ lnk: <Link to="/import" className="text-accent" /> }}
+              />
             ) : (
-              <>
-                Try switching the filter above, or{' '}
-                <Link to="/import" className="text-accent">
-                  import more games
-                </Link>
-                .
-              </>
+              <Trans
+                i18nKey="weaknesses.noAnalyzedHelpFilter"
+                components={{ lnk: <Link to="/import" className="text-accent" /> }}
+              />
             )}
           </div>
         </div>
@@ -128,42 +125,38 @@ export function WeaknessesPage() {
       {header}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Total mistakes" value={agg.totalMistakes} />
+        <StatCard label={t('weaknesses.stats.totalMistakes')} value={agg.totalMistakes} />
         <StatCard
-          label="Opening drops"
+          label={t('weaknesses.stats.openingDrops')}
           value={agg.byPhase.opening.count}
           sub={pct(agg.byPhase.opening.avgDrop)}
         />
         <StatCard
-          label="Middlegame drops"
+          label={t('weaknesses.stats.middlegameDrops')}
           value={agg.byPhase.middlegame.count}
           sub={pct(agg.byPhase.middlegame.avgDrop)}
         />
         <StatCard
-          label="Endgame drops"
+          label={t('weaknesses.stats.endgameDrops')}
           value={agg.byPhase.endgame.count}
           sub={pct(agg.byPhase.endgame.avgDrop)}
         />
       </div>
 
       <section className="card p-4">
-        <h2 className="font-medium mb-3">Tactical motifs</h2>
+        <h2 className="font-medium mb-3">{t('weaknesses.tacticalMotifs')}</h2>
         {agg.byMotif.length === 0 ? (
-          <div className="text-sm text-text-muted">
-            No tactical motifs detected yet. The detector runs on newly
-            analyzed games; if you imported games before this update, re-run
-            the analysis from Settings.
-          </div>
+          <div className="text-sm text-text-muted">{t('weaknesses.noMotifsYet')}</div>
         ) : (
           <div className="space-y-3">
             {agg.byMotif.map((m) => (
               <div key={m.motif} className="border border-border rounded-md p-3 bg-bg-raised/30">
                 <div className="flex items-baseline justify-between">
-                  <div className="font-medium">{MOTIF_LABEL[m.motif]}</div>
+                  <div className="font-medium">{tMotifLabel(t, m.motif)}</div>
                   <div className="text-accent font-mono">{m.count}</div>
                 </div>
                 <p className="mt-1 text-xs text-text-muted leading-relaxed">
-                  {MOTIF_EXPLANATION[m.motif]}
+                  {tMotifExplain(t, m.motif)}
                 </p>
                 <ul className="mt-3 divide-y divide-border">
                   {m.examples.map((ex) => (
@@ -180,41 +173,39 @@ export function WeaknessesPage() {
       </section>
 
       <section className="card p-4">
-        <h2 className="font-medium mb-3">Time pressure</h2>
+        <h2 className="font-medium mb-3">{t('weaknesses.timePressure')}</h2>
         <div className="grid grid-cols-2 gap-4 text-sm">
           <TimePressureCard
-            title="In time trouble"
+            title={t('weaknesses.timePressureCardInTrouble')}
             total={agg.byTimePressure.inTrouble.count}
             mistakes={agg.byTimePressure.inTrouble.mistakes}
             rate={agg.byTimePressure.inTrouble.rate}
             bad
           />
           <TimePressureCard
-            title="Normal tempo"
+            title={t('weaknesses.timePressureCardNormal')}
             total={agg.byTimePressure.normal.count}
             mistakes={agg.byTimePressure.normal.mistakes}
             rate={agg.byTimePressure.normal.rate}
           />
         </div>
         <div className="text-xs text-text-muted mt-2">
-          "Time trouble" = under 15 seconds, or under 20% of base time.
+          {t('weaknesses.timePressureFootnote')}
         </div>
       </section>
 
       <section className="card p-4">
-        <h2 className="font-medium mb-3">Openings: worst accuracy</h2>
+        <h2 className="font-medium mb-3">{t('weaknesses.openingsTitle')}</h2>
         {agg.byOpening.length === 0 ? (
-          <div className="text-sm text-text-muted">
-            Not enough data yet. Play or import more games with known openings.
-          </div>
+          <div className="text-sm text-text-muted">{t('weaknesses.openingsEmpty')}</div>
         ) : (
           <table className="w-full text-sm">
             <thead className="text-text-muted text-xs">
               <tr>
-                <th className="text-left p-2 font-medium">Opening</th>
-                <th className="text-right p-2 font-medium">Games</th>
-                <th className="text-right p-2 font-medium">Mistakes</th>
-                <th className="text-right p-2 font-medium">Your avg accuracy</th>
+                <th className="text-left p-2 font-medium">{t('weaknesses.openingsTableOpening')}</th>
+                <th className="text-right p-2 font-medium">{t('weaknesses.openingsTableGames')}</th>
+                <th className="text-right p-2 font-medium">{t('weaknesses.openingsTableMistakes')}</th>
+                <th className="text-right p-2 font-medium">{t('weaknesses.openingsTableYourAcc')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -232,11 +223,9 @@ export function WeaknessesPage() {
       </section>
 
       <section className="card p-4">
-        <h2 className="font-medium mb-3">Recurring blunder squares</h2>
+        <h2 className="font-medium mb-3">{t('weaknesses.recurringSquares')}</h2>
         {agg.recurringSquares.length === 0 ? (
-          <div className="text-sm text-text-muted">
-            No repeated-square patterns yet.
-          </div>
+          <div className="text-sm text-text-muted">{t('weaknesses.noRecurringSquares')}</div>
         ) : (
           <div className="flex flex-wrap gap-2">
             {agg.recurringSquares.slice(0, 12).map((s) => (
@@ -255,11 +244,12 @@ export function WeaknessesPage() {
 }
 
 function StatCard({ label, value, sub }: { label: string; value: number | string; sub?: string }) {
+  const { t } = useTranslation();
   return (
     <div className="card p-4">
       <div className="text-xs text-text-muted">{label}</div>
       <div className="text-2xl font-semibold">{value}</div>
-      {sub && <div className="text-xs text-text-muted">avg drop {sub}</div>}
+      {sub && <div className="text-xs text-text-muted">{t('weaknesses.stats.avgDrop', { pct: sub })}</div>}
     </div>
   );
 }
@@ -277,12 +267,13 @@ function TimePressureCard({
   rate: number;
   bad?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div className={`border rounded-md p-3 ${bad ? 'border-blunder/40 bg-blunder/5' : 'border-border bg-bg-raised/30'}`}>
       <div className="text-xs text-text-muted uppercase tracking-wide">{title}</div>
       <div className="mt-1 text-lg font-semibold">{(rate * 100).toFixed(1)}%</div>
       <div className="text-xs text-text-muted">
-        {mistakes} mistakes across {total} moves
+        {t('weaknesses.timePressureMistakes', { mistakes, total })}
       </div>
     </div>
   );
@@ -313,6 +304,7 @@ function pct(x: number): string {
  * the board exactly on the offending ply).
  */
 function MistakeExample({ row }: { row: MistakeRow }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -322,17 +314,17 @@ function MistakeExample({ row }: { row: MistakeRow }) {
           type="button"
           onClick={() => setExpanded((x) => !x)}
           className="text-text-muted hover:text-text shrink-0 w-5"
-          aria-label={expanded ? 'Collapse example' : 'Expand example'}
-          title={expanded ? 'Collapse' : 'Expand to see the position'}
+          aria-label={expanded ? t('weaknesses.collapseExample') : t('weaknesses.expandExample')}
+          title={expanded ? t('weaknesses.collapse') : t('weaknesses.expandToSeePosition')}
         >
           {expanded ? '▼' : '▶'}
         </button>
         <span className="font-mono w-16 shrink-0">{row.san}</span>
         <span className="truncate flex-1 text-xs text-text-muted">
-          vs {row.opponent}
+          {t('weaknesses.vsOpponent', { opponent: row.opponent })}
           {row.bestMoveSan && (
             <>
-              {' \u00b7 '}engine wanted{' '}
+              {' \u00b7 '}{t('weaknesses.engineWanted')}{' '}
               <span className="font-mono text-good">{row.bestMoveSan}</span>
             </>
           )}
@@ -341,7 +333,7 @@ function MistakeExample({ row }: { row: MistakeRow }) {
           to={buildReviewLink(row)}
           className="text-accent hover:underline shrink-0 text-xs"
         >
-          Review in full →
+          {t('weaknesses.reviewInFull')}
         </Link>
       </div>
       {expanded && (
@@ -376,6 +368,7 @@ function buildReviewLink(row: MistakeRow): string {
 }
 
 function ExpandedMistake({ row }: { row: MistakeRow }) {
+  const { t } = useTranslation();
   // Compute fenAfter (= the position the user *landed on* after their
   // mistake, before the engine's reply) so we can render the played
   // move's last-move highlight cleanly. Falls back to fenBefore when
@@ -413,12 +406,12 @@ function ExpandedMistake({ row }: { row: MistakeRow }) {
   return (
     <div className="bg-bg-soft rounded-md p-3 space-y-2">
       <p className="text-xs text-text-muted leading-relaxed">
-        {row.userColor === 'white' ? 'You played White.' : 'You played Black.'}{' '}
-        On move {Math.ceil(row.ply / 2)}, you played{' '}
+        {row.userColor === 'white' ? t('weaknesses.youPlayedWhite') : t('weaknesses.youPlayedBlack')}{' '}
+        {t('weaknesses.onMovePlayed', { move: Math.ceil(row.ply / 2) })}{' '}
         <span className="font-mono text-blunder font-semibold">{row.san}</span>
         {row.bestMoveSan ? (
           <>
-            {' '}— the engine preferred{' '}
+            {' '}— {t('weaknesses.engineEnginePreferred')}{' '}
             <span className="font-mono text-good font-semibold">
               {row.bestMoveSan}
             </span>
@@ -427,12 +420,12 @@ function ExpandedMistake({ row }: { row: MistakeRow }) {
         ) : (
           '.'
         )}{' '}
-        Classified as <span className="font-medium">
-          {CLASSIFICATION_LABEL[row.classification]}
+        {t('weaknesses.classifiedAs')}{' '}<span className="font-medium">
+          {tClassification(t, row.classification)}
         </span>
         {row.inTimeTrouble && (
           <>
-            {' '}<span className="text-mistake">(played in time trouble)</span>
+            {' '}<span className="text-mistake">{t('weaknesses.playedInTimeTrouble')}</span>
           </>
         )}
         .
@@ -457,9 +450,7 @@ function ExpandedMistake({ row }: { row: MistakeRow }) {
         </div>
       </div>
       <p className="text-[11px] text-text-muted">
-        Eval bar shows the position <em>before</em> your move. The board
-        shows where it landed; the green arrow is what the engine wanted
-        to play.
+        {t('weaknesses.evalBarShows')}
       </p>
     </div>
   );

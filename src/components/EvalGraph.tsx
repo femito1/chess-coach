@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Area,
   AreaChart,
@@ -25,6 +26,7 @@ export interface EvalGraphProps {
 }
 
 export function EvalGraph({ moves, currentPly, onJump }: EvalGraphProps) {
+  const { t } = useTranslation();
   const data = useMemo<Point[]>(() => {
     return moves.map((m) => ({
       ply: m.ply,
@@ -76,10 +78,10 @@ export function EvalGraph({ moves, currentPly, onJump }: EvalGraphProps) {
           />
           <Tooltip
             contentStyle={{ background: '#161a22', border: '1px solid #2a313d', fontSize: 12 }}
-            labelFormatter={(p) => `Move ${Math.ceil(Number(p) / 2)}${Number(p) % 2 === 1 ? '' : '…'}`}
+            labelFormatter={(p) => `${t('review.evalGraphLabels.tooltipMove')} ${Math.ceil(Number(p) / 2)}${Number(p) % 2 === 1 ? '' : '…'}`}
             formatter={(val: number, _name, item: { payload?: Point }) => [
               `${val > 0 ? '+' : ''}${val.toFixed(2)} (${item.payload?.san ?? ''})`,
-              'Eval',
+              t('review.evalGraphLabels.tooltipEval'),
             ]}
           />
           <ReferenceLine y={0} stroke="#2a313d" />

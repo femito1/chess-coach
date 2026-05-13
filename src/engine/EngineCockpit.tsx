@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Chess } from 'chess.js';
+import { useTranslation } from 'react-i18next';
 import {
   useEngineCockpitStore,
   attachCockpit,
@@ -61,12 +62,14 @@ export interface EngineCockpitProps {
 }
 
 export function EngineCockpit({
-  title = 'Stockfish is thinking',
+  title,
   subtitle,
   showBoard = true,
   gameId,
   pgn,
 }: EngineCockpitProps) {
+  const { t } = useTranslation();
+  const resolvedTitle = title ?? t('engineCockpit.defaultTitle');
   // Subscribe to the live cockpit store. attachCockpit() is ref-counted so
   // multiple cockpit instances share a single pool subscription.
   const slots = useEngineCockpitStore((s) => s.slots);
@@ -174,10 +177,10 @@ export function EngineCockpit({
        *  active while the queue grinds through cached positions. */}
       <header className="space-y-1">
         <div className="flex items-baseline justify-between gap-3">
-          <h2 className="text-lg font-semibold">{title}</h2>
+          <h2 className="text-lg font-semibold">{resolvedTitle}</h2>
           {progressTotal > 0 && (
             <span className="text-xs text-text-muted tabular-nums">
-              {progressPly} / {progressTotal} plies
+              {t('engineCockpit.plies', { done: progressPly, total: progressTotal })}
             </span>
           )}
         </div>
@@ -235,6 +238,7 @@ interface CockpitReadoutProps {
 }
 
 function CockpitReadout({ slot, pvLine, cacheDelta, queueRunning }: CockpitReadoutProps) {
+  const { t } = useTranslation();
   // Cache-stats line is always visible during analysis, even when the
   // engine isn't actively searching — that's exactly the case where the
   // user most needs reassurance ("nothing happened on screen, but it
@@ -249,7 +253,7 @@ function CockpitReadout({ slot, pvLine, cacheDelta, queueRunning }: CockpitReado
             <span className="font-semibold text-text-default">
               {cacheDelta.hits}
             </span>{' '}
-            served from cache
+            {t('engineCockpit.servedFromCache')}
           </>
         )}
         {cacheDelta.hits > 0 && cacheDelta.misses > 0 && ' · '}
@@ -258,7 +262,7 @@ function CockpitReadout({ slot, pvLine, cacheDelta, queueRunning }: CockpitReado
             <span className="font-semibold text-text-default">
               {cacheDelta.misses}
             </span>{' '}
-            sent to Stockfish
+            {t('engineCockpit.sentToStockfish')}
           </>
         )}
         {cacheDelta.bookSkips > 0 && (
@@ -267,13 +271,13 @@ function CockpitReadout({ slot, pvLine, cacheDelta, queueRunning }: CockpitReado
             <span className="font-semibold text-text-default">
               {cacheDelta.bookSkips}
             </span>{' '}
-            book skips
+            {t('engineCockpit.bookSkips')}
           </>
         )}
       </p>
     ) : (
       <p className="text-xs text-text-muted">
-        {queueRunning ? 'Crunching the opening…' : 'Warming up the engine…'}
+        {queueRunning ? t('engineCockpit.crunchingOpening') : t('engineCockpit.warmingEngine')}
       </p>
     );
 
@@ -282,8 +286,7 @@ function CockpitReadout({ slot, pvLine, cacheDelta, queueRunning }: CockpitReado
       <div className="space-y-3">
         {cacheLine}
         <p className="text-sm text-text-muted">
-          Stockfish hasn't needed to think yet — your earlier games already
-          taught it about these positions.
+          {t('engineCockpit.noNeed')}
         </p>
       </div>
     );
@@ -291,24 +294,24 @@ function CockpitReadout({ slot, pvLine, cacheDelta, queueRunning }: CockpitReado
 
   const evalLabel =
     slot.scoreMate !== null
-      ? `M${Math.abs(slot.scoreMate)}${slot.scoreMate < 0 ? ' (against side to move)' : ''}`
+      ? `M${Math.abs(slot.scoreMate)}${slot.scoreMate < 0 ? t('engineCockpit.againstSTM') : ''}`
       : slot.scoreCp !== null
         ? `${(slot.scoreCp / 100).toFixed(2)}`
         : '—';
 
   return (
     <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
-      <Stat label="Eval" value={evalLabel} />
-      <Stat label="Depth" value={`${slot.depth}/${slot.requestedDepth}`} />
-      <Stat label="Sel-depth" value={String(slot.seldepth || slot.depth)} />
-      <Stat label="Speed" value={formatNps(slot.nps)} />
-      <Stat label="Nodes" value={formatNodes(slot.nodes)} />
-      <Stat label="Time" value={formatTime(slot.time)} />
+      <Stat label={t('engineCockpit.stat.eval')} value={evalLabel} />
+      <Stat label={t('engineCockpit.stat.depth')} value={`${slot.depth}/${slot.requestedDepth}`} />
+      <Stat label={t('engineCockpit.stat.selDepth')} value={String(slot.seldepth || slot.depth)} />
+      <Stat label={t('engineCockpit.stat.speed')} value={formatNps(slot.nps)} />
+      <Stat label={t('engineCockpit.stat.nodes')} value={formatNodes(slot.nodes)} />
+      <Stat label={t('engineCockpit.stat.time')} value={formatTime(slot.time)} />
       <div className="col-span-2 sm:col-span-2">{cacheLine}</div>
       {pvLine && (
         <div className="col-span-2 sm:col-span-4">
           <dt className="text-xs uppercase tracking-wide text-text-muted">
-            Best line
+            {t('engineCockpit.bestLine')}
           </dt>
           <dd className="font-mono text-sm break-words leading-snug mt-0.5">
             {pvLine}

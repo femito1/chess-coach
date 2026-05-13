@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { SolutionStep } from './SolutionPlayer';
 
 /**
@@ -38,9 +39,11 @@ export function SolutionControls({
   idx,
   onIdxChange,
   onClose,
-  title = 'Solution playthrough',
+  title,
   enabled = true,
 }: SolutionControlsProps) {
+  const { t } = useTranslation();
+  const resolvedTitle = title ?? t('solutionControls.title');
   useEffect(() => {
     if (!enabled) return;
     function onKey(e: KeyboardEvent) {
@@ -67,7 +70,7 @@ export function SolutionControls({
   if (steps.length <= 1) {
     return (
       <div className="card p-3 text-xs text-text-muted">
-        No solution moves to replay.
+        {t('solutionControls.noMoves')}
       </div>
     );
   }
@@ -79,7 +82,7 @@ export function SolutionControls({
     <div className="card p-3 space-y-2">
       <div className="flex items-baseline justify-between gap-2">
         <div className="text-xs uppercase tracking-wide text-text-muted">
-          {title}
+          {resolvedTitle}
         </div>
         <div className="text-[11px] text-text-muted font-mono">
           {idx} / {steps.length - 1}
@@ -93,7 +96,7 @@ export function SolutionControls({
             className="btn text-xs"
             onClick={() => onIdxChange(0)}
             disabled={atStart}
-            title="First move (Home)"
+            title={t('solutionControls.firstMove')}
           >
             ⏮
           </button>
@@ -102,32 +105,32 @@ export function SolutionControls({
             className="btn text-xs"
             onClick={() => onIdxChange(Math.max(0, idx - 1))}
             disabled={atStart}
-            title="Previous move (←)"
+            title={t('solutionControls.prevTitle')}
           >
-            ◀ Prev
+            {t('solutionControls.prev')}
           </button>
           <button
             type="button"
             className="btn text-xs"
             onClick={() => onIdxChange(Math.min(steps.length - 1, idx + 1))}
             disabled={atEnd}
-            title="Next move (→)"
+            title={t('solutionControls.nextTitle')}
           >
-            Next ▶
+            {t('solutionControls.next')}
           </button>
           <button
             type="button"
             className="btn text-xs"
             onClick={() => onIdxChange(steps.length - 1)}
             disabled={atEnd}
-            title="Last move (End)"
+            title={t('solutionControls.lastMove')}
           >
             ⏭
           </button>
         </div>
         {onClose && (
           <button type="button" className="btn text-xs" onClick={onClose}>
-            Close
+            {t('solutionControls.close')}
           </button>
         )}
       </div>

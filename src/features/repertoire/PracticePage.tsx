@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Repertoire } from '@/db/schema';
@@ -21,12 +22,11 @@ import { LineRunner, type LineRunnerControlState } from './LineRunner';
 import {
   initSession,
   reduceSession,
-  PRACTICE_MODE_DESCRIPTION,
-  PRACTICE_MODE_LABEL,
   type PracticeMode,
   type PracticeSessionState,
   type SessionEvent,
 } from './practiceMode';
+import { tPracticeMode, tPracticeModeDescription } from '@/i18n/chess';
 
 interface DecoratedLine {
   line: RepertoireLine;
@@ -145,6 +145,7 @@ function familyAccuracyPct(agg: FamilyAggregate): number | null {
  * exact same data the runner has.
  */
 export function PracticePage() {
+  const { t } = useTranslation();
   const [params] = useSearchParams();
   const repId = params.get('rep') ?? '';
   const reps = useLiveQuery(
@@ -162,15 +163,15 @@ export function PracticePage() {
   if (reps !== undefined && !rep) {
     return (
       <div className="card p-6 text-center text-text-muted space-y-2">
-        <div>Repertoire not found.</div>
+        <div>{t('practice.notFound')}</div>
         <Link to="/repertoire" className="text-accent hover:underline">
-          Back to repertoires
+          {t('practice.backToRepertoires')}
         </Link>
       </div>
     );
   }
   if (!rep) {
-    return <div className="text-text-muted">Loading…</div>;
+    return <div className="text-text-muted">{t('practice.loading')}</div>;
   }
 
   return <PracticeRunner rep={rep} />;
@@ -181,20 +182,18 @@ function RepertoireChooser({
 }: {
   reps: Repertoire[] | undefined;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-3">
-      <h1 className="text-2xl font-semibold tracking-tight">Practice</h1>
-      <p className="text-sm text-text-muted">
-        Pick a repertoire to drill. Lines are grouped by opening family —
-        select one, many, or all and choose how you want to practice them.
-      </p>
+      <h1 className="text-2xl font-semibold tracking-tight">{t('practice.title')}</h1>
+      <p className="text-sm text-text-muted">{t('practice.subtitle')}</p>
       {!reps ? (
-        <div className="card p-6 text-center text-text-muted">Loading…</div>
+        <div className="card p-6 text-center text-text-muted">{t('practice.loading')}</div>
       ) : reps.length === 0 ? (
         <div className="card p-6 text-center text-text-muted space-y-2">
-          <div>No repertoires yet.</div>
+          <div>{t('practice.noRepertoires')}</div>
           <Link to="/openings" className="text-accent hover:underline">
-            Browse openings →
+            {t('practice.browseOpenings')}
           </Link>
         </div>
       ) : (
@@ -210,11 +209,11 @@ function RepertoireChooser({
                 <span
                   className={`text-xs px-2 py-0.5 rounded shrink-0 ${r.color === 'white' ? 'bg-bg-raised text-text' : 'bg-text/90 text-bg'}`}
                 >
-                  {r.color}
+                  {r.color === 'white' ? t('common.white') : t('common.black')}
                 </span>
               </div>
               <div className="text-xs text-text-muted mt-1">
-                Updated {new Date(r.updatedAt).toLocaleDateString()}
+                {t('practice.updated', { date: new Date(r.updatedAt).toLocaleDateString() })}
               </div>
             </Link>
           ))}
@@ -229,6 +228,7 @@ function PracticeRunner({
 }: {
   rep: Repertoire;
 }) {
+  const { t } = useTranslation();
   // We deliberately use plain useEffect + useState rather than
   // useLiveQuery for `lines`. enumerateLines is a one-shot async, the
   // user isn't editing the tree on this page, and a Dexie subscription
@@ -260,7 +260,7 @@ function PracticeRunner({
   if (!lines) {
     return (
       <div className="card p-6 text-center text-text-muted">
-        Loading lines…
+        {t('practice.loadingLines')}
       </div>
     );
   }
@@ -268,13 +268,13 @@ function PracticeRunner({
   if (lines.length === 0) {
     return (
       <div className="card p-6 text-center text-text-muted space-y-2">
-        <div>This repertoire has no complete lines yet.</div>
+        <div>{t('practice.noLines')}</div>
         <p className="text-xs">
-          Open the{' '}
+          {t('practice.openLibrary1')}
           <Link to="/openings" className="text-accent hover:underline">
-            openings library
-          </Link>{' '}
-          and add a line to get started.
+            {t('practice.openLibrary2')}
+          </Link>
+          {t('practice.openLibrary3')}
         </p>
       </div>
     );
@@ -301,6 +301,7 @@ function ActivePractice({
   stats: Awaited<ReturnType<typeof getLineStatsMap>> | null | undefined;
   onStatsChanged: () => void;
 }) {
+  const { t } = useTranslation();
   // Selection state. Default = "everything selected" — that's the
   // friendliest default per the user's "select one, many, or all"
   // requirement: zero clicks gets you "all".
@@ -406,18 +407,21 @@ function ActivePractice({
       <header className="flex items-baseline justify-between flex-wrap gap-2">
         <div className="space-y-0.5">
           <div className="text-xs uppercase tracking-wide text-text-muted">
-            Practice
+            {t('practice.header')}
           </div>
           <h1 className="text-2xl font-semibold tracking-tight">{rep.name}</h1>
           <p className="text-xs text-text-muted">
-            {decoratedLines.length} line
-            {decoratedLines.length === 1 ? '' : 's'} · {selected.size} selected ·{' '}
-            playing as {rep.color === 'white' ? 'White' : 'Black'}
+            {t('practice.linesSelected', {
+              count: decoratedLines.length,
+              total: decoratedLines.length,
+              selected: selected.size,
+              color: rep.color === 'white' ? t('common.white') : t('common.black'),
+            })}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Link to="/repertoire" className="btn text-xs">
-            All repertoires
+            {t('practice.allRepertoires')}
           </Link>
         </div>
       </header>
@@ -434,35 +438,27 @@ function ActivePractice({
         <div className="space-y-3">
           {selected.size === 0 ? (
             <div className="card p-6 text-center text-text-muted space-y-2">
-              <div>No lines selected.</div>
-              <p className="text-xs">
-                Pick at least one line from the list on the right to start
-                practicing.
-              </p>
+              <div>{t('practice.noLinesSelected')}</div>
+              <p className="text-xs">{t('practice.noLinesSelectedHelp')}</p>
             </div>
           ) : sessionDoneInRepeat ? (
             <div className="card p-6 text-center space-y-3">
-              <div className="text-good font-medium">
-                Every line played perfectly.
-              </div>
-              <p className="text-xs text-text-muted">
-                Switch modes, restart this session, or pick more lines to
-                keep going.
-              </p>
+              <div className="text-good font-medium">{t('practice.everyPerfect')}</div>
+              <p className="text-xs text-text-muted">{t('practice.keepGoing')}</p>
               <div className="flex justify-center gap-2">
                 <button
                   type="button"
                   className="btn-primary text-xs"
                   onClick={() => setMode('repeat-until-perfect')}
                 >
-                  Restart
+                  {t('practice.restart')}
                 </button>
                 <button
                   type="button"
                   className="btn text-xs"
                   onClick={() => setMode('sequential')}
                 >
-                  Switch to sequential
+                  {t('practice.switchSequential')}
                 </button>
               </div>
             </div>
@@ -528,6 +524,7 @@ function ModePicker({
   mode: PracticeMode;
   onChange: (m: PracticeMode) => void;
 }) {
+  const { t } = useTranslation();
   const modes: PracticeMode[] = [
     'sequential',
     'random',
@@ -535,7 +532,7 @@ function ModePicker({
   ];
   return (
     <div className="card p-3 space-y-2">
-      <div className="text-xs uppercase tracking-wide text-text-muted">Mode</div>
+      <div className="text-xs uppercase tracking-wide text-text-muted">{t('practice.mode')}</div>
       <div className="flex flex-wrap gap-2">
         {modes.map((m) => {
           const active = mode === m;
@@ -551,13 +548,13 @@ function ModePicker({
               onClick={() => onChange(m)}
               aria-pressed={active}
             >
-              {PRACTICE_MODE_LABEL[m]}
+              {tPracticeMode(t, m)}
             </button>
           );
         })}
       </div>
       <p className="text-xs text-text-muted leading-relaxed">
-        {PRACTICE_MODE_DESCRIPTION[mode]}
+        {tPracticeModeDescription(t, mode)}
       </p>
     </div>
   );
@@ -576,6 +573,7 @@ function PracticeStatusBar({
   sessionPlays: number;
   onSkip: () => void;
 }) {
+  const { t } = useTranslation();
   const {
     status,
     isUserTurn,
@@ -609,44 +607,35 @@ function PracticeStatusBar({
           )}
         </div>
         <div className="text-xs text-text-muted">
-          {ply}/{totalPly} ply · {sessionStats.wrong} wrong · play #
-          {sessionPlays + 1}
+          {t('practice.statusbar.ply', { ply, total: totalPly, wrong: sessionStats.wrong, play: sessionPlays + 1 })}
         </div>
       </div>
       <div className="text-sm min-h-[1.5rem]">
         {status === 'done' ? (
-          <span className="text-good">Line complete. Up next…</span>
+          <span className="text-good">{t('practice.lineComplete')}</span>
         ) : !isUserTurn ? (
           <span className="text-text-muted">
-            Opponent moves… ({userColor === 'white' ? 'Black' : 'White'} to move)
+            {t('practice.opponentMoves', { color: userColor === 'white' ? t('common.black') : t('common.white') })}
           </span>
         ) : status === 'thinking' ? (
-          // The wrong-flash + reveal copy live inside the same
-          // "thinking" branch now that wrong attempts auto-retry. The
-          // board is back in the previous accepted state so the user
-          // can just play again on the same square; we lead with a
-          // red callout so the eye lands on the mistake first.
           <>
             {wrongFlash ? (
-              <span className="text-blunder">
-                Not your prep here — try again.
-              </span>
+              <span className="text-blunder">{t('practice.notYourPrep')}</span>
             ) : (
               <span className="text-text-muted">
                 {ply === 0
-                  ? `${userColor === 'white' ? 'White' : 'Black'} to move. Play your prep.`
-                  : `Your move (${Math.floor(ply / 2) + 1}${ply % 2 === 0 ? '.' : '…'})`}
+                  ? t('practice.playYourPrep', { color: userColor === 'white' ? t('common.white') : t('common.black') })
+                  : t('practice.yourMove', { move: `${Math.floor(ply / 2) + 1}${ply % 2 === 0 ? '.' : '…'}` })}
               </span>
             )}
             {revealShown && expectedSan && (
               <span className="ml-2 text-text-muted">
-                · The line goes{' '}
-                <span className="font-mono text-good">{expectedSan}</span>.
+                {t('practice.lineGoes')}<span className="font-mono text-good">{expectedSan}</span>{t('practice.lineGoesPeriod')}
               </span>
             )}
             {hintShown && !revealShown && expectedSan && (
               <span className="ml-2 text-accent">
-                · Hint: move the highlighted piece
+                · {t('repertoire.trainer.hint').replace(/^· /, '')}
               </span>
             )}
           </>
@@ -654,7 +643,7 @@ function PracticeStatusBar({
           <span className="text-good">
             {expectedSan && (
               <>
-                <span className="font-mono">{expectedSan}</span> — correct.
+                <span className="font-mono">{expectedSan}</span> — {t('common.correct')}.
               </>
             )}
           </span>
@@ -663,25 +652,25 @@ function PracticeStatusBar({
       <div className="flex flex-wrap gap-2">
         {showHintButton && (
           <button type="button" className="btn text-xs" onClick={onHint}>
-            Hint
+            {t('practice.hint')}
           </button>
         )}
         {showRevealButton && (
           <button type="button" className="btn text-xs" onClick={onReveal}>
-            Show answer
+            {t('practice.showAnswer')}
           </button>
         )}
         {showPlayItButton && (
           <button type="button" className="btn text-xs" onClick={onPlayReveal}>
-            Play it for me
+            {t('practice.playItForMe')}
           </button>
         )}
         <div className="ml-auto flex flex-wrap gap-2">
           <button type="button" className="btn text-xs" onClick={onRestart}>
-            Restart line
+            {t('practice.restartLine')}
           </button>
           <button type="button" className="btn text-xs" onClick={onSkip}>
-            Skip
+            {t('practice.skip')}
           </button>
         </div>
       </div>
@@ -696,6 +685,7 @@ function SessionSummary({
   session: PracticeSessionState;
   totalLines: number;
 }) {
+  const { t } = useTranslation();
   if (session.mode === 'repeat-until-perfect') {
     const perfect = session.perfectThisSession.length;
     const target = session.selectedIndices.length;
@@ -704,14 +694,14 @@ function SessionSummary({
     return (
       <div className="card p-3 space-y-1.5">
         <div className="text-xs uppercase tracking-wide text-text-muted">
-          Repeat-until-perfect
+          {t('practice.session.repeatTitle')}
         </div>
         <div className="text-sm">
-          {perfect} / {target} crossed off
+          {t('practice.session.crossedOff', { perfect, target })}
           {remaining > 0 && (
             <>
               {' \u00b7 '}
-              <span className="text-text-muted">{remaining} to go</span>
+              <span className="text-text-muted">{t('practice.session.toGo', { count: remaining })}</span>
             </>
           )}
         </div>
@@ -722,8 +712,7 @@ function SessionSummary({
           />
         </div>
         <div className="text-xs text-text-muted">
-          {session.sessionPlays} play{session.sessionPlays === 1 ? '' : 's'} this
-          session
+          {t('practice.session.playsThisSession', { count: session.sessionPlays })}
         </div>
       </div>
     );
@@ -731,14 +720,13 @@ function SessionSummary({
   return (
     <div className="card p-3 space-y-1">
       <div className="text-xs uppercase tracking-wide text-text-muted">
-        This session
+        {t('practice.session.thisSession')}
       </div>
       <div className="text-sm">
-        {session.sessionPlays} line{session.sessionPlays === 1 ? '' : 's'} played
+        {t('practice.session.linesPlayed', { count: session.sessionPlays })}
       </div>
       <div className="text-xs text-text-muted">
-        {session.selectedIndices.length} / {totalLines} selected ·{' '}
-        {PRACTICE_MODE_LABEL[session.mode]} mode
+        {t('practice.session.modeFooter', { selected: session.selectedIndices.length, total: totalLines, mode: tPracticeMode(t, session.mode) })}
       </div>
     </div>
   );
@@ -763,6 +751,7 @@ function FamilyStats({
   selected: Set<number>;
   onSelectFamily: (indices: number[]) => void;
 }) {
+  const { t } = useTranslation();
   const aggregates = useMemo(
     () => aggregateByFamily(decoratedLines, stats),
     [decoratedLines, stats],
@@ -785,12 +774,12 @@ function FamilyStats({
         aria-expanded={open}
       >
         <span className="text-xs uppercase tracking-wide text-text-muted">
-          Family stats
+          {t('practice.familyStats.title')}
         </span>
         <span className="text-xs text-text-muted">
-          {aggregates.length} famil{aggregates.length === 1 ? 'y' : 'ies'}
+          {t('practice.familyStats.families', { count: aggregates.length })}
           {' \u00b7 '}
-          {open ? 'Hide' : 'Show'}
+          {open ? t('practice.familyStats.hide') : t('practice.familyStats.show')}
         </span>
       </button>
       {open && (
@@ -810,29 +799,28 @@ function FamilyStats({
                     onClick={() => onSelectFamily(agg.indices)}
                     title={
                       allSelected
-                        ? 'Already the only family selected'
-                        : `Drill only ${agg.family}`
+                        ? t('practice.familyStats.alreadyOnly')
+                        : t('practice.familyStats.drillOnlyTitle', { family: agg.family })
                     }
                     disabled={allSelected && selected.size === agg.indices.length}
                   >
-                    Drill only this
+                    {t('practice.familyStats.drillOnly')}
                   </button>
                 </div>
                 <div className="flex flex-wrap gap-x-3 gap-y-0 text-[11px] text-text-muted">
                   <span>
-                    {agg.totalLines} line{agg.totalLines === 1 ? '' : 's'}
+                    {t('practice.familyStats.lines', { count: agg.totalLines })}
                   </span>
                   {agg.attempts > 0 ? (
                     <>
                       <span>
-                        {agg.attempts} attempt
-                        {agg.attempts === 1 ? '' : 's'}
+                        {t('practice.familyStats.attempts', { count: agg.attempts })}
                       </span>
                       <span>
-                        {agg.completions} done
+                        {t('practice.familyStats.done', { count: agg.completions })}
                         {agg.perfectCompletions > 0 && (
                           <span className="text-good">
-                            {' '}({agg.perfectCompletions} perfect)
+                            {' '}{t('practice.familyStats.perfect', { count: agg.perfectCompletions })}
                           </span>
                         )}
                       </span>
@@ -846,12 +834,12 @@ function FamilyStats({
                                 : ''
                           }
                         >
-                          {(acc * 100).toFixed(0)}% acc
+                          {t('practice.familyStats.acc', { pct: (acc * 100).toFixed(0) })}
                         </span>
                       )}
                     </>
                   ) : (
-                    <span className="italic">Not yet drilled</span>
+                    <span className="italic">{t('practice.familyStats.notDrilled')}</span>
                   )}
                 </div>
               </li>
@@ -892,6 +880,7 @@ function LinePicker({
   onSelectFiltered: () => void;
   onJumpTo: (i: number) => void;
 }) {
+  const { t } = useTranslation();
   // Group filtered indices by family for the picker layout. Group
   // order follows the family's first appearance in the underlying
   // line list (which is already family-sorted by enumerateLines), so
@@ -911,36 +900,36 @@ function LinePicker({
     <div className="card p-3 space-y-2">
       <div className="flex items-baseline justify-between">
         <div className="text-xs uppercase tracking-wide text-text-muted">
-          Lines
+          {t('practice.linePicker.lines')}
         </div>
         <div className="text-[11px] text-text-muted">
-          {selected.size} / {decoratedLines.length} selected
+          {t('practice.linePicker.selectedCount', { selected: selected.size, total: decoratedLines.length })}
         </div>
       </div>
       <input
         type="search"
         className="input text-sm"
-        placeholder="Search by name, ECO, or move…"
+        placeholder={t('practice.linePicker.searchPlaceholder')}
         value={query}
         onChange={(e) => onQuery(e.target.value)}
       />
       <div className="flex flex-wrap gap-2 text-xs">
         <button type="button" className="btn text-xs" onClick={onSelectAll}>
-          Select all
+          {t('practice.linePicker.selectAll')}
         </button>
         <button type="button" className="btn text-xs" onClick={onSelectNone}>
-          Select none
+          {t('practice.linePicker.selectNone')}
         </button>
         {query.trim().length > 0 && (
           <button type="button" className="btn text-xs" onClick={onSelectFiltered}>
-            Select filtered ({filteredIndices.length})
+            {t('practice.linePicker.selectFiltered', { count: filteredIndices.length })}
           </button>
         )}
       </div>
       <div className="max-h-[60vh] overflow-y-auto -mx-1 pr-1 divide-y divide-border">
         {groups.length === 0 ? (
           <div className="py-6 text-center text-xs text-text-muted">
-            No lines match “{query}”.
+            {t('practice.linePicker.noMatches', { query })}
           </div>
         ) : (
           groups.map(([family, indices]) => (
@@ -977,9 +966,9 @@ function LinePicker({
                               {d.eco}
                             </span>
                           )}
-                          {d.variation || 'Mainline'}
+                          {d.variation || t('practice.linePicker.mainline')}
                           {isPerfectSession && (
-                            <span className="ml-1 text-good" title="Done perfectly this session">
+                            <span className="ml-1 text-good" title={t('practice.linePicker.donePerfectThisSession')}>
                               ✓
                             </span>
                           )}
@@ -990,11 +979,11 @@ function LinePicker({
                         </div>
                         {persisted && persisted.attempts > 0 && (
                           <div className="text-[10px] text-text-muted">
-                            {persisted.completions} done
+                            {t('practice.linePicker.doneCount', { count: persisted.completions })}
                             {persisted.perfectCompletions > 0 && (
                               <span className="text-good">
                                 {' \u00b7 '}
-                                {persisted.perfectCompletions} perfect
+                                {t('practice.linePicker.donePerfect', { count: persisted.perfectCompletions })}
                               </span>
                             )}
                           </div>
@@ -1004,9 +993,9 @@ function LinePicker({
                         type="button"
                         className="text-[11px] text-accent hover:underline shrink-0"
                         onClick={() => onJumpTo(i)}
-                        title="Jump to this line now"
+                        title={t('practice.linePicker.playTitle')}
                       >
-                        Play
+                        {t('practice.linePicker.play')}
                       </button>
                     </li>
                   );

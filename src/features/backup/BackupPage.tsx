@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   backupFilename,
   exportBackup,
@@ -20,6 +21,7 @@ import { db } from '@/db/schema';
  * + Supabase land in Phase 2/3 — no separate format to maintain.
  */
 export function BackupPage() {
+  const { t } = useTranslation();
   const [info, setInfo] = useState<StorageInfo | null>(null);
   const [busy, setBusy] = useState<null | 'export' | 'restore'>(null);
   const [restoreMode, setRestoreMode] = useState<RestoreMode>('merge');
@@ -67,7 +69,7 @@ export function BackupPage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      setMessage(`Downloaded ${formatBytes(blob.size)}.`);
+      setMessage(t('backup.downloaded', { size: formatBytes(blob.size) }));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -81,9 +83,7 @@ export function BackupPage() {
     setMessage(null);
     try {
       if (restoreMode === 'clear') {
-        const ok = window.confirm(
-          'Wipe all local data and replace it with the backup? This cannot be undone.',
-        );
+        const ok = window.confirm(t('backup.wipeConfirm'));
         if (!ok) {
           setBusy(null);
           return;
@@ -93,10 +93,10 @@ export function BackupPage() {
       await refresh();
       setMessage(
         restoreMode === 'clear'
-          ? 'Local database replaced with backup contents.'
+          ? t('backup.replaced')
           : restoreMode === 'overwrite'
-            ? 'Backup imported (existing rows overwritten on collision).'
-            : 'Backup imported (existing rows kept on collision).',
+            ? t('backup.importedOverwrite')
+            : t('backup.importedMerge'),
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -110,24 +110,11 @@ export function BackupPage() {
     const granted = await requestPersistentStorage();
     setInfo((prev) => (prev ? { ...prev, persistent: granted } : prev));
     if (granted) {
-      setMessage('Persistent storage granted — the browser will not evict your data.');
+      setMessage(t('backup.persistentGranted'));
       setError(null);
     } else {
-      // Chromium-based browsers (Chrome, Edge, Brave, Arc) auto-grant
-      // this only when the site looks "engaged" — bookmarked, installed
-      // as a PWA, frequently visited, granted notifications, etc.
-      // Firefox shows a permission prompt on the first call. Safari may
-      // silently auto-deny. None of these failure modes mean the data
-      // is gone — IndexedDB still works the same — they just mean the
-      // browser is allowed to evict under disk pressure.
       setMessage(null);
-      setError(
-        "The browser declined the persistence request. Your data is still saved, " +
-          "but the browser is allowed to evict it under heavy disk pressure. " +
-          "Chrome/Edge usually auto-grant this once you bookmark the site, install it " +
-          "as a PWA, or visit it a few more times. Firefox shows a prompt the first " +
-          "time. Until then, exporting backups is the safety net.",
-      );
+      setError(t('backup.persistentDeclined'));
     }
   }
 
@@ -136,21 +123,18 @@ export function BackupPage() {
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Backup &amp; restore</h1>
-        <p className="text-sm text-text-muted">
-          All your games, analyses, puzzles, and repertoires live in this browser&rsquo;s IndexedDB.
-          Export a snapshot to move between machines or guard against accidental data loss.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t('backup.title')}</h1>
+        <p className="text-sm text-text-muted">{t('backup.subtitle')}</p>
       </div>
 
       <section className="card p-4 space-y-3">
-        <h2 className="font-medium">Storage</h2>
+        <h2 className="font-medium">{t('backup.storage')}</h2>
         {info ? (
           info.supported ? (
             <>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-text-muted">
-                  {formatBytes(info.usage)} used of {formatBytes(info.quota)}
+                  {t('backup.usedOf', { used: formatBytes(info.usage), total: formatBytes(info.quota) })}
                 </span>
                 <span
                   className={`text-xs px-2 py-0.5 rounded-md ${
@@ -159,7 +143,7 @@ export function BackupPage() {
                       : 'bg-bg-raised text-text-muted'
                   }`}
                 >
-                  {info.persistent ? 'Persistent' : 'Best-effort'}
+                  {info.persistent ? t('backup.persistent') : t('backup.bestEffort')}
                 </span>
               </div>
               <div className="h-2 rounded-full bg-bg-raised overflow-hidden">
@@ -170,48 +154,38 @@ export function BackupPage() {
               </div>
               {!info.persistent && (
                 <div className="flex items-center gap-3 text-xs text-text-muted">
-                  <span>
-                    Without persistent storage, the browser may evict this database under heavy
-                    disk pressure.
-                  </span>
+                  <span>{t('backup.noPersistText')}</span>
                   <button type="button" className="btn whitespace-nowrap" onClick={handlePersist}>
-                    Request persistent
+                    {t('backup.requestPersistent')}
                   </button>
                 </div>
               )}
             </>
           ) : (
             <div className="text-sm text-text-muted">
-              This browser doesn&rsquo;t expose <code>navigator.storage</code>. Backups still work.
+              {t('backup.noStorageApi')}
             </div>
           )
         ) : (
-          <div className="text-sm text-text-muted">Loading…</div>
+          <div className="text-sm text-text-muted">{t('backup.loading')}</div>
         )}
 
         {counts && (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 text-xs pt-2">
-            <Counter label="Games" value={counts.games} />
-            <Counter label="Analyses" value={counts.analyses} />
-            <Counter label="Puzzles" value={counts.puzzles} />
-            <Counter label="Repertoires" value={counts.repertoires} />
-            <Counter label="Rep. nodes" value={counts.repertoireNodes} />
-            <Counter label="Notes" value={counts.notes} />
-            <Counter label="Eval cache" value={counts.evalCache} />
+            <Counter label={t('backup.counters.games')} value={counts.games} />
+            <Counter label={t('backup.counters.analyses')} value={counts.analyses} />
+            <Counter label={t('backup.counters.puzzles')} value={counts.puzzles} />
+            <Counter label={t('backup.counters.repertoires')} value={counts.repertoires} />
+            <Counter label={t('backup.counters.repNodes')} value={counts.repertoireNodes} />
+            <Counter label={t('backup.counters.notes')} value={counts.notes} />
+            <Counter label={t('backup.counters.evalCache')} value={counts.evalCache} />
           </div>
         )}
       </section>
 
       <section className="card p-4 space-y-3">
-        <h2 className="font-medium">Export</h2>
-        <p className="text-sm text-text-muted">
-          Downloads a single gzip-compressed JSON file with every table. The
-          uncompressed format is the official
-          <code className="mx-1">dexie-export-import</code>
-          shape and includes the schema version, so it restores cleanly even
-          after future upgrades. Restore accepts both this <code>.json.gz</code>
-          and any older <code>.json</code> backup.
-        </p>
+        <h2 className="font-medium">{t('backup.export')}</h2>
+        <p className="text-sm text-text-muted">{t('backup.exportDesc')}</p>
         <div>
           <button
             type="button"
@@ -219,13 +193,13 @@ export function BackupPage() {
             onClick={handleExport}
             disabled={busy !== null}
           >
-            {busy === 'export' ? 'Exporting…' : 'Download backup'}
+            {busy === 'export' ? t('backup.exporting') : t('backup.downloadBackup')}
           </button>
         </div>
       </section>
 
       <section className="card p-4 space-y-3">
-        <h2 className="font-medium">Restore</h2>
+        <h2 className="font-medium">{t('backup.restore')}</h2>
         <div className="space-y-2 text-sm">
           <label className="flex items-start gap-2">
             <input
@@ -236,11 +210,8 @@ export function BackupPage() {
               onChange={() => setRestoreMode('merge')}
             />
             <span>
-              <span className="font-medium">Merge</span>
-              <span className="text-text-muted">
-                {' '}
-                — add rows from the backup, keep existing rows on key collision. Safe.
-              </span>
+              <span className="font-medium">{t('backup.merge')}</span>
+              <span className="text-text-muted">{t('backup.mergeDesc')}</span>
             </span>
           </label>
           <label className="flex items-start gap-2">
@@ -252,11 +223,8 @@ export function BackupPage() {
               onChange={() => setRestoreMode('overwrite')}
             />
             <span>
-              <span className="font-medium">Overwrite on collision</span>
-              <span className="text-text-muted">
-                {' '}
-                — backup wins if a row already exists locally with the same id.
-              </span>
+              <span className="font-medium">{t('backup.overwrite')}</span>
+              <span className="text-text-muted">{t('backup.overwriteDesc')}</span>
             </span>
           </label>
           <label className="flex items-start gap-2">
@@ -268,11 +236,8 @@ export function BackupPage() {
               onChange={() => setRestoreMode('clear')}
             />
             <span>
-              <span className="font-medium text-blunder">Replace everything</span>
-              <span className="text-text-muted">
-                {' '}
-                — wipe local data first, then import. Use on a fresh machine.
-              </span>
+              <span className="font-medium text-blunder">{t('backup.replaceEverything')}</span>
+              <span className="text-text-muted">{t('backup.replaceDesc')}</span>
             </span>
           </label>
         </div>
@@ -293,7 +258,7 @@ export function BackupPage() {
             onClick={() => fileRef.current?.click()}
             disabled={busy !== null}
           >
-            {busy === 'restore' ? 'Restoring…' : 'Choose backup file…'}
+            {busy === 'restore' ? t('backup.restoring') : t('backup.chooseFile')}
           </button>
         </div>
       </section>

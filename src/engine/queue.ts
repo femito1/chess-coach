@@ -158,7 +158,7 @@ export async function startAnalysisQueue(): Promise<void> {
       boot.setStarted(true);
     }, BOOT_BANNER_DELAY_MS);
 
-    boot.setPhase('Healing stale errors…');
+    boot.setPhase('phaseHealing');
     await bootStep('requeueStaleErrors', async () => {
       const healed = await requeueStaleErrors();
       if (healed > 0) {
@@ -168,7 +168,7 @@ export async function startAnalysisQueue(): Promise<void> {
       }
     });
 
-    boot.setPhase('Refreshing opening metadata…');
+    boot.setPhase('phaseRefreshingOpenings');
     await bootStep('refreshOpeningMetadata', async () => {
       const reopened = await refreshOpeningMetadata();
       if (reopened > 0) {
@@ -178,7 +178,7 @@ export async function startAnalysisQueue(): Promise<void> {
       }
     });
 
-    boot.setPhase('Recomputing classifications & accuracy…');
+    boot.setPhase('phaseRecomputing');
     // Re-classify moves and refresh accuracy with the current rules,
     // without re-running Stockfish. Slow on large libraries (~10s+ for
     // hundreds of games), which is why it lives off the critical path.
@@ -197,7 +197,7 @@ export async function startAnalysisQueue(): Promise<void> {
     // fields directly and never re-parses PGN on render. Version-
     // stamped + chunked + run in the background, same as the other
     // boot passes — a warm boot returns in single-digit ms.
-    boot.setPhase('Caching time stats…');
+    boot.setPhase('phaseCachingTime');
     await bootStep('backfillUserTimeStats', async () => {
       const backfilled = await backfillUserTimeStats();
       if (backfilled > 0) {

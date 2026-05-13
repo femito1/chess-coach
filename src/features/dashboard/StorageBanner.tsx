@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import {
   formatBytes,
@@ -18,6 +19,7 @@ import {
  * to the happy path.
  */
 export function StorageBanner() {
+  const { t } = useTranslation();
   const [info, setInfo] = useState<StorageInfo | null>(null);
 
   async function refresh() {
@@ -39,8 +41,7 @@ export function StorageBanner() {
       {!info.persistent ? (
         <>
           <span>
-            Local storage is <span className="font-medium">best-effort</span>. The browser
-            may evict it under disk pressure.
+            {t('storageBanner.bestEffort1')}<span className="font-medium">{t('storageBanner.bestEffort2')}</span>{t('storageBanner.bestEffort3')}
           </span>
           <button
             type="button"
@@ -50,17 +51,16 @@ export function StorageBanner() {
               await refresh();
             }}
           >
-            Make persistent
+            {t('storageBanner.makePersistent')}
           </button>
         </>
       ) : (
         <span>
-          Using <span className="font-medium">{formatBytes(info.usage)}</span> of{' '}
-          {formatBytes(info.quota)} ({usagePct.toFixed(0)}%). Consider exporting a backup.
+          {t('storageBanner.usingNote', { used: formatBytes(info.usage), total: formatBytes(info.quota), pct: usagePct.toFixed(0) })}
         </span>
       )}
       <Link to="/backup" className="ml-auto text-xs text-accent hover:underline">
-        Backup &amp; restore →
+        {t('storageBanner.backupRestore')}
       </Link>
     </div>
   );

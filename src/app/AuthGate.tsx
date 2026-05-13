@@ -1,5 +1,6 @@
 import { useAuth } from '@clerk/clerk-react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { isE2EBypass } from '@/lib/testAuth';
 
 /**
@@ -22,6 +23,7 @@ import { isE2EBypass } from '@/lib/testAuth';
  * a guest mode, this is the only place that needs to learn about it.
  */
 export function AuthGate() {
+  const { t } = useTranslation();
   const { isLoaded, isSignedIn } = useAuth();
   const location = useLocation();
 
@@ -32,7 +34,7 @@ export function AuthGate() {
   }
 
   if (!isLoaded) {
-    return <div className="min-h-screen" aria-busy="true" aria-label="Loading" />;
+    return <div className="min-h-screen" aria-busy="true" aria-label={t('common.loading')} />;
   }
 
   if (!isSignedIn) {

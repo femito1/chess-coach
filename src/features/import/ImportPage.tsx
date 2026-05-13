@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Trans } from 'react-i18next';
 import { fetchArchives, fetchMonth, formatMonth, parseArchiveUrl } from '@/api/chesscom';
 import { chessComGameToGame } from '@/import/importer';
 import { upsertGames } from '@/db/queries';
@@ -13,6 +15,7 @@ interface ArchiveEntry {
 }
 
 export function ImportPage() {
+  const { t } = useTranslation();
   const [username, setUsername] = useState('');
   const [archives, setArchives] = useState<ArchiveEntry[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -143,22 +146,19 @@ export function ImportPage() {
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Import from Chess.com</h1>
-        <p className="text-sm text-text-muted">
-          Enter your Chess.com username, pick months, and we&rsquo;ll pull your games via the
-          public API. Analysis runs in the background after import.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t('import.pageTitle')}</h1>
+        <p className="text-sm text-text-muted">{t('import.pageSubtitle')}</p>
       </div>
 
       <section className="card p-4 space-y-3">
         <label className="block text-sm">
-          <div className="mb-1 text-text-muted">Chess.com username</div>
+          <div className="mb-1 text-text-muted">{t('import.usernameLabel')}</div>
           <div className="flex gap-2">
             <input
               className="input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="magnuscarlsen"
+              placeholder={t('import.usernamePlaceholder')}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && username.trim()) void loadArchives();
               }}
@@ -169,7 +169,7 @@ export function ImportPage() {
               onClick={loadArchives}
               disabled={!username.trim() || loading}
             >
-              {loading ? 'Loading…' : 'Load months'}
+              {loading ? t('import.loading') : t('import.loadMonths')}
             </button>
           </div>
         </label>
@@ -180,10 +180,10 @@ export function ImportPage() {
         <section className="card p-4 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h2 className="font-medium">
-              Available months ({sortedArchives.length})
+              {t('import.availableMonths', { count: sortedArchives.length })}
               {records.size > 0 && (
                 <span className="ml-2 text-xs text-text-muted font-normal">
-                  · {records.size} previously synced · {unsynced.length} new
+                  {t('import.previouslySynced', { synced: records.size, newCount: unsynced.length })}
                 </span>
               )}
             </h2>
@@ -193,22 +193,22 @@ export function ImportPage() {
                   type="button"
                   className="btn border-accent/40 text-accent"
                   onClick={selectUnsynced}
-                  title={`Select the ${unsynced.length} month${unsynced.length === 1 ? '' : 's'} not yet imported`}
+                  title={t('import.syncNewestTitle', { count: unsynced.length })}
                 >
-                  Sync newest ({unsynced.length})
+                  {t('import.syncNewest', { count: unsynced.length })}
                 </button>
               )}
               <button type="button" className="btn" onClick={() => selectRecent(1)}>
-                Latest
+                {t('import.latest')}
               </button>
               <button type="button" className="btn" onClick={() => selectRecent(3)}>
-                Last 3
+                {t('import.last3')}
               </button>
               <button type="button" className="btn" onClick={() => selectRecent(12)}>
-                Last 12
+                {t('import.last12')}
               </button>
               <button type="button" className="btn" onClick={() => setSelected(new Set())}>
-                Clear
+                {t('import.clearSelection')}
               </button>
             </div>
           </div>
@@ -228,7 +228,7 @@ export function ImportPage() {
                         ? 'border-good/30 bg-good/5 text-text hover:text-text'
                         : 'border-border bg-bg-soft text-text-muted hover:text-text'
                   }`}
-                  title={rec ? `Last imported ${formatRelative(rec.importedAt)} · ${rec.gameCount} games` : 'Not yet imported'}
+                  title={rec ? t('import.tileLastImported', { relative: formatRelative(rec.importedAt, t), count: rec.gameCount }) : t('import.tileNotYetImported')}
                 >
                   <span className="flex items-center gap-1.5">
                     {rec && <span className="text-good text-[10px]">✓</span>}
@@ -236,7 +236,7 @@ export function ImportPage() {
                   </span>
                   {rec && (
                     <span className="text-[11px] text-text-muted">
-                      {rec.gameCount} games · {formatRelative(rec.importedAt)}
+                      {t('import.tileGamesAndRelative', { count: rec.gameCount, relative: formatRelative(rec.importedAt, t) })}
                     </span>
                   )}
                 </button>
@@ -251,13 +251,16 @@ export function ImportPage() {
               disabled={selected.size === 0 || importing}
             >
               {importing
-                ? `Importing ${progress?.done ?? 0}/${progress?.total ?? 0}…`
-                : `Import ${selected.size} month${selected.size === 1 ? '' : 's'}`}
+                ? t('import.importingProgress', { done: progress?.done ?? 0, total: progress?.total ?? 0 })
+                : t('import.importMonths', { count: selected.size })}
             </button>
             {summary && (
               <div className="text-sm text-text-muted">
-                Added <span className="text-good">{summary.added}</span>, skipped{' '}
-                <span className="text-text">{summary.skipped}</span> duplicates.
+                <Trans
+                  i18nKey="import.summary"
+                  values={{ added: summary.added, skipped: summary.skipped }}
+                  components={{ good: <span className="text-good" />, neutral: <span className="text-text" /> }}
+                />
               </div>
             )}
           </div>
@@ -267,17 +270,17 @@ export function ImportPage() {
   );
 }
 
-function formatRelative(epochMs: number): string {
+function formatRelative(epochMs: number, t: (key: string, opts?: Record<string, unknown>) => string): string {
   const diff = Date.now() - epochMs;
   const m = Math.floor(diff / 60_000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
+  if (m < 1) return t('import.relativeJustNow');
+  if (m < 60) return t('import.relativeMinutes', { value: m });
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return t('import.relativeHours', { value: h });
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
+  if (d < 30) return t('import.relativeDays', { value: d });
   const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}mo ago`;
+  if (mo < 12) return t('import.relativeMonths', { value: mo });
   const y = Math.floor(mo / 12);
-  return `${y}y ago`;
+  return t('import.relativeYears', { value: y });
 }

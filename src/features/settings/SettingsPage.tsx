@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import {
   getSettings,
   normalizeTimeClassSelection,
@@ -13,8 +14,16 @@ import {
   CHROME_EXTENSION_NAME,
   CHROME_EXTENSION_STORE_URL,
 } from '@/lib/extension';
+import {
+  LOCALE_DISPLAY_NAMES,
+  SUPPORTED_LOCALES,
+  isSupportedLocale,
+  setLocale,
+  type SupportedLocale,
+} from '@/i18n';
 
 export function SettingsPage() {
+  const { t, i18n } = useTranslation();
   const [username, setUsername] = useState('');
   const [engineDepth, setEngineDepth] = useState(16);
   const [autoAnalyze, setAutoAnalyze] = useState(true);
@@ -120,29 +129,53 @@ export function SettingsPage() {
   }
 
   async function wipe() {
-    if (!confirm('Delete ALL games, analyses and settings? This cannot be undone.')) return;
+    if (!confirm(t('settings.backup.wipeConfirm'))) return;
     await db.transaction('rw', db.games, db.analyses, db.settings, async () => {
       await db.games.clear();
       await db.analyses.clear();
       await db.settings.clear();
     });
-    setImportStatus('All local data deleted.');
+    setImportStatus(t('common.saved'));
   }
+
+  /** Language picker handler. Two writes: localStorage (load-bearing for
+   *  next-boot first paint, written by `setLocale` below) + Dexie
+   *  Settings (will sync across devices once Phase 2 ships). Both are
+   *  fire-and-forget; failure to persist keeps the runtime switch
+   *  working for the current session. */
+  async function changeLocale(locale: SupportedLocale): Promise<void> {
+    await setLocale(locale);
+    await updateSettings({ locale });
+  }
+
+  const currentLocale: SupportedLocale = isSupportedLocale(i18n.resolvedLanguage)
+    ? i18n.resolvedLanguage
+    : 'en';
 
   return (
     <div className="space-y-6 max-w-2xl">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{t('settings.title')}</h1>
       </div>
 
       <section className="card p-4 space-y-4">
         <label className="block text-sm">
-          <div className="mb-1 text-text-muted">Chess.com username</div>
+          <div className="mb-1 text-text-muted">{t('settings.username')}</div>
           <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} />
         </label>
         <label className="block text-sm">
           <div className="mb-1 text-text-muted">
-            Engine depth: <span className="text-text font-mono">{engineDepth}</span>
+            {/* `<Trans>` lets the catalog string wrap the depth value in
+             *  the right markup ("Engine depth: <strong>16</strong>");
+             *  pt-BR puts the noun first too, but a future locale could
+             *  reorder these around the value. */}
+            <Trans
+              i18nKey="settings.engineDepth"
+              values={{ depth: engineDepth }}
+              components={{
+                '1': <span className="text-text font-mono" />,
+              }}
+            />
           </div>
           <input
             type="range"
@@ -153,20 +186,18 @@ export function SettingsPage() {
             className="w-full"
           />
           <div className="text-xs text-text-muted mt-1">
-            Higher = stronger but slower. 16 is a good balance for casual review.
+            {t('settings.engineDepthHint')}
           </div>
         </label>
         <div className="block text-sm">
-          <div className="mb-1 text-text-muted">Default time-control filter</div>
+          <div className="mb-1 text-text-muted">{t('settings.timeFilter')}</div>
           <TimeClassChips
             selection={timeClassFilter}
             onChange={setTimeClassFilter}
             available={games ?? []}
           />
           <div className="text-xs text-text-muted mt-1">
-            Weaknesses and Puzzles default to these time controls. Pick one
-            or more chips, or "All" for everything. Bullet games are high
-            volume but low ROI for study, so rapid is a sensible default.
+            {t('settings.timeFilterHint')}
           </div>
         </div>
         <label className="flex items-center gap-2 text-sm">
@@ -175,45 +206,52 @@ export function SettingsPage() {
             checked={autoAnalyze}
             onChange={(e) => setAutoAnalyze(e.target.checked)}
           />
-          <span>Automatically analyze imported games in the background</span>
+          <span>{t('settings.autoAnalyze')}</span>
         </label>
         <div className="flex items-center gap-3">
           <button type="button" className="btn-primary" onClick={save}>
-            Save
+            {t('common.save')}
           </button>
-          {saved && <span className="text-good text-sm">Saved.</span>}
+          {saved && <span className="text-good text-sm">{t('common.saved')}</span>}
         </div>
 
         {depthChanged && (
           <div className="border border-accent/40 bg-accent/5 rounded-md p-3 text-sm space-y-2">
             <div>
-              Engine depth changed from{' '}
-              <span className="font-mono">{savedDepth}</span> to{' '}
-              <span className="font-mono text-accent">{engineDepth}</span>. Re-analyze existing
-              games at the new depth?
+              <Trans
+                i18nKey="settings.depthChanged"
+                values={{ from: savedDepth, to: engineDepth }}
+                components={{
+                  // `<strong>` placeholders are positionally indexed in
+                  // i18next-react when used unnamed; we use named keys so
+                  // the catalog reads naturally in either language.
+                  '1': <span className="font-mono" />,
+                  '2': <span className="font-mono text-accent" />,
+                }}
+              />
             </div>
             <div className="flex flex-wrap gap-2">
               <button type="button" className="btn text-xs" onClick={() => doRequeue('latest')}>
-                Most recent game
+                {t('settings.scope.latest')}
               </button>
               <button type="button" className="btn text-xs" onClick={() => doRequeue('day')}>
-                Past day
+                {t('settings.scope.day')}
               </button>
               <button type="button" className="btn text-xs" onClick={() => doRequeue('week')}>
-                Past week
+                {t('settings.scope.week')}
               </button>
               <button type="button" className="btn text-xs" onClick={() => doRequeue('month')}>
-                Past month
+                {t('settings.scope.month')}
               </button>
               <button type="button" className="btn text-xs" onClick={() => doRequeue('all')}>
-                All games
+                {t('settings.scope.all')}
               </button>
               <button
                 type="button"
                 className="btn text-xs text-text-muted"
                 onClick={() => setEngineDepth(savedDepth)}
               >
-                Cancel
+                {t('common.cancel')}
               </button>
             </div>
             {requeueStatus && <div className="text-xs text-text-muted">{requeueStatus}</div>}
@@ -222,6 +260,37 @@ export function SettingsPage() {
         {!depthChanged && requeueStatus && (
           <div className="text-xs text-text-muted">{requeueStatus}</div>
         )}
+      </section>
+
+      {/* Language picker. Sits high in the page (right after engine
+       *  settings) so a Brazilian user who lands on /settings looking
+       *  to switch into pt-BR finds it immediately. The picker uses
+       *  native-name labels (`Português (Brasil)`, not "Portuguese
+       *  (Brazil)") because every other piece of software the user
+       *  interacts with does the same. */}
+      <section className="card p-4 space-y-3">
+        <h2 className="font-medium">{t('settings.language.title')}</h2>
+        <p className="text-xs text-text-muted">{t('settings.language.description')}</p>
+        <div className="flex flex-wrap gap-2">
+          {SUPPORTED_LOCALES.map((loc) => {
+            const active = loc === currentLocale;
+            return (
+              <button
+                key={loc}
+                type="button"
+                aria-pressed={active}
+                onClick={() => void changeLocale(loc)}
+                className={
+                  active
+                    ? 'btn-primary text-sm'
+                    : 'btn text-sm'
+                }
+              >
+                {LOCALE_DISPLAY_NAMES[loc]}
+              </button>
+            );
+          })}
+        </div>
       </section>
 
       {/* Browser-extension promo. Lives in Settings (not as a noisy
@@ -235,30 +304,28 @@ export function SettingsPage() {
       {extensionDismissedAt === undefined ? (
         <section className="card p-4 space-y-3 border-accent/40">
           <div className="flex items-start justify-between gap-3">
-            <h2 className="font-medium">Browser extension</h2>
+            <h2 className="font-medium">{t('settings.extensionPromo.title')}</h2>
             <button
               type="button"
               className="text-xs text-text-muted hover:text-text"
               onClick={() => void dismissExtensionPromo()}
-              aria-label="Dismiss extension promo"
-              title="Hide this card"
+              aria-label={t('common.dismiss')}
+              title={t('common.dismiss')}
             >
-              Dismiss
+              {t('common.dismiss')}
             </button>
           </div>
           <p className="text-sm">
-            <strong>{CHROME_EXTENSION_NAME}</strong> turns the manual flow
-            below into a single click: finish a game on Chess.com, click
-            the prompt that appears in the corner, and land here with the
-            game already imported and analysing.
+            <Trans
+              i18nKey="settings.extensionPromo.intro"
+              values={{ name: CHROME_EXTENSION_NAME }}
+              components={{ strong: <strong /> }}
+            />
           </p>
           <ul className="text-xs text-text-muted list-disc pl-5 space-y-0.5">
-            <li>No copy-pasting URLs from the chess.com tab.</li>
-            <li>
-              No data leaves your machine — the extension only reads the
-              game URL and opens this app.
-            </li>
-            <li>Open source; same MIT license as the app.</li>
+            <li>{t('settings.extensionPromo.bullets.noPaste')}</li>
+            <li>{t('settings.extensionPromo.bullets.noLeak')}</li>
+            <li>{t('settings.extensionPromo.bullets.openSource')}</li>
           </ul>
           <div className="flex flex-wrap gap-2 pt-1">
             <a
@@ -267,35 +334,32 @@ export function SettingsPage() {
               target="_blank"
               rel="noopener noreferrer"
             >
-              Get it on the Chrome Web Store
+              {t('settings.extensionPromo.cta')}
             </a>
           </div>
         </section>
       ) : (
         <div className="text-xs text-text-muted flex items-center gap-2">
-          <span>Browser extension promo dismissed.</span>
+          <span>{t('settings.extensionPromo.dismissed')}</span>
           <button
             type="button"
             className="text-accent hover:underline"
             onClick={() => void reopenExtensionPromo()}
           >
-            Reopen
+            {t('common.reopen')}
           </button>
         </div>
       )}
 
       <section className="card p-4 space-y-3">
-        <h2 className="font-medium">Backup &amp; data</h2>
-        <p className="text-xs text-text-muted">
-          All your data lives in this browser's IndexedDB. Export it to a JSON file to move
-          between devices or keep a backup.
-        </p>
+        <h2 className="font-medium">{t('settings.backup.title')}</h2>
+        <p className="text-xs text-text-muted">{t('settings.backup.intro')}</p>
         <div className="flex flex-wrap gap-2">
           <button className="btn" onClick={exportAll}>
-            Export JSON
+            {t('settings.backup.export')}
           </button>
           <label className="btn cursor-pointer">
-            Import JSON
+            {t('settings.backup.import')}
             <input
               type="file"
               accept="application/json"
@@ -308,7 +372,7 @@ export function SettingsPage() {
             />
           </label>
           <button className="btn text-blunder hover:text-blunder" onClick={wipe}>
-            Delete all data
+            {t('settings.backup.wipe')}
           </button>
         </div>
         {importStatus && <div className="text-xs text-text-muted">{importStatus}</div>}

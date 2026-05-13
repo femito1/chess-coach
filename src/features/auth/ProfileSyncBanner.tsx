@@ -1,4 +1,5 @@
 import { useClerk } from '@clerk/clerk-react';
+import { useTranslation } from 'react-i18next';
 import { useProfileSync } from './useProfileSync';
 
 /**
@@ -15,6 +16,7 @@ import { useProfileSync } from './useProfileSync';
  * is, in practice, a no-op handshake on the steady-state boot.
  */
 export function ProfileSyncBanner() {
+  const { t } = useTranslation();
   const status = useProfileSync();
   const clerk = useClerk();
 
@@ -26,12 +28,9 @@ export function ProfileSyncBanner() {
       className="mx-auto max-w-screen-2xl px-4 lg:px-8 mt-4 rounded-md border border-blunder/40 bg-blunder/10 text-sm py-3 flex items-start gap-3"
     >
       <div className="flex-1">
-        <div className="font-medium text-text">Different account detected</div>
+        <div className="font-medium text-text">{t('profileSync.differentAccount')}</div>
         <p className="text-text-muted mt-1 leading-relaxed">
-          This browser is bound to a previous account ({status.boundUserId}),
-          but you signed in as {status.attemptedUserId}. Your local games and
-          analyses haven't been touched. Sign out to use the original account,
-          or open a fresh browser profile / private window for the new one.
+          {t('profileSync.differentAccountDesc', { boundUserId: status.boundUserId, attemptedUserId: status.attemptedUserId })}
         </p>
       </div>
       <button
@@ -39,7 +38,7 @@ export function ProfileSyncBanner() {
         onClick={() => void clerk.signOut()}
         className="shrink-0 self-start text-xs px-3 py-1.5 rounded border border-border bg-bg-soft hover:bg-bg-raised transition-colors"
       >
-        Sign out
+        {t('profileSync.signOut')}
       </button>
     </div>
   );

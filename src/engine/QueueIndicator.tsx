@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { countByStatus } from '@/db/queries';
 import { useQueueStore } from './queue';
 import type { AnalysisStatus } from '@/db/schema';
@@ -27,6 +28,7 @@ const POLL_RUNNING_MS = 1500;
 const POLL_IDLE_MS = 5000;
 
 export function QueueIndicator() {
+  const { t } = useTranslation();
   const { running, currentPly, currentTotal, currentGameId, paused, setPaused } =
     useQueueStore();
   const [counts, setCounts] = useState<Record<AnalysisStatus, number> | null>(null);
@@ -80,24 +82,24 @@ export function QueueIndicator() {
             <span className="relative inline-flex rounded-full h-2 w-2 bg-accent" />
           </span>
           <span className="text-text-muted">
-            Analyzing {currentPly}/{currentTotal}
+            {t('queueIndicator.analyzing', { ply: currentPly, total: currentTotal })}
           </span>
         </div>
       ) : pending > 0 ? (
-        <span className="text-text-muted">Queued: {pending}</span>
+        <span className="text-text-muted">{t('queueIndicator.queued', { count: pending })}</span>
       ) : errors > 0 ? (
-        <span className="text-blunder">{errors} error{errors === 1 ? '' : 's'}</span>
+        <span className="text-blunder">{t('queueIndicator.errors', { count: errors })}</span>
       ) : null}
       <span className="text-text-muted">
-        {done}/{total} done
+        {t('queueIndicator.doneOf', { done, total })}
       </span>
       <button
         type="button"
         onClick={() => setPaused(!paused)}
         className="btn text-xs px-2 py-1"
-        title={paused ? 'Resume queue' : 'Pause queue'}
+        title={paused ? t('queueIndicator.resumeTitle') : t('queueIndicator.pauseTitle')}
       >
-        {paused ? 'Resume' : 'Pause'}
+        {paused ? t('queueIndicator.resume') : t('queueIndicator.pause')}
       </button>
     </div>
   );

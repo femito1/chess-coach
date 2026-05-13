@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Chess } from 'chess.js';
@@ -14,11 +15,13 @@ import { useReviewState } from './useReviewState';
 import { useLiveEval, formatCp, getCachedLiveEval } from './LiveEval';
 import { AccuracyPanel } from './AccuracyPanel';
 import { MoveInsight } from './MoveInsight';
-import { classifyMove, CLASSIFICATION_LABEL } from '@/engine/classify';
-import { MOTIF_EXPLANATION, MOTIF_LABEL } from '@/engine/motifs';
+import { classifyMove } from '@/engine/classify';
+import { MOTIF_EXPLANATION } from '@/engine/motifs';
+import { tClassification, tMotifExplain, tMotifLabel } from '@/i18n/chess';
 import { EngineCockpit } from '@/engine/EngineCockpit';
 
 export function ReviewPage() {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const game = useLiveQuery(() => (id ? db.games.get(id) : undefined), [id]);
   const analysis = useLiveQuery(() => (id ? db.analyses.get(id) : undefined), [id]);
@@ -207,9 +210,9 @@ export function ReviewPage() {
     };
   }, [searchParams, analysis]);
 
-  if (!id) return <div>Missing id.</div>;
-  if (game === undefined) return <div className="text-text-muted">Loading…</div>;
-  if (!game) return <div className="text-text-muted">Game not found.</div>;
+  if (!id) return <div>{t('review.missingId')}</div>;
+  if (game === undefined) return <div className="text-text-muted">{t('review.loading')}</div>;
+  if (!game) return <div className="text-text-muted">{t('review.gameNotFound')}</div>;
 
   const currentMoveEval: MoveEval | undefined =
     !rs.isExploring && rs.mainlinePly > 0 ? analysis?.moves[rs.mainlinePly - 1] : undefined;
@@ -253,16 +256,16 @@ export function ReviewPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <Link to="/games" className="btn text-xs">← Back</Link>
+        <Link to="/games" className="btn text-xs">{t('review.back')}</Link>
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-semibold truncate">
-            {game.username} <span className="text-text-muted">vs</span> {game.opponent}
+            {game.username} <span className="text-text-muted">{t('common.vs')}</span> {game.opponent}
           </h1>
           <div className="text-xs text-text-muted truncate">
-            {game.opening ?? 'Unknown opening'} · {new Date(game.endTime).toLocaleString()} · {game.timeClass}
+            {game.opening ?? t('review.unknownOpening')} · {new Date(game.endTime).toLocaleString()} · {game.timeClass}
           </div>
         </div>
-        <a href={game.url} target="_blank" rel="noreferrer" className="btn text-xs">Chess.com ↗</a>
+        <a href={game.url} target="_blank" rel="noreferrer" className="btn text-xs">{t('review.chessComLink')}</a>
       </div>
 
       {fromWeaknessBanner && (
@@ -304,15 +307,15 @@ export function ReviewPage() {
               <button className="btn" onClick={() => rs.goToMainlinePly(rs.mainlineFens.length - 1)}>⏭</button>
               {rs.isExploring && (
                 <button type="button" className="btn-primary ml-2" onClick={() => rs.resetExploration()}>
-                  Return to game
+                  {t('review.returnToGame')}
                 </button>
               )}
             </div>
             <div className="text-text-muted text-xs">
               {rs.isExploring
-                ? `Exploring (+${rs.explorationMoves.length} move${rs.explorationMoves.length === 1 ? '' : 's'})`
-                : `Ply ${rs.mainlinePly}/${rs.mainlineFens.length - 1}`}
-              {' · ← / → keys'}
+                ? t('review.exploring', { count: rs.explorationMoves.length })
+                : t('review.plyCounter', { ply: rs.mainlinePly, total: rs.mainlineFens.length - 1 })}
+              {' · '}{t('review.arrowKeys')}
             </div>
           </div>
 
@@ -324,24 +327,24 @@ export function ReviewPage() {
               <div className="card p-3 text-sm border-accent/40 bg-accent/5">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs uppercase tracking-wide text-accent">
-                    Engine (depth {liveEval?.depth ?? '…'})
+                    {t('review.engineDepth', { depth: liveEval?.depth ?? '…' })}
                   </div>
                   <div className="font-mono text-sm">
-                    {liveEval ? formatCp(liveEval.cpWhite, liveEval.mate) : 'thinking…'}
+                    {liveEval ? formatCp(liveEval.cpWhite, liveEval.mate) : t('review.thinking')}
                   </div>
                 </div>
                 <div className="text-xs text-text-muted mt-1">
                   {liveEval?.bestMoveSan ? (
                     <>
-                      Best response from this position:{' '}
+                      {t('review.bestResponse1')}
                       <span className="font-mono text-good">{liveEval.bestMoveSan}</span>
                     </>
                   ) : (
-                    'Calculating best response…'
+                    t('review.calcResponse')
                   )}
                 </div>
                 <div className="text-xs text-text-muted mt-1">
-                  You moved pieces off the original game. Press ← or "Return to game" to go back.
+                  {t('review.movedOff')}
                 </div>
               </div>
             </>
@@ -349,12 +352,12 @@ export function ReviewPage() {
             <EvalGraph moves={analysis.moves} currentPly={rs.mainlinePly} onJump={rs.goToMainlinePly} />
           ) : game.analysisStatus === 'error' ? (
             <div className="card p-4 text-sm border-blunder/40 bg-blunder/5">
-              <div className="font-medium text-blunder mb-1">Analysis failed</div>
+              <div className="font-medium text-blunder mb-1">{t('review.analysisFailed')}</div>
               <div className="text-xs text-text-muted font-mono break-words">
-                {game.analysisError ?? 'unknown error'}
+                {game.analysisError ?? t('review.unknownError')}
               </div>
               <button type="button" className="btn mt-3 text-xs" onClick={() => void requeueGame(game.id)}>
-                Retry analysis
+                {t('review.retryAnalysis')}
               </button>
             </div>
           ) : (
@@ -372,13 +375,13 @@ export function ReviewPage() {
               <EngineCockpit
                 title={
                   game.analysisStatus === 'running'
-                    ? 'Stockfish is analyzing this game'
-                    : 'Queued for analysis'
+                    ? t('review.analyzingTitle')
+                    : t('review.queuedTitle')
                 }
                 subtitle={
                   game.analysisStatus === 'running'
-                    ? 'Live readout from the engine. The eval graph will appear here as soon as analysis lands.'
-                    : 'The analyzer picks up newest games first — this should start within a moment.'
+                    ? t('review.analyzingSubtitle')
+                    : t('review.queuedSubtitle')
                 }
                 showBoard={false}
                 gameId={game.id}
@@ -432,7 +435,8 @@ function ExplorationMoveInsight({
     mateAfter?: number;
   };
 }) {
-  const label = CLASSIFICATION_LABEL[insight.classification];
+  const { t } = useTranslation();
+  const label = tClassification(t, insight.classification);
   const tone =
     insight.classification === 'blunder'
       ? 'border-blunder/60 bg-blunder/10'
@@ -454,25 +458,25 @@ function ExplorationMoveInsight({
     <div className={`card p-3 border ${tone}`}>
       <div className="text-xs uppercase tracking-wide text-text-muted">{label}</div>
       <div className="text-sm">
-        {insight.moverColor} played{' '}
+        {t('review.weaknessPlayed', { color: insight.moverColor === 'White' ? t('common.white') : t('common.black') })}{' '}
         <span className="font-mono font-semibold">{insight.playedSan}</span>.
         {insight.engineWantedSan && (
           insight.engineWantedWasPlayed ? (
             <>
-              {' '}The engine had it as the top move.
+              {' '}{t('review.engineHadIt')}
             </>
           ) : (
             <>
-              {' '}Engine preferred{' '}
+              {' '}{t('review.enginePreferredPrefix')}
               <span className="font-mono text-good font-semibold">
                 {insight.engineWantedSan}
               </span>
-              .
+              {t('review.enginePreferredPeriod')}
             </>
           )
         )}
       </div>
-      <div className="text-xs text-text-muted mt-1">Eval after: {evalAfter}</div>
+      <div className="text-xs text-text-muted mt-1">{t('review.explorationEvalAfter', { eval: evalAfter })}</div>
     </div>
   );
 }
@@ -501,6 +505,7 @@ function FromWeaknessBanner({
     motifs: Motif[];
   };
 }) {
+  const { t } = useTranslation();
   const tone =
     banner.classification === 'blunder'
       ? 'border-blunder/60 bg-blunder/10'
@@ -509,42 +514,40 @@ function FromWeaknessBanner({
         : banner.classification === 'miss'
           ? 'border-miss/60 bg-miss/10'
           : 'border-inaccuracy/60 bg-inaccuracy/10';
-  const label = CLASSIFICATION_LABEL[banner.classification];
+  const label = tClassification(t, banner.classification);
   return (
     <div className={`card p-3 border ${tone}`}>
       <div className="flex items-baseline justify-between flex-wrap gap-2">
         <div className="text-xs uppercase tracking-wide">
-          From weaknesses · {label}
+          {t('review.fromWeaknesses', { label })}
         </div>
         <Link to="/weaknesses" className="text-xs text-accent hover:underline">
-          ← Back to weaknesses
+          {t('review.backToWeaknesses')}
         </Link>
       </div>
       <p className="text-sm mt-1">
-        {banner.moverColor} played{' '}
+        {t('review.weaknessPlayed', { color: banner.moverColor === 'White' ? t('common.white') : t('common.black') })}{' '}
         <span className="font-mono font-semibold text-blunder">
           {banner.playedSan}
         </span>
         {banner.bestSan && (
           <>
-            {' '}— the engine preferred{' '}
+            {' '}— {t('review.weaknessEnginePreferred')}{' '}
             <span className="font-mono font-semibold text-good">
               {banner.bestSan}
             </span>
           </>
         )}
-        . The board is positioned right on this move; step backward (←)
-        to see the position before it, or use the arrow on the board to
-        compare.
+        {t('review.weaknessFootnote')}
       </p>
       {banner.motifs.length > 0 && (
         <ul className="mt-2 space-y-1 text-xs">
           {banner.motifs.map((m) => (
             <li key={m} className="text-text-muted">
               <span className="font-medium text-text">
-                {MOTIF_LABEL[m]}:
+                {tMotifLabel(t, m)}:
               </span>{' '}
-              {MOTIF_EXPLANATION[m]}
+              {tMotifExplain(t, m)}
             </li>
           ))}
         </ul>

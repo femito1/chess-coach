@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   CartesianGrid,
   Legend,
@@ -9,12 +9,15 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
   accuracyTrend,
   ratingTrend,
   winRateByOpening,
   type GameForCharts,
 } from './progress';
+import { usePersistedState } from '@/lib/usePersistedState';
 
 const AXIS_COLOR = '#9aa3b2';
 const GRID_COLOR = '#2a313d';
@@ -75,8 +78,19 @@ type ModeSelection = string[] | null;
  *  actually has data for, but we want a stable left-to-right order. */
 const MODE_ORDER = ['rapid', 'blitz', 'bullet', 'daily', 'classical', 'other'];
 
-function modeLabel(m: string): string {
-  return m.charAt(0).toUpperCase() + m.slice(1);
+/** Translate a time-class key (`'rapid'`, `'blitz'`, etc.) into a
+ *  display label. Falls back to a Title-cased version of the raw key
+ *  if the catalog doesn't have the mode — guards against a future
+ *  Chess.com adding a new time class we haven't translated yet. */
+function modeLabel(t: TFunction, mode: string): string {
+  const key = `charts.modes.${mode}`;
+  const translated = t(key);
+  // If i18next can't find the key, it returns the key itself (with
+  // returnNull: false). Detect that and fall back.
+  if (translated === key) {
+    return mode.charAt(0).toUpperCase() + mode.slice(1);
+  }
+  return translated;
 }
 
 /** True when this selection includes the given class. `null` means
@@ -115,18 +129,54 @@ function toggleMode(
   return [...current, cls];
 }
 
+/** Persisted-state shape guards. Persisted values are user-controlled
+ *  (anyone can edit `localStorage` from DevTools), and we do silent
+ *  shape changes over time as we add new range options or remove time
+ *  classes — so every persisted-state read is gated behind a runtime
+ *  check that drops the persisted value if it doesn't match the
+ *  current type. Cheaper than versioning every micro-change. */
+const isRangeKey = (v: unknown): v is RangeKey =>
+  v === '7d' || v === '30d' || v === '90d' || v === '1y' || v === 'all';
+
+const isModeSelection = (v: unknown): v is ModeSelection =>
+  v === null || (Array.isArray(v) && v.every((x) => typeof x === 'string'));
+
 export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> }) {
+  const { t } = useTranslation();
   // Independent time-window selectors per chart so the user can zoom one
   // without losing context in the other (e.g. last-7-days rating spike
-  // vs. all-time accuracy trend).
-  const [ratingRange, setRatingRange] = useState<RangeKey>('all');
-  const [ratingMode, setRatingMode] = useState<ModeSelection>(null);
-  const [accuracyRange, setAccuracyRange] = useState<RangeKey>('all');
-  const [accuracyMode, setAccuracyMode] = useState<ModeSelection>(null);
+  // vs. all-time accuracy trend). Persisted to `localStorage` so the
+  // selection survives reloads — these are UI preferences, not chess
+  // data, so they don't go through the Settings (Dexie) layer that
+  // syncs across devices once Phase 2 ships.
+  const [ratingRange, setRatingRange] = usePersistedState<RangeKey>(
+    'dashboard:rating-range',
+    'all',
+    { isValid: isRangeKey },
+  );
+  const [ratingMode, setRatingMode] = usePersistedState<ModeSelection>(
+    'dashboard:rating-mode',
+    null,
+    { isValid: isModeSelection },
+  );
+  const [accuracyRange, setAccuracyRange] = usePersistedState<RangeKey>(
+    'dashboard:accuracy-range',
+    'all',
+    { isValid: isRangeKey },
+  );
+  const [accuracyMode, setAccuracyMode] = usePersistedState<ModeSelection>(
+    'dashboard:accuracy-mode',
+    null,
+    { isValid: isModeSelection },
+  );
   // The win-rate-by-opening card uses the same chip-bar contract as the
   // rating + accuracy charts. Independent state so a user filtering one
   // doesn't leak into the others.
-  const [openingMode, setOpeningMode] = useState<ModeSelection>(null);
+  const [openingMode, setOpeningMode] = usePersistedState<ModeSelection>(
+    'dashboard:opening-mode',
+    null,
+    { isValid: isModeSelection },
+  );
 
   const ratingsAll = useMemo(() => ratingTrend(games), [games]);
   // We deliberately compute the unfiltered series first to feed the
@@ -259,13 +309,13 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
 
   return (
     <section className="space-y-3">
-      <h2 className="font-medium">Progress</h2>
+      <h2 className="font-medium">{t('charts.sectionTitle')}</h2>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <div className="card p-3">
           <div className="flex flex-wrap items-center justify-between mb-1 gap-2">
             <div className="text-xs uppercase tracking-wide text-text-muted">
-              Rating trend
+              {t('charts.ratingTitle')}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               {availableModes.length > 1 && (
@@ -286,8 +336,8 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
             <EmptyChart
               text={
                 !ratingAllSelected
-                  ? 'No rating data for the selected time controls.'
-                  : 'No rating data in this range.'
+                  ? t('charts.empty.ratingNoMode')
+                  : t('charts.empty.ratingNoRange')
               }
             />
           ) : (
@@ -337,7 +387,7 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
         <div className="card p-3">
           <div className="flex flex-wrap items-center justify-between mb-1 gap-2">
             <div className="text-xs uppercase tracking-wide text-text-muted">
-              Accuracy over time
+              {t('charts.accuracyTitle')}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               {availableAccuracyModes.length > 1 && (
@@ -360,10 +410,10 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
             <EmptyChart
               text={
                 accuracyAllNoFilter.length === 0
-                  ? 'Waiting on analyzed games.'
+                  ? t('charts.empty.accuracyWaiting')
                   : !accuracyAllSelected
-                    ? 'No analyzed games for the selected time controls.'
-                    : 'No analyzed games in this range.'
+                    ? t('charts.empty.accuracyNoMode')
+                    : t('charts.empty.accuracyNoRange')
               }
             />
           ) : (
@@ -394,7 +444,9 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
                     labelFormatter={(t) => fmtDate(Number(t))}
                     formatter={(val: number, name: string) => [
                       `${val?.toFixed?.(1) ?? val}%`,
-                      name === 'rolling' ? '20-game avg' : 'Game',
+                      name === 'rolling'
+                        ? t('charts.tooltipRollingAvg')
+                        : t('charts.tooltipPerGame'),
                     ]}
                   />
                   <Line
@@ -423,7 +475,7 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
       <div className="card p-3">
         <div className="flex flex-wrap items-center justify-between mb-2 gap-2">
           <div className="text-xs uppercase tracking-wide text-text-muted">
-            Win rate by opening (top 10 by volume)
+            {t('charts.openingsTitle')}
           </div>
           {availableOpeningModes.length > 1 && (
             <ModePicker
@@ -443,8 +495,8 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
           <EmptyChart
             text={
               !openingAllSelected
-                ? 'No opening data for the selected time controls.'
-                : 'No opening data yet.'
+                ? t('charts.empty.openingsNoMode')
+                : t('charts.empty.openingsEmpty')
             }
           />
         ) : (
@@ -466,6 +518,7 @@ function OpeningWinRateList({
 }: {
   openings: ReturnType<typeof winRateByOpening>;
 }) {
+  const { t } = useTranslation();
   return (
     <ul className="space-y-2">
       {openings.map((o) => {
@@ -480,11 +533,22 @@ function OpeningWinRateList({
           <li
             key={o.family}
             className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 items-center"
-            title={`${o.family} — ${o.wins}W ${o.draws}D ${o.losses}L over ${o.games} games`}
+            title={t('charts.openingTooltip', {
+              family: o.family,
+              wins: o.wins,
+              draws: o.draws,
+              losses: o.losses,
+              games: o.games,
+            })}
           >
             <span className="text-sm truncate">{o.family}</span>
             <span className="text-xs text-text-muted font-mono whitespace-nowrap">
-              {o.wins}W · {o.draws}D · {o.losses}L · {o.games}g
+              {t('charts.openingRow', {
+                wins: o.wins,
+                draws: o.draws,
+                losses: o.losses,
+                games: o.games,
+              })}
             </span>
             <div className="col-span-2 flex items-center gap-2">
               <div className="flex-1 h-2 rounded-full bg-bg-raised overflow-hidden">
@@ -520,11 +584,12 @@ function RangePicker({
   value: RangeKey;
   onChange: (next: RangeKey) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       className="flex gap-0.5 text-[11px] rounded-md border border-border bg-bg-raised/40 p-0.5"
       role="tablist"
-      aria-label="Time range"
+      aria-label={t('charts.ariaTimeRange')}
     >
       {RANGE_OPTIONS.map((o) => {
         const active = o.key === value;
@@ -541,7 +606,7 @@ function RangePicker({
                 : 'text-text-muted hover:text-text'
             }`}
           >
-            {o.label}
+            {t(`charts.ranges.${o.key}`)}
           </button>
         );
       })}
@@ -573,11 +638,12 @@ function ModePicker({
   onToggle: (mode: string) => void;
   onAll: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       className="flex gap-0.5 text-[11px] rounded-md border border-border bg-bg-raised/40 p-0.5"
       role="group"
-      aria-label="Time class"
+      aria-label={t('charts.ariaTimeClass')}
     >
       <button
         key="all"
@@ -588,7 +654,7 @@ function ModePicker({
           allActive ? 'bg-accent/20 text-accent' : 'text-text-muted hover:text-text'
         }`}
       >
-        All
+        {t('charts.modes.all')}
       </button>
       {modes.map((m) => {
         const active = selectionIncludes(selection, modes, m);
@@ -614,7 +680,7 @@ function ModePicker({
                 outlineOffset: '-1px',
               }}
             />
-            {modeLabel(m)}
+            {modeLabel(t, m)}
           </button>
         );
       })}

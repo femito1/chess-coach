@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { Trans, useTranslation } from 'react-i18next';
 
 /**
  * Public privacy policy page.
@@ -23,6 +24,7 @@ import { Link } from 'react-router-dom';
  *     `published-data` archives.
  */
 export function PrivacyPage() {
+  const { t } = useTranslation();
   return (
     <div className="min-h-screen bg-bg text-text px-6 py-12">
       <div className="max-w-2xl mx-auto">
@@ -30,118 +32,104 @@ export function PrivacyPage() {
           to="/"
           className="text-sm text-text-muted hover:text-text inline-block mb-8"
         >
-          ← Back to Chess Coach
+          {t('privacy.back')}
         </Link>
 
         <h1 className="text-3xl font-semibold tracking-tight mb-2">
-          Privacy Policy
+          {t('privacy.title')}
         </h1>
         <p className="text-sm text-text-muted mb-8">
-          Last updated: May 2026
+          {t('privacy.lastUpdated')}
         </p>
 
         <section className="space-y-6 text-sm leading-relaxed">
-          <p>
-            Chess Coach is a personal chess analysis tool you run in your
-            browser. We've kept the privacy story short on purpose: there is
-            no Chess Coach backend that stores your data, no analytics, no
-            advertising tracking, and no third-party data sharing.
-          </p>
+          <p>{t('privacy.intro')}</p>
 
           <h2 className="text-lg font-semibold mt-8">
-            What the web app stores
+            {t('privacy.webStores')}
           </h2>
           <ul className="list-disc pl-6 space-y-2">
             <li>
-              <strong>Locally in your browser (IndexedDB):</strong> the games
-              you import, the engine evaluations Chess Coach computes for
-              them, your repertoire trees, and your puzzle progress. This
-              data never leaves your device unless you explicitly export it
-              from the Backup page.
+              <Trans
+                i18nKey="privacy.localData"
+                components={{ bold: <strong /> }}
+              />
             </li>
             <li>
-              <strong>Authentication:</strong> we use Clerk to sign you in.
-              Clerk holds your email address and any OAuth identifiers
-              (Google, GitHub) you choose to link. See{' '}
-              <a
-                href="https://clerk.com/legal/privacy"
-                className="text-accent hover:underline"
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                Clerk's privacy policy
-              </a>{' '}
-              for what they store about you.
+              <Trans
+                i18nKey="privacy.auth"
+                components={{
+                  bold: <strong />,
+                  link: (
+                    <a
+                      href="https://clerk.com/legal/privacy"
+                      className="text-accent hover:underline"
+                      target="_blank"
+                      rel="noreferrer noopener"
+                    />
+                  ),
+                }}
+              />
             </li>
             <li>
-              <strong>Profile sync (Supabase):</strong> we mirror a tiny
-              "profile row" (your Clerk user id and your Chess.com username)
-              to Supabase so different devices can recognise the same
-              account. Game data and analyses are <em>not</em> synced —
-              they live in IndexedDB on whichever device produced them.
+              <Trans
+                i18nKey="privacy.profileSync"
+                components={{ bold: <strong />, em: <em /> }}
+              />
             </li>
           </ul>
 
           <h2 className="text-lg font-semibold mt-8">
-            What the Chrome extension stores
+            {t('privacy.extStores')}
           </h2>
           <ul className="list-disc pl-6 space-y-2">
             <li>
-              <strong>In <code>chrome.storage.sync</code>:</strong> your
-              Chess.com username, the URL of your Chess Coach app, and a
-              boolean toggle for whether to show the after-game prompt.
-              Nothing else.
+              <Trans
+                i18nKey="privacy.extSyncStorage"
+                components={{ bold: <strong />, code: <code /> }}
+              />
             </li>
             <li>
-              <strong>What the extension sees:</strong> only the URL and
-              DOM of <code>chess.com</code> tabs (it has no permission for
-              any other site by default). When you click "Test connection"
-              in the options page, it will request one-time permission to
-              fetch your configured Chess Coach URL — granted per-host with
-              your explicit consent.
+              <Trans
+                i18nKey="privacy.extSees"
+                components={{ bold: <strong />, code: <code /> }}
+              />
             </li>
             <li>
-              <strong>What the extension sends:</strong> nothing, anywhere,
-              ever. The deep link it builds is a URL navigation in your
-              own browser; no data leaves your machine via the extension.
+              <Trans
+                i18nKey="privacy.extSends"
+                components={{ bold: <strong /> }}
+              />
             </li>
           </ul>
 
           <h2 className="text-lg font-semibold mt-8">
-            What we don't do
+            {t('privacy.wontDo')}
           </h2>
           <ul className="list-disc pl-6 space-y-2">
-            <li>No analytics, tracking pixels, or session-replay tools.</li>
-            <li>No advertising. No data brokers.</li>
+            <li>{t('privacy.noAnalytics')}</li>
+            <li>{t('privacy.noAds')}</li>
+            <li>{t('privacy.noSelling')}</li>
             <li>
-              No selling, renting, or sharing your information with third
-              parties.
-            </li>
-            <li>
-              No reading of your <code>chess.com</code> account beyond the
-              public game archive you opt into via username — Chess Coach
-              uses Chess.com's public API and never asks for your password.
+              <Trans
+                i18nKey="privacy.noChessReading"
+                components={{ code: <code /> }}
+              />
             </li>
           </ul>
 
           <h2 className="text-lg font-semibold mt-8">
-            Deleting your data
+            {t('privacy.delete')}
           </h2>
           <p>
-            Use <strong>Settings → Reset</strong> (or the browser's "Clear
-            site data" devtool) to wipe IndexedDB. To remove the Supabase
-            profile row, sign out of Clerk and email the address below.
-            The extension's stored settings can be cleared by removing the
-            extension from <code>chrome://extensions</code>.
+            <Trans
+              i18nKey="privacy.deleteDesc"
+              components={{ bold: <strong />, code: <code /> }}
+            />
           </p>
 
-          <h2 className="text-lg font-semibold mt-8">Contact</h2>
-          <p>
-            Questions about this policy or about a deletion request: open
-            an issue on the Chess Coach repository, or reach out via the
-            email listed on the Chrome Web Store listing for this
-            extension.
-          </p>
+          <h2 className="text-lg font-semibold mt-8">{t('privacy.contact')}</h2>
+          <p>{t('privacy.contactDesc')}</p>
         </section>
       </div>
     </div>

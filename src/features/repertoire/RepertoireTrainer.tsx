@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Chess } from 'chess.js';
@@ -15,6 +16,7 @@ const INITIAL_FEN =
   'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 export function RepertoireTrainer() {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const repertoire = useLiveQuery(() => (id ? db.repertoires.get(id) : undefined), [id]);
   const [queue, setQueue] = useState<RepertoireCard[]>([]);
@@ -166,25 +168,25 @@ export function RepertoireTrainer() {
     setPlaybackIdx(0);
   }, [current]);
 
-  if (!id) return <div>Missing id.</div>;
-  if (loading) return <div className="text-text-muted">Loading…</div>;
-  if (!repertoire) return <div className="text-text-muted">Repertoire not found.</div>;
+  if (!id) return <div>{t('review.missingId')}</div>;
+  if (loading) return <div className="text-text-muted">{t('common.loading')}</div>;
+  if (!repertoire) return <div className="text-text-muted">{t('repertoire.trainer.notFound')}</div>;
 
   if (queue.length === 0) {
     return (
       <div className="space-y-4">
         <div className="flex items-center gap-3">
-          <Link to="/repertoire" className="btn text-xs">← Back</Link>
-          <h1 className="text-lg font-semibold truncate">{repertoire.name} · Training</h1>
+          <Link to="/repertoire" className="btn text-xs">{t('repertoire.trainer.back')}</Link>
+          <h1 className="text-lg font-semibold truncate">{repertoire.name} · {t('repertoire.trainer.training')}</h1>
         </div>
         <div className="card p-8 text-center text-text-muted">
-          Nothing due right now. Come back later, or add more lines in the editor.
+          {t('repertoire.trainer.nothingDue')}
         </div>
       </div>
     );
   }
 
-  if (!current) return <div className="text-text-muted">Loading card…</div>;
+  if (!current) return <div className="text-text-muted">{t('repertoire.trainer.loadingCard')}</div>;
 
   const orientation = repertoire.color;
   const expectedSan = (() => {
@@ -222,11 +224,11 @@ export function RepertoireTrainer() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <Link to="/repertoire" className="btn text-xs">← Back</Link>
+        <Link to="/repertoire" className="btn text-xs">{t('repertoire.trainer.back')}</Link>
         <div className="flex-1 min-w-0">
-          <h1 className="text-lg font-semibold truncate">{repertoire.name} · Training</h1>
+          <h1 className="text-lg font-semibold truncate">{repertoire.name} · {t('repertoire.trainer.training')}</h1>
           <div className="text-xs text-text-muted flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span>Card {idx + 1} of {queue.length}</span>
+            <span>{t('repertoire.trainer.cardOf', { n: idx + 1, total: queue.length })}</span>
             {opening && (
               <>
                 <span aria-hidden="true">·</span>
@@ -276,25 +278,27 @@ export function RepertoireTrainer() {
             <div className="text-sm min-h-[1.5rem]">
               {status === 'thinking' && (
                 <span className="text-text-muted">
-                  {orientation === 'white' ? 'White' : 'Black'} to move. Play your prep.
+                  {t('repertoire.trainer.toMove', { color: orientation === 'white' ? t('common.white') : t('common.black') })}
                   {hintShown && (
                     <span className="ml-2 text-accent">
-                      · Hint: move the highlighted piece
+                      {t('repertoire.trainer.hint')}
                     </span>
                   )}
                 </span>
               )}
               {status === 'wrong' && (
                 <span className="text-blunder">
-                  {lastTrySan} isn't your prep
+                  {t('repertoire.trainer.wrongLine', { san: lastTrySan })}
                 </span>
               )}
               {status === 'right' && (
                 <span className="text-good">
-                  Correct — <span className="font-mono">{expectedSan}</span>.
+                  {t('repertoire.trainer.correct')}<span className="font-mono">{expectedSan}</span>.
                   {(wrongCount > 0 || hintShown) && (
                     <span className="ml-2 text-text-muted text-xs">
-                      (with {wrongCount > 0 ? `${wrongCount} wrong tr${wrongCount === 1 ? 'y' : 'ies'}` : 'a hint'})
+                      {wrongCount > 0
+                        ? t('repertoire.trainer.withWrong', { count: wrongCount })
+                        : t('repertoire.trainer.withHint')}
                     </span>
                   )}
                 </span>
@@ -309,12 +313,12 @@ export function RepertoireTrainer() {
             <div className="flex flex-wrap gap-2">
               {status === 'wrong' && (
                 <button type="button" className="btn-primary text-xs" onClick={retry}>
-                  Try again
+                  {t('repertoire.trainer.tryAgain')}
                 </button>
               )}
               {!hintShown && (
                 <button type="button" className="btn text-xs" onClick={showHint}>
-                  Hint
+                  {t('puzzles.solver.hint_btn')}
                 </button>
               )}
               <button
@@ -325,7 +329,7 @@ export function RepertoireTrainer() {
                   setPlaybackIdx(solutionSteps.length - 1);
                 }}
               >
-                Show answer
+                {t('repertoire.trainer.showAnswer')}
               </button>
             </div>
           )}
@@ -343,20 +347,20 @@ export function RepertoireTrainer() {
           {(status === 'right' || shown) && (
             <div className="card p-3 space-y-2">
               <div className="text-xs uppercase tracking-wide text-text-muted">
-                How well did you know it?
+                {t('repertoire.trainer.howWell')}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <button className="btn border-blunder/40 text-blunder hover:bg-blunder/10" onClick={() => grade('again')}>
-                  Again
+                  {t('repertoire.trainer.again')}
                 </button>
-                <button className="btn" onClick={() => grade('hard')}>Hard</button>
-                <button className="btn" onClick={() => grade('good')}>Good</button>
+                <button className="btn" onClick={() => grade('hard')}>{t('repertoire.trainer.hard')}</button>
+                <button className="btn" onClick={() => grade('good')}>{t('repertoire.trainer.good')}</button>
                 <button className="btn border-good/40 text-good hover:bg-good/10" onClick={() => grade('easy')}>
-                  Easy
+                  {t('repertoire.trainer.easy')}
                 </button>
               </div>
               <div className="text-xs text-text-muted">
-                Current interval: {summarizeIntervals(current.srs.intervalDays)} · ease {current.srs.ease.toFixed(2)}
+                {t('repertoire.trainer.currentInterval', { intervals: summarizeIntervals(current.srs.intervalDays), ease: current.srs.ease.toFixed(2) })}
               </div>
             </div>
           )}

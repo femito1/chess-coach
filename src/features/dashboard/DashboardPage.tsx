@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
+import { Trans, useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { countByStatus, listGamesLight, requeueAllErrors } from '@/db/queries';
 import { db } from '@/db/schema';
 import { isDue } from '@/srs/sm2';
@@ -9,6 +11,7 @@ import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 import { totalSecondsPlayed } from './progress';
 
 export function DashboardPage() {
+  const { t } = useTranslation();
   // Throttled to 1.5 s. The dashboard's `games` query reads a *light*
   // projection (`listGamesLight` — no PGN) so each refire allocates
   // ~50 KB of metadata instead of ~2 MB of PGN strings. Combined with
@@ -64,25 +67,26 @@ export function DashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-          <p className="text-sm text-text-muted">
-            Import games, let the engine analyze in the background, and review what to fix.
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">{t('dashboard.title')}</h1>
+          <p className="text-sm text-text-muted">{t('dashboard.subtitle')}</p>
         </div>
         <Link to="/import" className="btn-primary self-start sm:self-auto">
-          Import games
+          {t('dashboard.importGames')}
         </Link>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Games" value={total} />
+        <Stat label={t('dashboard.stats.games')} value={total} />
         <RecordStat wins={wins} draws={draws} losses={losses} winPct={winPct} />
         <Stat
-          label="Avg accuracy"
+          label={t('dashboard.stats.avgAccuracy')}
           value={avgAccuracy(games ?? [])}
           suffix={avgAccuracy(games ?? []) === '—' ? '' : '%'}
         />
-        <Stat label="Hours played" value={formatHours(hoursPlayed)} />
+        <Stat
+          label={t('dashboard.stats.hoursPlayed')}
+          value={formatHours(hoursPlayed, t)}
+        />
       </div>
 
       <AnalysisStatus
@@ -96,28 +100,38 @@ export function DashboardPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <Link to="/weaknesses" className="card p-4 hover:border-accent/60 transition-colors">
-          <div className="text-xs text-text-muted">Study</div>
-          <div className="text-lg font-semibold">Weaknesses</div>
+          <div className="text-xs text-text-muted">{t('dashboard.studyCards.study')}</div>
+          <div className="text-lg font-semibold">{t('dashboard.studyCards.weaknesses')}</div>
           <div className="text-xs text-text-muted mt-1">
-            Recurring mistake patterns across your games.
+            {t('dashboard.studyCards.weaknessesDesc')}
           </div>
         </Link>
         <Link to="/puzzles" className="card p-4 hover:border-accent/60 transition-colors">
-          <div className="text-xs text-text-muted">Drill</div>
+          <div className="text-xs text-text-muted">{t('dashboard.studyCards.drill')}</div>
           <div className="text-lg font-semibold">
-            Puzzles {duePuzzles ? <span className="text-accent">· {duePuzzles} due</span> : null}
+            {t('dashboard.studyCards.puzzles')}{' '}
+            {duePuzzles ? (
+              <span className="text-accent">
+                {t('dashboard.studyCards.puzzlesDue', { count: duePuzzles })}
+              </span>
+            ) : null}
           </div>
           <div className="text-xs text-text-muted mt-1">
-            Generated from your own blunders.
+            {t('dashboard.studyCards.puzzlesDesc')}
           </div>
         </Link>
         <Link to="/repertoire" className="card p-4 hover:border-accent/60 transition-colors">
-          <div className="text-xs text-text-muted">Prep</div>
+          <div className="text-xs text-text-muted">{t('dashboard.studyCards.prep')}</div>
           <div className="text-lg font-semibold">
-            Repertoire {dueRepCards ? <span className="text-accent">· {dueRepCards} due</span> : null}
+            {t('dashboard.studyCards.repertoire')}{' '}
+            {dueRepCards ? (
+              <span className="text-accent">
+                {t('dashboard.studyCards.repertoireDue', { count: dueRepCards })}
+              </span>
+            ) : null}
           </div>
           <div className="text-xs text-text-muted mt-1">
-            Spaced-repetition opening training.
+            {t('dashboard.studyCards.repertoireDesc')}
           </div>
         </Link>
       </div>
@@ -128,16 +142,16 @@ export function DashboardPage() {
 
       <section className="card p-4">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="font-medium">Recent games</h2>
+          <h2 className="font-medium">{t('dashboard.recent.title')}</h2>
           <Link to="/games" className="text-xs text-text-muted hover:text-text">
-            View all →
+            {t('common.viewAll')}
           </Link>
         </div>
         {recent.length === 0 ? (
           <div className="text-sm text-text-muted py-8 text-center">
-            No games yet.{' '}
+            {t('dashboard.recent.empty')}{' '}
             <Link to="/import" className="text-accent">
-              Import your first batch
+              {t('dashboard.recent.emptyCta')}
             </Link>
             .
           </div>
@@ -155,12 +169,16 @@ export function DashboardPage() {
                   }`}
                 />
                 <span className="flex-1 truncate">
-                  vs <span className="font-medium">{g.opponent}</span>
-                  <span className="text-text-muted"> · {g.opening ?? 'Unknown opening'}</span>
+                  {t('dashboard.recent.vs')}{' '}
+                  <span className="font-medium">{g.opponent}</span>
+                  <span className="text-text-muted">
+                    {' · '}
+                    {g.opening ?? t('dashboard.recent.unknownOpening')}
+                  </span>
                 </span>
                 <span className="text-xs text-text-muted">{g.timeClass}</span>
                 <Link to={`/review/${g.id}`} className="btn text-xs py-0.5 px-2">
-                  Review
+                  {t('common.review')}
                 </Link>
               </li>
             ))}
@@ -196,7 +214,11 @@ function Stat({
 
 /** Combined W/D/L stat. Shows the win-rate as the headline number and a
  *  chess.com-style stacked bar with W·D·L counts beneath it, so a single
- *  tile carries the full record without losing the per-bucket detail. */
+ *  tile carries the full record without losing the per-bucket detail.
+ *  Uses `useTranslation` directly rather than receiving `t` as a prop —
+ *  the i18n hook is cheap (one shared subscription via context) and
+ *  prop-drilling translation functions across every leaf component
+ *  becomes noisy fast. */
 function RecordStat({
   wins,
   draws,
@@ -208,6 +230,7 @@ function RecordStat({
   losses: number;
   winPct: number;
 }) {
+  const { t } = useTranslation();
   const total = wins + draws + losses;
   const winW = total > 0 ? (wins / total) * 100 : 0;
   const drawW = total > 0 ? (draws / total) * 100 : 0;
@@ -215,13 +238,13 @@ function RecordStat({
   return (
     <div className="card p-4 flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2">
-        <div className="text-xs text-text-muted">Record</div>
+        <div className="text-xs text-text-muted">{t('dashboard.stats.record')}</div>
         <div className="text-xs text-text-muted tabular-nums">
-          <span className="text-good">{wins}W</span>
+          <span className="text-good">{t('dashboard.stats.wins', { count: wins })}</span>
           <span> · </span>
-          <span>{draws}D</span>
+          <span>{t('dashboard.stats.draws', { count: draws })}</span>
           <span> · </span>
-          <span className="text-blunder">{losses}L</span>
+          <span className="text-blunder">{t('dashboard.stats.losses', { count: losses })}</span>
         </div>
       </div>
       <div className="text-2xl font-semibold tabular-nums">
@@ -230,7 +253,7 @@ function RecordStat({
       <div
         className="h-1.5 w-full rounded-full bg-bg-raised overflow-hidden flex"
         role="img"
-        aria-label={`${wins} wins, ${draws} draws, ${losses} losses`}
+        aria-label={t('dashboard.stats.wdlAria', { wins, draws, losses })}
       >
         {winW > 0 && <div className="h-full bg-good" style={{ width: `${winW}%` }} />}
         {drawW > 0 && <div className="h-full bg-text-muted/60" style={{ width: `${drawW}%` }} />}
@@ -264,29 +287,39 @@ function AnalysisStatus({
   errored: number;
   onRetryErrors: () => void;
 }) {
+  const { t } = useTranslation();
   if (total === 0) return null;
   if (queued === 0 && errored === 0 && unanalyzed === 0) return null;
 
   return (
     <div className="card p-3 flex flex-wrap items-center gap-x-4 gap-y-2">
       <span className="text-sm text-text-muted">
-        Analysis: <span className="text-text">{analyzed}</span> / {total} analyzed
+        {/* `<Trans>` renders the embedded `<strong>` tag from the
+         *  translation string with the right interpolated values. We
+         *  keep the markup in the catalog string so translators can
+         *  reorder around it (Portuguese flows the noun before the
+         *  number quite differently from English in some sentences). */}
+        <Trans
+          i18nKey="dashboard.analysis.summary"
+          values={{ analyzed, total }}
+          components={{ strong: <span className="text-text" /> }}
+        />
       </span>
       {queued > 0 && (
         <span className="text-sm text-accent">
-          {queued} {queued === 1 ? 'game' : 'games'} in queue
+          {t('dashboard.analysis.inQueue', { count: queued })}
         </span>
       )}
       {unanalyzed > 0 && queued === 0 && (
         <span className="text-sm text-text-muted">
-          {unanalyzed} pending
+          {t('dashboard.analysis.pending', { count: unanalyzed })}
         </span>
       )}
       {errored > 0 && (
         <span className="text-sm text-blunder flex items-center gap-2">
-          {errored} {errored === 1 ? 'game' : 'games'} errored
+          {t('dashboard.analysis.errored', { count: errored })}
           <button type="button" className="btn text-xs" onClick={onRetryErrors}>
-            Retry all
+            {t('common.retryAll')}
           </button>
         </span>
       )}
@@ -304,10 +337,15 @@ function avgAccuracy(games: ReadonlyArray<{ accuracy?: { white: number; black: n
 /** Compact hours-played formatter. Below an hour we show minutes; below
  *  ten hours we keep one decimal of precision (so 6.4 h doesn't round to
  *  6 h on a few short sessions); past that we show whole hours since
- *  the decimal is just noise. */
-function formatHours(h: number): string {
+ *  the decimal is just noise. The unit suffix flows through i18n so
+ *  pt-BR can render the same string ("min" / "h" both happen to be the
+ *  same in pt-BR, but a future locale could differ — e.g. ja-JP "分" /
+ *  "時間"). Receives `t` as a parameter rather than calling
+ *  `useTranslation` because it's a plain helper, not a component, and
+ *  hooks must only be called from React render paths. */
+function formatHours(h: number, t: TFunction): string {
   if (!Number.isFinite(h) || h <= 0) return '—';
-  if (h < 1) return `${Math.round(h * 60)} min`;
-  if (h < 10) return `${h.toFixed(1)} h`;
-  return `${Math.round(h)} h`;
+  if (h < 1) return t('dashboard.format.minutes', { value: Math.round(h * 60) });
+  if (h < 10) return t('dashboard.format.hours', { value: h.toFixed(1) });
+  return t('dashboard.format.hours', { value: Math.round(h) });
 }

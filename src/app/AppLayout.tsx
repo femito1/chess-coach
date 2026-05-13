@@ -2,23 +2,29 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { QueueIndicator } from '@/engine/QueueIndicator';
 import { BootBanner } from '@/engine/BootBanner';
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { startAnalysisQueue } from '@/engine/queue';
 import { ProfileChip } from './ProfileChip';
 import { ProfileSyncBanner } from '@/features/auth/ProfileSyncBanner';
 import { NewGamesBanner } from '@/features/import/NewGamesBanner';
 
-const NAV_ITEMS: { to: string; label: string }[] = [
-  { to: '/dashboard', label: 'Dashboard' },
-  { to: '/import', label: 'Import' },
-  { to: '/games', label: 'Games' },
-  { to: '/weaknesses', label: 'Weaknesses' },
-  { to: '/puzzles', label: 'Puzzles' },
-  { to: '/repertoire', label: 'Repertoire' },
-  { to: '/openings', label: 'Openings' },
-  { to: '/settings', label: 'Settings' },
+/** Translation-keys for nav. Kept as a typed list so the order is
+ *  stable and a missing translation surfaces at compile time as a
+ *  TypeScript error rather than a runtime "key.path" string. The
+ *  `to` paths are language-agnostic — only the label is translated. */
+const NAV_ITEMS: { to: string; key: string }[] = [
+  { to: '/dashboard', key: 'nav.dashboard' },
+  { to: '/import', key: 'nav.import' },
+  { to: '/games', key: 'nav.games' },
+  { to: '/weaknesses', key: 'nav.weaknesses' },
+  { to: '/puzzles', key: 'nav.puzzles' },
+  { to: '/repertoire', key: 'nav.repertoire' },
+  { to: '/openings', key: 'nav.openings' },
+  { to: '/settings', key: 'nav.settings' },
 ];
 
 export function AppLayout() {
+  const { t } = useTranslation();
   useEffect(() => {
     startAnalysisQueue();
   }, []);
@@ -59,7 +65,7 @@ export function AppLayout() {
             to="/dashboard"
             className="font-semibold tracking-tight hover:text-accent transition-colors whitespace-nowrap shrink-0"
           >
-            <span className="text-accent">♞</span> Chess Coach
+            <span className="text-accent">♞</span> {t('nav.appName')}
           </Link>
           {/* Desktop inline nav: visible at `lg` and up (1024 px). The
               eight items + logo + profile chip need ≥ ~880 px to fit on
@@ -71,7 +77,7 @@ export function AppLayout() {
           <nav className="hidden lg:flex items-center gap-1 text-sm">
             {NAV_ITEMS.map((item) => (
               <NavItem key={item.to} to={item.to}>
-                {item.label}
+                {t(item.key)}
               </NavItem>
             ))}
           </nav>
@@ -85,7 +91,7 @@ export function AppLayout() {
               className="lg:hidden inline-flex items-center justify-center w-9 h-9 rounded-md border border-border text-text hover:border-accent/60 hover:text-accent transition-colors"
               aria-expanded={menuOpen}
               aria-controls="mobile-nav"
-              aria-label={menuOpen ? 'Close navigation' : 'Open navigation'}
+              aria-label={menuOpen ? t('nav.closeMenu') : t('nav.openMenu')}
               onClick={() => setMenuOpen((o) => !o)}
             >
               {menuOpen ? <CloseIcon /> : <MenuIcon />}
@@ -105,7 +111,7 @@ export function AppLayout() {
             <div className="max-w-screen-2xl mx-auto px-2 py-2 flex flex-col gap-1">
               {NAV_ITEMS.map((item) => (
                 <MobileNavItem key={item.to} to={item.to}>
-                  {item.label}
+                  {t(item.key)}
                 </MobileNavItem>
               ))}
             </div>

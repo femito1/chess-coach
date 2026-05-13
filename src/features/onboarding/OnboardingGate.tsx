@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { getSettings } from '@/db/schema';
 import { isE2EBypass } from '@/lib/testAuth';
 
@@ -26,6 +27,7 @@ import { isE2EBypass } from '@/lib/testAuth';
  * sibling so it can render outside `<AppLayout>`.
  */
 export function OnboardingGate() {
+  const { t } = useTranslation();
   const location = useLocation();
   const [decided, setDecided] = useState<{ needs: boolean } | null>(null);
 
@@ -54,7 +56,7 @@ export function OnboardingGate() {
   }, [location.pathname, bypass]);
 
   if (decided === null) {
-    return <div className="min-h-screen" aria-busy="true" aria-label="Loading" />;
+    return <div className="min-h-screen" aria-busy="true" aria-label={t('common.loading')} />;
   }
 
   if (decided.needs) {

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useBootStore } from './queue';
 
 /**
@@ -13,8 +14,15 @@ import { useBootStore } from './queue';
  * confuse boot housekeeping with engine analysis activity.
  */
 export function BootBanner() {
+  const { t } = useTranslation();
   const { phase, started } = useBootStore();
   if (!started || !phase) return null;
+
+  // `phase` is now a translation key set by `queue.ts` boot steps.
+  // Falls back to the raw phase string if anyone sets a non-key value
+  // (e.g. legacy callers / tests), matching i18next's defaultValue
+  // behavior.
+  const label = t(`bootBanner.${phase}`, { defaultValue: phase });
 
   return (
     <div
@@ -23,7 +31,7 @@ export function BootBanner() {
       aria-live="polite"
     >
       <Spinner />
-      <span className="text-text-muted">{phase}</span>
+      <span className="text-text-muted">{label}</span>
     </div>
   );
 }

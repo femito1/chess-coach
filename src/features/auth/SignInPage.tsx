@@ -1,4 +1,5 @@
 import { SignIn } from '@clerk/clerk-react';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Full-page sign-in. Renders Clerk's hosted-style `<SignIn />` component
@@ -17,6 +18,7 @@ import { SignIn } from '@clerk/clerk-react';
  * `sign-in/*` so React Router lets Clerk handle the rest.
  */
 export function SignInPage() {
+  const { t } = useTranslation();
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-12 bg-bg">
       <div className="text-center mb-8">
@@ -24,8 +26,7 @@ export function SignInPage() {
           <span className="text-accent">♞</span> Chess Coach
         </h1>
         <p className="text-sm text-text-muted mt-2 max-w-sm">
-          Sign in to import your games, track your weaknesses, and build a
-          repertoire that actually sticks.
+          {t('signIn.tagline')}
         </p>
       </div>
       <SignIn
