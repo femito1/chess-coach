@@ -214,6 +214,16 @@ export interface Settings {
    *  the pass entirely. Bumped only when the PGN-clock derivation
    *  logic changes its output for existing games. */
   lastUserTimeBackfillVersion?: number;
+  /** Epoch ms when the user dismissed the in-app "install the
+   *  browser extension" promotion. Set by the dismiss button on the
+   *  Settings → Browser extension card; once stamped the card
+   *  collapses to a one-line "Reopen" row so the user can still
+   *  reach the install link without it nagging them. Undefined =
+   *  never dismissed (the default for fresh installs and for users
+   *  upgrading across the 2026-05-13 release that introduced this
+   *  field). Not indexed, so no Dexie version bump is required —
+   *  same pattern as `onboardingCompletedAt`. */
+  extensionPromoDismissedAt?: number;
 }
 
 /* =======================================================================

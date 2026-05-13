@@ -1,4 +1,10 @@
-import { EngineWorker, type AnalysisResult } from './engine';
+import {
+  EngineWorker,
+  type AnalysisResult,
+  type EngineObservation,
+} from './engine';
+
+type PoolObserver = (obs: EngineObservation, workerIndex: number) => void;
 
 /**
  * Pool of independent Stockfish workers used to parallelize game
@@ -45,6 +51,14 @@ export class EnginePool {
   /** Whether each worker is currently running a task. Length matches
    *  `workers` exactly. */
   private busy: boolean[];
+  /** Per-worker disposers for the cockpit observation forwarder. We
+   *  re-subscribe on every freshly spawned worker so the cockpit
+   *  store keeps receiving events across pool teardown / rehydration. */
+  private workerObsDisposers: Array<() => void>;
+  /** Long-lived consumers that want to see every `info` line from
+   *  every worker in this pool. The cockpit store registers exactly
+   *  one observer here. */
+  private poolObservers: Set<PoolObserver>;
 
   constructor(size: number = DEFAULT_POOL_SIZE) {
     this.maxWorkers = size;
@@ -55,6 +69,60 @@ export class EnginePool {
     // `pump()` up to `maxWorkers`.
     this.workers = [];
     this.busy = [];
+    this.workerObsDisposers = [];
+    this.poolObservers = new Set();
+  }
+
+  /**
+   * Subscribe to live engine activity from every worker in this pool.
+   * The observer fires for `start` / `info` / `done` events on every
+   * `analyze()` call across every worker, with the worker's index in
+   * the pool tagged on each event so a UI consumer can decide whether
+   * to track per-worker state or just collapse to "any active worker".
+   *
+   * Returns an unsubscribe function. Cheap; the pool only attaches
+   * per-worker observation forwarders when `poolObservers.size > 0`.
+   *
+   * Subscription survives pool teardown / rehydration: if a fresh
+   * worker is spawned later, the pool re-attaches automatically so
+   * the consumer keeps receiving events without re-subscribing.
+   */
+  observe(cb: PoolObserver): () => void {
+    this.poolObservers.add(cb);
+    // First subscriber: attach forwarders for any workers that already
+    // exist. Subsequent subscribers get free piggybacking.
+    if (this.poolObservers.size === 1) {
+      for (let i = 0; i < this.workers.length; i++) {
+        this.attachWorkerObserver(i);
+      }
+    }
+    return () => {
+      this.poolObservers.delete(cb);
+      if (this.poolObservers.size === 0) {
+        // Tear down the per-worker forwarders too, so an idle pool
+        // with no consumers carries no observation overhead at all.
+        for (const d of this.workerObsDisposers) d();
+        this.workerObsDisposers = [];
+      }
+    };
+  }
+
+  private attachWorkerObserver(idx: number): void {
+    if (this.poolObservers.size === 0) return;
+    const w = this.workers[idx];
+    if (!w) return;
+    const dispose = w.addInfoListener((obs) => {
+      for (const o of this.poolObservers) o(obs, idx);
+    });
+    this.workerObsDisposers[idx] = dispose;
+  }
+
+  private detachWorkerObserver(idx: number): void {
+    const dispose = this.workerObsDisposers[idx];
+    if (dispose) {
+      dispose();
+      this.workerObsDisposers[idx] = () => {};
+    }
   }
 
   /** Number of underlying workers currently held (may be 0 if the pool
@@ -95,9 +163,11 @@ export class EnginePool {
     // released by `pump()` after their current job lands.
     for (let i = this.workers.length - 1; i >= next; i--) {
       if (!this.busy[i]) {
+        this.detachWorkerObserver(i);
         this.workers[i].terminate();
         this.workers.splice(i, 1);
         this.busy.splice(i, 1);
+        this.workerObsDisposers.splice(i, 1);
       }
     }
   }
@@ -149,7 +219,10 @@ export class EnginePool {
         if (this.workers.length < this.maxWorkers) {
           this.workers.push(new EngineWorker());
           this.busy.push(false);
+          this.workerObsDisposers.push(() => {});
           idx = this.workers.length - 1;
+          // Hook the new worker up to any in-flight cockpit observer.
+          this.attachWorkerObserver(idx);
         } else {
           return;
         }
@@ -182,18 +255,27 @@ export class EnginePool {
    *  ~30 MB / worker WASM heap when there's nothing to analyze). The
    *  pool transparently rehydrates on the next `analyze()` call. */
   terminate(): void {
+    for (const d of this.workerObsDisposers) d();
+    this.workerObsDisposers = [];
     for (const w of this.workers) w.terminate();
     this.workers = [];
     this.busy = [];
     // Reject any stragglers so callers don't await forever.
     for (const t of this.queue) t.reject(new Error('pool terminated'));
     this.queue = [];
+    // Note: `poolObservers` is intentionally NOT cleared. The pool's
+    // observe() contract is that subscriptions survive worker teardown
+    // / rehydration so the cockpit store keeps its single subscription
+    // across the analyzer's idle teardown cycles. The next pump()
+    // re-attaches forwarders when a new worker is spawned.
   }
 
   /** Shut down workers if (and only if) the pool is idle. No-op
    *  otherwise. Returns true if workers were actually freed. */
   terminateIfIdle(): boolean {
     if (!this.isIdle() || this.workers.length === 0) return false;
+    for (const d of this.workerObsDisposers) d();
+    this.workerObsDisposers = [];
     for (const w of this.workers) w.terminate();
     this.workers = [];
     this.busy = [];

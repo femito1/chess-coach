@@ -9,6 +9,10 @@ import {
 import { listAllGamesLight, requeueGamesByScope, type RequeueScope } from '@/db/queries';
 import { TimeClassChips } from '@/components/TimeClassFilter';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
+import {
+  CHROME_EXTENSION_NAME,
+  CHROME_EXTENSION_STORE_URL,
+} from '@/lib/extension';
 
 export function SettingsPage() {
   const [username, setUsername] = useState('');
@@ -19,6 +23,9 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [requeueStatus, setRequeueStatus] = useState<string | null>(null);
+  const [extensionDismissedAt, setExtensionDismissedAt] = useState<number | undefined>(
+    undefined,
+  );
   // Settings only uses `games` to populate the time-class filter dropdown
   // — staleness of a few seconds is invisible. Throttled for the same
   // reason as the dashboard / weaknesses pages, and uses the light
@@ -32,6 +39,7 @@ export function SettingsPage() {
       setSavedDepth(s.engineDepth);
       setAutoAnalyze(s.autoAnalyze);
       setTimeClassFilter(normalizeTimeClassSelection(s.timeClassFilter));
+      setExtensionDismissedAt(s.extensionPromoDismissedAt);
     });
   }, []);
 
@@ -98,6 +106,17 @@ export function SettingsPage() {
     } catch (e) {
       setImportStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  async function dismissExtensionPromo() {
+    const now = Date.now();
+    await updateSettings({ extensionPromoDismissedAt: now });
+    setExtensionDismissedAt(now);
+  }
+
+  async function reopenExtensionPromo() {
+    await updateSettings({ extensionPromoDismissedAt: undefined });
+    setExtensionDismissedAt(undefined);
   }
 
   async function wipe() {
@@ -204,6 +223,66 @@ export function SettingsPage() {
           <div className="text-xs text-text-muted">{requeueStatus}</div>
         )}
       </section>
+
+      {/* Browser-extension promo. Lives in Settings (not as a noisy
+       *  dashboard banner) by deliberate choice — the extension is a
+       *  power-user shortcut, not a required onboarding step, and the
+       *  manual import flow works fine without it. We surface it
+       *  prominently here for discovery, with a one-click dismiss
+       *  that collapses the card to a small "Reopen" row so it never
+       *  becomes a permanent eyesore for users who don't want it.
+       *  Dismissal is persisted via `Settings.extensionPromoDismissedAt`. */}
+      {extensionDismissedAt === undefined ? (
+        <section className="card p-4 space-y-3 border-accent/40">
+          <div className="flex items-start justify-between gap-3">
+            <h2 className="font-medium">Browser extension</h2>
+            <button
+              type="button"
+              className="text-xs text-text-muted hover:text-text"
+              onClick={() => void dismissExtensionPromo()}
+              aria-label="Dismiss extension promo"
+              title="Hide this card"
+            >
+              Dismiss
+            </button>
+          </div>
+          <p className="text-sm">
+            <strong>{CHROME_EXTENSION_NAME}</strong> turns the manual flow
+            below into a single click: finish a game on Chess.com, click
+            the prompt that appears in the corner, and land here with the
+            game already imported and analysing.
+          </p>
+          <ul className="text-xs text-text-muted list-disc pl-5 space-y-0.5">
+            <li>No copy-pasting URLs from the chess.com tab.</li>
+            <li>
+              No data leaves your machine — the extension only reads the
+              game URL and opens this app.
+            </li>
+            <li>Open source; same MIT license as the app.</li>
+          </ul>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <a
+              className="btn-primary text-sm"
+              href={CHROME_EXTENSION_STORE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Get it on the Chrome Web Store
+            </a>
+          </div>
+        </section>
+      ) : (
+        <div className="text-xs text-text-muted flex items-center gap-2">
+          <span>Browser extension promo dismissed.</span>
+          <button
+            type="button"
+            className="text-accent hover:underline"
+            onClick={() => void reopenExtensionPromo()}
+          >
+            Reopen
+          </button>
+        </div>
+      )}
 
       <section className="card p-4 space-y-3">
         <h2 className="font-medium">Backup &amp; data</h2>

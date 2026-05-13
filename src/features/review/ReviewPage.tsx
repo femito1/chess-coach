@@ -16,6 +16,7 @@ import { AccuracyPanel } from './AccuracyPanel';
 import { MoveInsight } from './MoveInsight';
 import { classifyMove, CLASSIFICATION_LABEL } from '@/engine/classify';
 import { MOTIF_EXPLANATION, MOTIF_LABEL } from '@/engine/motifs';
+import { EngineCockpit } from '@/engine/EngineCockpit';
 
 export function ReviewPage() {
   const { id } = useParams<{ id: string }>();
@@ -357,10 +358,32 @@ export function ReviewPage() {
               </button>
             </div>
           ) : (
-            <div className="card p-4 text-sm text-text-muted">
-              {game.analysisStatus === 'running'
-                ? 'Analyzing this game now…'
-                : 'Analysis pending. It will start automatically.'}
+            // No analysis row yet. Surface the live Stockfish cockpit
+            // instead of an opaque "Analyzing this game now…" placeholder.
+            // The cockpit subscribes to the engine pool and renders
+            // depth iterations, NPS, the current PV, and a mini-board
+            // showing the position being searched. We pass `gameId` so
+            // the cockpit's progress bar only counts plies for *this*
+            // game, not whatever the queue happens to be running.
+            // `showBoard={false}` because the review page already
+            // renders the actual game board at the top of the column —
+            // a second mini-board would be visually noisy.
+            <div className="card p-4">
+              <EngineCockpit
+                title={
+                  game.analysisStatus === 'running'
+                    ? 'Stockfish is analyzing this game'
+                    : 'Queued for analysis'
+                }
+                subtitle={
+                  game.analysisStatus === 'running'
+                    ? 'Live readout from the engine. The eval graph will appear here as soon as analysis lands.'
+                    : 'The analyzer picks up newest games first — this should start within a moment.'
+                }
+                showBoard={false}
+                gameId={game.id}
+                pgn={game.pgn}
+              />
             </div>
           )}
 

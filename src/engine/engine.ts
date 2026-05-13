@@ -20,6 +20,26 @@ export interface AnalysisResult {
 
 type Listener = (line: string) => void;
 
+/** Live observation of the worker's UCI activity. Fires every time the
+ *  worker emits an `info` line we can usefully parse, as well as on
+ *  the lifecycle transitions of an `analyze()` call (start / done).
+ *  Used by the engine cockpit (`<EngineCockpit>`) to render real-time
+ *  Stockfish activity while the user is waiting for analysis. */
+export interface EngineObservation {
+  kind: 'start' | 'info' | 'done';
+  /** FEN currently being analyzed. Set whenever the worker has an
+   *  active job; null between jobs. */
+  fen: string | null;
+  /** Requested depth for the current job. Echoed back here so a
+   *  consumer doesn't have to track it separately. */
+  requestedDepth: number;
+  /** Latest parsed info line (for `kind: 'info'`). Undefined for
+   *  `start` / `done`. */
+  info?: InfoLine;
+}
+
+type ObservationListener = (obs: EngineObservation) => void;
+
 /**
  * One Stockfish worker. Owns its UCI handshake and runs at most one
  * analysis at a time — calling `analyze` while a prior analysis is in
@@ -30,7 +50,10 @@ export class EngineWorker {
   private worker: Worker | null = null;
   private ready: Promise<void> | null = null;
   private listeners = new Set<Listener>();
+  private observers = new Set<ObservationListener>();
   private currentJob: { cancel: () => void } | null = null;
+  private currentFen: string | null = null;
+  private currentDepth = 0;
 
   private async init(): Promise<void> {
     if (this.ready) return this.ready;
@@ -175,6 +198,38 @@ export class EngineWorker {
     return () => this.listeners.delete(cb);
   }
 
+  /**
+   * Subscribe to live engine activity (start / info / done events for
+   * each `analyze()` call). Returns an unsubscribe function. Multiple
+   * listeners can coexist; the worker fires each in registration order
+   * synchronously from its own message handler, so listeners must NOT
+   * throw — uncaught exceptions would be re-emitted as worker errors.
+   *
+   * Cheap to subscribe to: when there are zero observers we still
+   * parse `info` lines internally for the analyze() result, but we
+   * skip the dispatch loop entirely in that case so the steady-state
+   * cost is one `Set.size` check per line.
+   */
+  addInfoListener(cb: ObservationListener): () => void {
+    this.observers.add(cb);
+    return () => {
+      this.observers.delete(cb);
+    };
+  }
+
+  private fanOut(obs: EngineObservation): void {
+    if (this.observers.size === 0) return;
+    for (const o of this.observers) {
+      try {
+        o(obs);
+      } catch (err) {
+        // Observers must not throw — log loudly the first time and
+        // keep going so a buggy panel can't take down the engine.
+        console.error('[engine] observer threw', err);
+      }
+    }
+  }
+
   async newGame(): Promise<void> {
     await this.init();
     this.send('ucinewgame');
@@ -200,6 +255,9 @@ export class EngineWorker {
   async analyze(fen: string, depth: number): Promise<AnalysisResult> {
     await this.init();
     if (this.currentJob) this.currentJob.cancel();
+    this.currentFen = fen;
+    this.currentDepth = depth;
+    this.fanOut({ kind: 'start', fen, requestedDepth: depth });
 
     return new Promise<AnalysisResult>((resolve, reject) => {
       let cancelled = false;
@@ -213,10 +271,36 @@ export class EngineWorker {
           if (parsed.pv && parsed.pv.length > 0) {
             lastInfo = { ...lastInfo, ...parsed };
           }
+          // Fan out *every* info line that carries any parsed field
+          // (depth / score / nps / pv) so the cockpit can render the
+          // engine's progress as it deepens. Skip empty parses (a
+          // malformed line) to avoid emitting noise.
+          if (
+            this.observers.size > 0 &&
+            (parsed.depth != null ||
+              parsed.scoreCp != null ||
+              parsed.scoreMate != null ||
+              parsed.nps != null ||
+              (parsed.pv && parsed.pv.length > 0))
+          ) {
+            this.fanOut({
+              kind: 'info',
+              fen: this.currentFen,
+              requestedDepth: this.currentDepth,
+              info: parsed,
+            });
+          }
         } else if (line.startsWith('bestmove ')) {
           off();
           this.currentJob = null;
           const bestMove = line.split(/\s+/)[1] ?? null;
+          this.fanOut({
+            kind: 'done',
+            fen: this.currentFen,
+            requestedDepth: this.currentDepth,
+          });
+          this.currentFen = null;
+          this.currentDepth = 0;
           resolve({
             depth: lastInfo.depth ?? depth,
             bestMoveUci: bestMove === '(none)' ? null : bestMove,
@@ -232,6 +316,13 @@ export class EngineWorker {
           cancelled = true;
           off();
           this.send('stop');
+          this.fanOut({
+            kind: 'done',
+            fen: this.currentFen,
+            requestedDepth: this.currentDepth,
+          });
+          this.currentFen = null;
+          this.currentDepth = 0;
           reject(new Error('cancelled'));
         },
       };
@@ -246,7 +337,16 @@ export class EngineWorker {
     this.worker = null;
     this.ready = null;
     this.listeners.clear();
+    // Note: we deliberately do NOT clear `observers` here. The cockpit
+    // store holds long-lived observer subscriptions across pool
+    // teardowns / rehydrations (the pool spins down workers after 8 s
+    // of idle and respawns them on the next analyze call), and we want
+    // the same store subscription to keep receiving events after the
+    // respawn. Per-job lifecycle is handled by `start` / `done` events
+    // instead.
     this.currentJob = null;
+    this.currentFen = null;
+    this.currentDepth = 0;
   }
 
   /** Whether this worker is currently running an analysis. Used by the
