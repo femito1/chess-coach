@@ -101,14 +101,17 @@ void i18n
     // through to en automatically — a partial translation degrades
     // gracefully rather than rendering raw `key.path` strings.
     fallbackLng: 'en',
-    // We treat regional tags strictly: `pt-BR` vs bare `pt`, and `it`
-    // (which navigator.language usually delivers as `it-IT` on Italian
-    // browsers). With `nonExplicitSupportedLngs: true` the detector
-    // will accept `it-IT` as `it` automatically. We deliberately don't
-    // map bare `pt` to `pt-BR` though — Portugal-PT users would prefer
-    // English over machine-translated pt-BR — but we DO want `it-IT`,
-    // `it-CH`, etc. to all resolve to the single Italian catalog.
-    nonExplicitSupportedLngs: true,
+    // i18next's default resolver already does language-only fallback —
+    // `it-IT` / `it-CH` / `it-FR` resolve to our `it` catalog out of
+    // the box, and similarly browsers reporting just `pt` resolve to
+    // `pt-BR` (which is fine: pt-BR is much closer to pt-PT than
+    // English would be for a Portuguese speaker). Setting
+    // `nonExplicitSupportedLngs: true` here was a bug — it caused
+    // `pt-BR` itself to be cleaned to bare `pt`, fall through the
+    // supportedLngs check, and resolve to `fallbackLng: 'en'` instead
+    // of the pt-BR catalog. Leaving the default (`false`) makes every
+    // exact code we ship resolve to itself, while regional variants
+    // still get language-only matching for free.
     detection: {
       order: ['localStorage', 'navigator'],
       lookupLocalStorage: LOCALE_STORAGE_KEY,
