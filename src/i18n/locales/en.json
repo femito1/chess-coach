@@ -160,14 +160,6 @@
       },
       "cta": "Get it on the Chrome Web Store",
       "dismissed": "Browser extension promo dismissed."
-    },
-    "backup": {
-      "title": "Backup & data",
-      "intro": "All your data lives in this browser's IndexedDB. Export it to a JSON file to move between devices or keep a backup.",
-      "export": "Export JSON",
-      "import": "Import JSON",
-      "wipe": "Delete all data",
-      "wipeConfirm": "Delete ALL games, analyses and settings? This cannot be undone."
     }
   },
   "import": {
@@ -318,9 +310,7 @@
     "openingsTableGames": "Games",
     "openingsTableMistakes": "Mistakes",
     "openingsTableYourAcc": "Your avg accuracy",
-    "openingsEmpty": "Not enough data yet. Play or import more games with known openings.",
-    "recurringSquares": "Recurring blunder squares",
-    "noRecurringSquares": "No repeated-square patterns yet."
+    "openingsEmpty": "Not enough data yet. Play or import more games with known openings."
   },
   "puzzles": {
     "title": "Puzzles",
@@ -601,55 +591,6 @@
       "tooltipMove": "Move",
       "tooltipEval": "Eval"
     }
-  },
-  "backup": {
-    "title": "Backup & restore",
-    "subtitle": "All your games, analyses, puzzles, and repertoires live in this browser's IndexedDB. Export a snapshot to move between machines or guard against accidental data loss.",
-    "storage": "Storage",
-    "usedOf": "{{used}} used of {{total}}",
-    "persistent": "Persistent",
-    "bestEffort": "Best-effort",
-    "noPersistText": "Without persistent storage, the browser may evict this database under heavy disk pressure.",
-    "requestPersistent": "Request persistent",
-    "noStorageApi": "This browser doesn't expose navigator.storage. Backups still work.",
-    "loading": "Loading…",
-    "counters": {
-      "games": "Games",
-      "analyses": "Analyses",
-      "puzzles": "Puzzles",
-      "repertoires": "Repertoires",
-      "repNodes": "Rep. nodes",
-      "notes": "Notes",
-      "evalCache": "Eval cache"
-    },
-    "export": "Export",
-    "exportDesc": "Downloads a single gzip-compressed JSON file with every table. The uncompressed format is the official dexie-export-import shape and includes the schema version, so it restores cleanly even after future upgrades. Restore accepts both this .json.gz and any older .json backup.",
-    "downloadBackup": "Download backup",
-    "exporting": "Exporting…",
-    "downloaded": "Downloaded {{size}}.",
-    "restore": "Restore",
-    "merge": "Merge",
-    "mergeDesc": " — add rows from the backup, keep existing rows on key collision. Safe.",
-    "overwrite": "Overwrite on collision",
-    "overwriteDesc": " — backup wins if a row already exists locally with the same id.",
-    "replaceEverything": "Replace everything",
-    "replaceDesc": " — wipe local data first, then import. Use on a fresh machine.",
-    "chooseFile": "Choose backup file…",
-    "restoring": "Restoring…",
-    "wipeConfirm": "Wipe all local data and replace it with the backup? This cannot be undone.",
-    "replaced": "Local database replaced with backup contents.",
-    "importedOverwrite": "Backup imported (existing rows overwritten on collision).",
-    "importedMerge": "Backup imported (existing rows kept on collision).",
-    "persistentGranted": "Persistent storage granted — the browser will not evict your data.",
-    "persistentDeclined": "The browser declined the persistence request. Your data is still saved, but the browser is allowed to evict it under heavy disk pressure. Chrome/Edge usually auto-grant this once you bookmark the site, install it as a PWA, or visit it a few more times. Firefox shows a prompt the first time. Until then, exporting backups is the safety net."
-  },
-  "storageBanner": {
-    "bestEffort1": "Local storage is ",
-    "bestEffort2": "best-effort",
-    "bestEffort3": ". The browser may evict it under disk pressure.",
-    "makePersistent": "Make persistent",
-    "usingNote": "Using {{used}} of {{total}} ({{pct}}%). Consider exporting a backup.",
-    "backupRestore": "Backup & restore →"
   },
   "onboarding": {
     "tagline": "Let's get your games imported and analyzed.",

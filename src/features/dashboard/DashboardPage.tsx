@@ -6,7 +6,6 @@ import { countByStatus, listGamesLight, requeueAllErrors } from '@/db/queries';
 import { db } from '@/db/schema';
 import { isDue } from '@/srs/sm2';
 import { ProgressCharts } from './ProgressCharts';
-import { StorageBanner } from './StorageBanner';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 import { totalSecondsPlayed } from './progress';
 
@@ -135,8 +134,6 @@ export function DashboardPage() {
           </div>
         </Link>
       </div>
-
-      <StorageBanner />
 
       <ProgressCharts games={games ?? []} />
 

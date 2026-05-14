@@ -160,14 +160,6 @@
       },
       "cta": "Instalar pela Chrome Web Store",
       "dismissed": "Promoção da extensão dispensada."
-    },
-    "backup": {
-      "title": "Backup e dados",
-      "intro": "Todos os seus dados ficam no IndexedDB deste navegador. Exporte para um arquivo JSON para mover entre dispositivos ou manter um backup.",
-      "export": "Exportar JSON",
-      "import": "Importar JSON",
-      "wipe": "Apagar todos os dados",
-      "wipeConfirm": "Apagar TODAS as partidas, análises e configurações? Esta ação não pode ser desfeita."
     }
   },
   "import": {
@@ -318,9 +310,7 @@
     "openingsTableGames": "Partidas",
     "openingsTableMistakes": "Erros",
     "openingsTableYourAcc": "Sua precisão média",
-    "openingsEmpty": "Dados insuficientes ainda. Jogue ou importe mais partidas com aberturas conhecidas.",
-    "recurringSquares": "Casas onde você errou repetidamente",
-    "noRecurringSquares": "Nenhum padrão de casa repetida ainda."
+    "openingsEmpty": "Dados insuficientes ainda. Jogue ou importe mais partidas com aberturas conhecidas."
   },
   "puzzles": {
     "title": "Puzzles",
@@ -601,55 +591,6 @@
       "tooltipMove": "Lance",
       "tooltipEval": "Avaliação"
     }
-  },
-  "backup": {
-    "title": "Backup e restauração",
-    "subtitle": "Todas as suas partidas, análises, puzzles e repertórios ficam no IndexedDB deste navegador. Exporte um snapshot para mover entre máquinas ou se proteger contra perda acidental.",
-    "storage": "Armazenamento",
-    "usedOf": "{{used}} usados de {{total}}",
-    "persistent": "Persistente",
-    "bestEffort": "Melhor esforço",
-    "noPersistText": "Sem armazenamento persistente, o navegador pode descartar este banco sob alta pressão de disco.",
-    "requestPersistent": "Solicitar persistente",
-    "noStorageApi": "Este navegador não expõe navigator.storage. Backups continuam funcionando.",
-    "loading": "Carregando…",
-    "counters": {
-      "games": "Partidas",
-      "analyses": "Análises",
-      "puzzles": "Puzzles",
-      "repertoires": "Repertórios",
-      "repNodes": "Nós de rep.",
-      "notes": "Notas",
-      "evalCache": "Cache de aval."
-    },
-    "export": "Exportar",
-    "exportDesc": "Baixa um único arquivo JSON gzip-compactado com todas as tabelas. O formato sem compactação é o oficial do dexie-export-import e inclui a versão do esquema, então restaura corretamente mesmo após upgrades futuros. A restauração aceita tanto este .json.gz quanto qualquer .json antigo.",
-    "downloadBackup": "Baixar backup",
-    "exporting": "Exportando…",
-    "downloaded": "Baixado {{size}}.",
-    "restore": "Restaurar",
-    "merge": "Mesclar",
-    "mergeDesc": " — adiciona linhas do backup, mantém as existentes em colisão de chave. Seguro.",
-    "overwrite": "Sobrescrever em colisão",
-    "overwriteDesc": " — backup vence se uma linha já existir localmente com o mesmo id.",
-    "replaceEverything": "Substituir tudo",
-    "replaceDesc": " — apaga dados locais primeiro, depois importa. Use em uma máquina nova.",
-    "chooseFile": "Escolher arquivo de backup…",
-    "restoring": "Restaurando…",
-    "wipeConfirm": "Apagar todos os dados locais e substituir pelo backup? Esta ação não pode ser desfeita.",
-    "replaced": "Banco local substituído pelo conteúdo do backup.",
-    "importedOverwrite": "Backup importado (linhas existentes sobrescritas em colisão).",
-    "importedMerge": "Backup importado (linhas existentes mantidas em colisão).",
-    "persistentGranted": "Armazenamento persistente concedido — o navegador não vai descartar seus dados.",
-    "persistentDeclined": "O navegador recusou a solicitação de persistência. Seus dados continuam salvos, mas o navegador pode descartá-los sob alta pressão de disco. Chrome/Edge geralmente concedem automaticamente quando você favorita o site, instala como PWA, ou visita algumas vezes mais. Firefox mostra um prompt na primeira vez. Até lá, exportar backups é a rede de segurança."
-  },
-  "storageBanner": {
-    "bestEffort1": "Armazenamento local é ",
-    "bestEffort2": "melhor esforço",
-    "bestEffort3": ". O navegador pode descartá-lo sob pressão de disco.",
-    "makePersistent": "Tornar persistente",
-    "usingNote": "Usando {{used}} de {{total}} ({{pct}}%). Considere exportar um backup.",
-    "backupRestore": "Backup e restauração →"
   },
   "onboarding": {
     "tagline": "Vamos importar e analisar suas partidas.",

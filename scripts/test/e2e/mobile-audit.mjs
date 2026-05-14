@@ -39,7 +39,6 @@ const ROUTES = [
   { path: '/repertoire',    label: 'repertoire'    },
   { path: '/practice',      label: 'practice'      },
   { path: '/openings',      label: 'openings'      },
-  { path: '/backup',        label: 'backup'        },
   { path: '/settings',      label: 'settings'      },
 ];
 

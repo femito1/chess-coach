@@ -160,14 +160,6 @@
       },
       "cta": "Scaricala dal Chrome Web Store",
       "dismissed": "Promo dell'estensione browser nascosta."
-    },
-    "backup": {
-      "title": "Backup e dati",
-      "intro": "Tutti i tuoi dati vivono nell'IndexedDB di questo browser. Esportali in un file JSON per spostarli tra dispositivi o tenere un backup.",
-      "export": "Esporta JSON",
-      "import": "Importa JSON",
-      "wipe": "Elimina tutti i dati",
-      "wipeConfirm": "Eliminare TUTTE le partite, le analisi e le impostazioni? Non si può annullare."
     }
   },
   "import": {
@@ -318,9 +310,7 @@
     "openingsTableGames": "Partite",
     "openingsTableMistakes": "Errori",
     "openingsTableYourAcc": "Tua accuratezza media",
-    "openingsEmpty": "Dati ancora insufficienti. Gioca o importa più partite con aperture conosciute.",
-    "recurringSquares": "Caselle ricorrenti di errori gravi",
-    "noRecurringSquares": "Ancora nessun pattern ricorrente di caselle."
+    "openingsEmpty": "Dati ancora insufficienti. Gioca o importa più partite con aperture conosciute."
   },
   "puzzles": {
     "title": "Puzzle",
@@ -601,55 +591,6 @@
       "tooltipEval": "Eval"
     },
     "backToWeaknesses": "← Torna ai punti deboli"
-  },
-  "backup": {
-    "title": "Backup e ripristino",
-    "subtitle": "Tutte le tue partite, analisi, puzzle e repertori vivono nell'IndexedDB di questo browser. Esporta uno snapshot per spostarli tra macchine o per proteggerti da una perdita accidentale.",
-    "storage": "Memoria",
-    "usedOf": "{{used}} usati su {{total}}",
-    "persistent": "Persistente",
-    "bestEffort": "Best-effort",
-    "noPersistText": "Senza memoria persistente, il browser potrebbe rimuovere questo database in caso di forte pressione sul disco.",
-    "requestPersistent": "Richiedi persistente",
-    "noStorageApi": "Questo browser non espone navigator.storage. I backup funzionano comunque.",
-    "loading": "Caricamento…",
-    "counters": {
-      "games": "Partite",
-      "analyses": "Analisi",
-      "puzzles": "Puzzle",
-      "repertoires": "Repertori",
-      "repNodes": "Nodi rep.",
-      "notes": "Note",
-      "evalCache": "Cache eval"
-    },
-    "export": "Esporta",
-    "exportDesc": "Scarica un singolo file JSON compresso in gzip con tutte le tabelle. Il formato non compresso è quello ufficiale di dexie-export-import e include la versione dello schema, quindi si ripristina anche dopo aggiornamenti futuri. Il ripristino accetta sia questo .json.gz che backup .json più vecchi.",
-    "downloadBackup": "Scarica backup",
-    "exporting": "Esportazione…",
-    "downloaded": "Scaricato {{size}}.",
-    "restore": "Ripristina",
-    "merge": "Unisci",
-    "mergeDesc": " — aggiunge righe dal backup, mantenendo quelle esistenti in caso di collisione. Sicuro.",
-    "overwrite": "Sovrascrivi in caso di collisione",
-    "overwriteDesc": " — il backup vince se una riga con lo stesso id esiste già localmente.",
-    "replaceEverything": "Sostituisci tutto",
-    "replaceDesc": " — cancella prima i dati locali, poi importa. Da usare su una macchina nuova.",
-    "chooseFile": "Scegli file di backup…",
-    "restoring": "Ripristino…",
-    "wipeConfirm": "Cancellare tutti i dati locali e sostituirli col backup? Non si può annullare.",
-    "replaced": "Database locale sostituito col contenuto del backup.",
-    "importedOverwrite": "Backup importato (righe esistenti sovrascritte in caso di collisione).",
-    "importedMerge": "Backup importato (righe esistenti mantenute in caso di collisione).",
-    "persistentGranted": "Memoria persistente concessa — il browser non rimuoverà i tuoi dati.",
-    "persistentDeclined": "Il browser ha rifiutato la richiesta di persistenza. I dati restano salvati ma il browser può rimuoverli sotto forte pressione di disco. Chrome/Edge di solito la concedono in automatico dopo aver aggiunto il sito ai preferiti, installato come PWA, o visitato qualche volta in più. Firefox mostra un prompt la prima volta. Fino ad allora, esportare backup è la rete di sicurezza."
-  },
-  "storageBanner": {
-    "bestEffort1": "La memoria locale è ",
-    "bestEffort2": "best-effort",
-    "bestEffort3": ". Il browser potrebbe rimuoverla sotto pressione di disco.",
-    "makePersistent": "Rendi persistente",
-    "usingNote": "Usato {{used}} di {{total}} ({{pct}}%). Considera di esportare un backup.",
-    "backupRestore": "Backup e ripristino →"
   },
   "onboarding": {
     "tagline": "Importiamo e analizziamo le tue partite.",

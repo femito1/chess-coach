@@ -63,7 +63,6 @@ export interface Aggregates {
   };
   byOpening: { opening: string; games: number; mistakes: number; avgAcc: number }[];
   byTimeClass: { timeClass: string; games: number; avgAcc: number }[];
-  recurringSquares: { square: string; count: number }[];
 }
 
 const BLUNDERY = new Set<MoveEval['classification']>([
@@ -264,21 +263,6 @@ export function aggregateMistakes(
     }))
     .sort((a, b) => a.avgAcc - b.avgAcc);
 
-  // --- recurring squares ----------------------------------------------
-  // The destination square of a blunder is a surprisingly strong signal
-  // for "pieces keep dying here" patterns (e.g. you always hang on f7).
-  const squareCounts = new Map<string, number>();
-  for (const r of rows) {
-    if (r.classification !== 'blunder') continue;
-    const to = r.san.match(/([a-h][1-8])/g)?.slice(-1)[0];
-    if (!to) continue;
-    squareCounts.set(to, (squareCounts.get(to) ?? 0) + 1);
-  }
-  const recurringSquares = Array.from(squareCounts.entries())
-    .map(([square, count]) => ({ square, count }))
-    .filter((s) => s.count >= 2)
-    .sort((a, b) => b.count - a.count);
-
   return {
     totalMistakes: rows.length,
     byMotif,
@@ -286,6 +270,5 @@ export function aggregateMistakes(
     byTimePressure,
     byOpening,
     byTimeClass,
-    recurringSquares,
   };
 }

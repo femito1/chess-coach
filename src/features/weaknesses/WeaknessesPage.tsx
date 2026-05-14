@@ -222,23 +222,6 @@ export function WeaknessesPage() {
         )}
       </section>
 
-      <section className="card p-4">
-        <h2 className="font-medium mb-3">{t('weaknesses.recurringSquares')}</h2>
-        {agg.recurringSquares.length === 0 ? (
-          <div className="text-sm text-text-muted">{t('weaknesses.noRecurringSquares')}</div>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {agg.recurringSquares.slice(0, 12).map((s) => (
-              <div
-                key={s.square}
-                className="px-3 py-1.5 rounded-md bg-blunder/15 text-blunder font-mono text-sm"
-              >
-                {s.square} <span className="text-xs opacity-80">×{s.count}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   );
 }

@@ -4,7 +4,6 @@ import {
   getSettings,
   normalizeTimeClassSelection,
   updateSettings,
-  db,
   type TimeClassSelection,
 } from '@/db/schema';
 import { listAllGamesLight, requeueGamesByScope, type RequeueScope } from '@/db/queries';
@@ -30,7 +29,6 @@ export function SettingsPage() {
   const [savedDepth, setSavedDepth] = useState(16);
   const [timeClassFilter, setTimeClassFilter] = useState<TimeClassSelection>(['rapid']);
   const [saved, setSaved] = useState(false);
-  const [importStatus, setImportStatus] = useState<string | null>(null);
   const [requeueStatus, setRequeueStatus] = useState<string | null>(null);
   const [extensionDismissedAt, setExtensionDismissedAt] = useState<number | undefined>(
     undefined,
@@ -84,39 +82,6 @@ export function SettingsPage() {
     );
   }
 
-  async function exportAll() {
-    const [games, analyses, settings] = await Promise.all([
-      db.games.toArray(),
-      db.analyses.toArray(),
-      db.settings.toArray(),
-    ]);
-    const blob = new Blob([JSON.stringify({ games, analyses, settings }, null, 2)], {
-      type: 'application/json',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `chess-coach-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  async function importBackup(file: File) {
-    setImportStatus('Importing…');
-    try {
-      const text = await file.text();
-      const data = JSON.parse(text);
-      await db.transaction('rw', db.games, db.analyses, db.settings, async () => {
-        if (Array.isArray(data.games)) await db.games.bulkPut(data.games);
-        if (Array.isArray(data.analyses)) await db.analyses.bulkPut(data.analyses);
-        if (Array.isArray(data.settings)) await db.settings.bulkPut(data.settings);
-      });
-      setImportStatus(`Imported ${data.games?.length ?? 0} games.`);
-    } catch (e) {
-      setImportStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
   async function dismissExtensionPromo() {
     const now = Date.now();
     await updateSettings({ extensionPromoDismissedAt: now });
@@ -126,16 +91,6 @@ export function SettingsPage() {
   async function reopenExtensionPromo() {
     await updateSettings({ extensionPromoDismissedAt: undefined });
     setExtensionDismissedAt(undefined);
-  }
-
-  async function wipe() {
-    if (!confirm(t('settings.backup.wipeConfirm'))) return;
-    await db.transaction('rw', db.games, db.analyses, db.settings, async () => {
-      await db.games.clear();
-      await db.analyses.clear();
-      await db.settings.clear();
-    });
-    setImportStatus(t('common.saved'));
   }
 
   /** Language picker handler. Two writes: localStorage (load-bearing for
@@ -351,32 +306,6 @@ export function SettingsPage() {
         </div>
       )}
 
-      <section className="card p-4 space-y-3">
-        <h2 className="font-medium">{t('settings.backup.title')}</h2>
-        <p className="text-xs text-text-muted">{t('settings.backup.intro')}</p>
-        <div className="flex flex-wrap gap-2">
-          <button className="btn" onClick={exportAll}>
-            {t('settings.backup.export')}
-          </button>
-          <label className="btn cursor-pointer">
-            {t('settings.backup.import')}
-            <input
-              type="file"
-              accept="application/json"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void importBackup(f);
-                e.target.value = '';
-              }}
-            />
-          </label>
-          <button className="btn text-blunder hover:text-blunder" onClick={wipe}>
-            {t('settings.backup.wipe')}
-          </button>
-        </div>
-        {importStatus && <div className="text-xs text-text-muted">{importStatus}</div>}
-      </section>
     </div>
   );
 }

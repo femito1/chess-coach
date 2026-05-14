@@ -14,7 +14,6 @@ import { RepertoirePage } from '@/features/repertoire/RepertoirePage';
 import { RepertoireTrainer } from '@/features/repertoire/RepertoireTrainer';
 import { PracticePage } from '@/features/repertoire/PracticePage';
 import { LibraryPage } from '@/features/openings/LibraryPage';
-import { BackupPage } from '@/features/backup/BackupPage';
 import { SignInPage } from '@/features/auth/SignInPage';
 import { OnboardingPage } from '@/features/onboarding/OnboardingPage';
 import { OnboardingGate } from '@/features/onboarding/OnboardingGate';
@@ -79,7 +78,6 @@ export const router = createBrowserRouter([
                   { path: 'repertoire/:id/train', element: <RepertoireTrainer /> },
                   { path: 'practice', element: <PracticePage /> },
                   { path: 'openings', element: <LibraryPage /> },
-                  { path: 'backup', element: <BackupPage /> },
                   { path: 'settings', element: <SettingsPage /> },
                 ],
               },
