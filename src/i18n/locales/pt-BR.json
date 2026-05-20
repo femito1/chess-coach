@@ -150,6 +150,16 @@
       "title": "Idioma",
       "description": "Escolha o idioma usado em todo o aplicativo. As traduções cobrem a interface; a notação de lances (SAN) e códigos ECO sempre usam a convenção internacional."
     },
+    "freePlayStrength": {
+      "title": "Jogo contra a engine — força padrão",
+      "description": "Usado quando você clica em \"Jogar contra a engine\" após terminar uma linha de prática. Máximo é o Stockfish em força total. Os níveis menores limitam a engine via UCI_LimitStrength + Skill Level para você testar a linha em um nível mais humano. Você pode trocar a força por sessão na própria página de prática.",
+      "level": {
+        "max": "Máximo",
+        "2000": "≈ 2000",
+        "1600": "≈ 1600",
+        "1200": "≈ 1200"
+      }
+    },
     "extensionPromo": {
       "title": "Extensão do navegador",
       "intro": "<strong>{{name}}</strong> transforma o fluxo manual abaixo em um único clique: termine uma partida no Chess.com, clique no aviso que aparece no canto, e caia aqui com a partida já importada e em análise.",
@@ -450,8 +460,37 @@
     "hint": "Dica",
     "showAnswer": "Mostrar resposta",
     "playItForMe": "Jogar por mim",
+    "playItOut": "Jogar contra a engine",
+    "nextLine": "Próxima linha",
     "restartLine": "Reiniciar linha",
     "skip": "Pular",
+    "freePlay": {
+      "banner": "Você está jogando contra o Stockfish. Suas jogadas são analisadas ao vivo.",
+      "youAre": "Você: {{color}}",
+      "opponent": "Stockfish: {{color}}",
+      "movesPlayed_one": "{{count}} lance jogado",
+      "movesPlayed_other": "{{count}} lances jogados",
+      "thinking": "Stockfish está pensando…",
+      "yourMove": "Sua vez.",
+      "lastMove": "Você jogou {{san}} — {{label}}.",
+      "strengthLabel": "Força:",
+      "back": "Voltar",
+      "forward": "Avançar",
+      "backShortcut": "Voltar (seta ←)",
+      "forwardShortcut": "Avançar (seta →)",
+      "reviewingPast": "Revisando posição anterior ({{ply}} / {{total}}) — faça uma jogada para criar uma variação ou pressione → para voltar à posição atual.",
+      "resign": "Desistir",
+      "restart": "Reiniciar do fim da linha",
+      "backToPractice": "Voltar à prática",
+      "gameOver": {
+        "checkmate": "Xeque-mate. Fim de jogo.",
+        "stalemate": "Afogamento. Empate.",
+        "fiftyMove": "Regra dos 50 lances. Empate.",
+        "repetition": "Tripla repetição. Empate.",
+        "insufficient": "Material insuficiente. Empate.",
+        "resigned": "Você desistiu."
+      }
+    },
     "session": {
       "repeatTitle": "Repetir até acertar",
       "crossedOff": "{{perfect}} / {{target}} concluídas",

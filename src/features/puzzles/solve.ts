@@ -18,6 +18,23 @@ export type PuzzleMoveResult =
       /** True iff every solution move (including any final auto-played
        *  opponent reply) has now been played out. */
       solved: boolean;
+      /** Two-phase commit info for the UI to delay the opponent reply
+       *  so the puzzle feels like a real game rather than two pieces
+       *  moving on the same frame. When `userOnly` is set, the caller
+       *  should:
+       *    1. Render the position at `userOnly.fen` / `userOnly.lastUci`
+       *       and increment `solvedIdx` to `userOnly.nextSolvedIdx`.
+       *    2. After a short human-feeling delay, advance to `fen` /
+       *       `lastUci` / `nextSolvedIdx` (the values on the parent
+       *       result).
+       *  Absent when the user's move *was* the final move of the line
+       *  (no auto-reply queued); then the parent result is the final
+       *  state and the caller commits it directly. */
+      userOnly?: {
+        fen: string;
+        lastUci: string;
+        nextSolvedIdx: number;
+      };
     };
 
 /**
@@ -58,8 +75,14 @@ export function applyPuzzleMove(args: {
     return { kind: 'rejected', reason: 'illegal' };
   }
   const nextIdx = solvedIdx + 1;
+  // Snapshot the user-only state BEFORE we layer the auto-reply on
+  // top — the UI uses it for the two-phase commit (render the user's
+  // move, pause, render the reply) so the opponent doesn't appear to
+  // teleport in the same frame.
+  const userOnlyFen = c.fen();
   let lastUci = uci;
   let finalIdx = nextIdx;
+  let hadReply = false;
   if (nextIdx < solutionUci.length) {
     const reply = solutionUci[nextIdx];
     try {
@@ -70,6 +93,7 @@ export function applyPuzzleMove(args: {
       });
       lastUci = reply;
       finalIdx = nextIdx + 1;
+      hadReply = true;
     } catch {
       // Defensive: if the stored auto-reply is somehow illegal in this
       // position, we accept the user's move and stop the line short.
@@ -82,5 +106,8 @@ export function applyPuzzleMove(args: {
     lastUci,
     nextSolvedIdx: finalIdx,
     solved: finalIdx >= solutionUci.length,
+    userOnly: hadReply
+      ? { fen: userOnlyFen, lastUci: uci, nextSolvedIdx: nextIdx }
+      : undefined,
   };
 }

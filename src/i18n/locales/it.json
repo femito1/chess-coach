@@ -150,6 +150,16 @@
       "title": "Lingua",
       "description": "Scegli la lingua usata in tutta l'app. Le traduzioni coprono l'interfaccia utente; la notazione delle mosse (SAN) e i codici ECO seguono sempre la convenzione internazionale."
     },
+    "freePlayStrength": {
+      "title": "Gioca contro il motore — forza predefinita",
+      "description": "Usato quando clicchi su \"Gioca contro il motore\" dopo aver completato una linea di pratica. Massimo è Stockfish a piena forza. I livelli inferiori limitano il motore tramite UCI_LimitStrength + Skill Level per testare la linea a un livello più umano. Puoi sovrascrivere questo valore per sessione direttamente nella pagina di pratica.",
+      "level": {
+        "max": "Massimo",
+        "2000": "≈ 2000",
+        "1600": "≈ 1600",
+        "1200": "≈ 1200"
+      }
+    },
     "extensionPromo": {
       "title": "Estensione del browser",
       "intro": "<strong>{{name}}</strong> trasforma il flusso manuale qui sotto in un solo clic: finisci una partita su Chess.com, clicca il prompt che appare nell'angolo e arrivi qui con la partita già importata e in analisi.",
@@ -450,8 +460,37 @@
     "hint": "Suggerimento",
     "showAnswer": "Mostra risposta",
     "playItForMe": "Gioca per me",
+    "playItOut": "Gioca contro il motore",
+    "nextLine": "Linea successiva",
     "restartLine": "Ricomincia linea",
     "skip": "Salta",
+    "freePlay": {
+      "banner": "Stai giocando contro Stockfish. Le tue mosse vengono analizzate in tempo reale.",
+      "youAre": "Tu: {{color}}",
+      "opponent": "Stockfish: {{color}}",
+      "movesPlayed_one": "{{count}} mossa giocata",
+      "movesPlayed_other": "{{count}} mosse giocate",
+      "thinking": "Stockfish sta pensando…",
+      "yourMove": "Tocca a te.",
+      "lastMove": "Hai giocato {{san}} — {{label}}.",
+      "strengthLabel": "Forza:",
+      "back": "Indietro",
+      "forward": "Avanti",
+      "backShortcut": "Indietro (freccia ←)",
+      "forwardShortcut": "Avanti (freccia →)",
+      "reviewingPast": "Stai rivedendo una posizione precedente ({{ply}} / {{total}}) — fai una mossa per creare una variante, oppure premi → per tornare alla posizione attuale.",
+      "resign": "Abbandona",
+      "restart": "Ricomincia dalla fine della linea",
+      "backToPractice": "Torna alla pratica",
+      "gameOver": {
+        "checkmate": "Scacco matto. Partita finita.",
+        "stalemate": "Stallo. Patta.",
+        "fiftyMove": "Regola delle 50 mosse. Patta.",
+        "repetition": "Tripla ripetizione. Patta.",
+        "insufficient": "Materiale insufficiente. Patta.",
+        "resigned": "Hai abbandonato."
+      }
+    },
     "session": {
       "repeatTitle": "Ripeti finché perfetta",
       "crossedOff": "{{perfect}} / {{target}} completate",

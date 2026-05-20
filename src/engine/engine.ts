@@ -236,6 +236,31 @@ export class EngineWorker {
     await this.waitReady();
   }
 
+  /**
+   * Set a UCI option on the worker. Used by free-play to flip
+   * `UCI_LimitStrength` / `Skill Level` between user-chosen strength
+   * levels. Issued *before* the next `analyze()` call so Stockfish
+   * picks them up at the start of its search. Caller is responsible
+   * for any subsequent `isready` round-trip if it cares about the
+   * option being acknowledged before the search begins; for the
+   * strength-tuning use case Stockfish honours options as soon as the
+   * next `go` arrives, so we just fire-and-forget.
+   *
+   * Public counterpart of the private `send`. Kept narrow on purpose:
+   * we don't want callers reaching into the worker for arbitrary
+   * commands.
+   */
+  async setOption(name: string, value: string | number | boolean): Promise<void> {
+    await this.init();
+    const v =
+      typeof value === 'boolean'
+        ? value
+          ? 'true'
+          : 'false'
+        : String(value);
+    this.send(`setoption name ${name} value ${v}`);
+  }
+
   private waitReady(): Promise<void> {
     return new Promise((resolve) => {
       const off = this.onLine((line) => {

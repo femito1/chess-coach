@@ -112,6 +112,51 @@ describe('applyPuzzleMove', () => {
     expect('nextSolvedIdx' in result).toBe(false);
   });
 
+  test('two-phase commit: even-length line exposes the user-only intermediate state', () => {
+    // Pins the `userOnly` shape used by PuzzlesPage to render the
+    // user's move first and the opponent reply on a delay. Without
+    // this contract the puzzle would visually jump two plies in one
+    // frame (the regression we're fixing).
+    const fen = '7r/6k1/8/8/8/8/8/K6Q w - - 0 1';
+    const result = applyPuzzleMove({
+      fen,
+      solutionUci: ['h1h8', 'g7h8'],
+      solvedIdx: 0,
+      move: { from: 'h1', to: 'h8' },
+    });
+    expect(result.kind).toBe('accepted');
+    if (result.kind !== 'accepted') return;
+    expect(result.userOnly).toBeDefined();
+    if (!result.userOnly) return;
+    // Intermediate state shows the user's move only (queen on h8,
+    // black king still on g7).
+    expect(result.userOnly.lastUci).toBe('h1h8');
+    expect(result.userOnly.nextSolvedIdx).toBe(1);
+    // FEN: white queen on h8 capturing the rook, black king on g7,
+    // black to move.
+    expect(result.userOnly.fen.startsWith('7Q')).toBe(true);
+    expect(result.userOnly.fen.split(' ')[1]).toBe('b');
+    // Final state (parent fields) is the post-reply position.
+    expect(result.lastUci).toBe('g7h8');
+    expect(result.nextSolvedIdx).toBe(2);
+  });
+
+  test('two-phase commit: final move with no auto-reply has no userOnly stage', () => {
+    // Odd-length line: user's move IS the final move. No reply queued
+    // → no two-phase commit needed; `userOnly` should be absent so
+    // the page commits the result in one shot.
+    const fen = '7k/8/8/8/8/8/8/Q6K w - - 0 1';
+    const result = applyPuzzleMove({
+      fen,
+      solutionUci: ['a1a8'],
+      solvedIdx: 0,
+      move: { from: 'a1', to: 'a8' },
+    });
+    expect(result.kind).toBe('accepted');
+    if (result.kind !== 'accepted') return;
+    expect(result.userOnly).toBeUndefined();
+  });
+
   test('expected move with explicit promotion still matches when user promotes to queen', () => {
     // Solution stores 'a7a8q'; user move is 'a7a8' with promotion: 'q'.
     // The state machine compares only the first 4 chars, then chess.js

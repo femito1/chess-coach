@@ -150,6 +150,16 @@
       "title": "Language",
       "description": "Pick the language used across the app. Translations cover the user-facing UI; chess move notation (SAN) and ECO codes always use the international convention."
     },
+    "freePlayStrength": {
+      "title": "Play vs engine — default strength",
+      "description": "Used when you click \"Play it out vs engine\" after finishing a practice line. Maximum is full-strength Stockfish. The lower levels handicap the engine via UCI_LimitStrength + Skill Level so you can pressure-test a line at a more human level. You can override this per-session on the practice page itself.",
+      "level": {
+        "max": "Maximum",
+        "2000": "≈ 2000",
+        "1600": "≈ 1600",
+        "1200": "≈ 1200"
+      }
+    },
     "extensionPromo": {
       "title": "Browser extension",
       "intro": "<strong>{{name}}</strong> turns the manual flow below into a single click: finish a game on Chess.com, click the prompt that appears in the corner, and land here with the game already imported and analysing.",
@@ -450,8 +460,37 @@
     "hint": "Hint",
     "showAnswer": "Show answer",
     "playItForMe": "Play it for me",
+    "playItOut": "Play it out vs engine",
+    "nextLine": "Next line",
     "restartLine": "Restart line",
     "skip": "Skip",
+    "freePlay": {
+      "banner": "You're now playing vs Stockfish. Your moves are analyzed live.",
+      "youAre": "You: {{color}}",
+      "opponent": "Stockfish: {{color}}",
+      "movesPlayed_one": "{{count}} move played",
+      "movesPlayed_other": "{{count}} moves played",
+      "thinking": "Stockfish is thinking…",
+      "yourMove": "Your move.",
+      "lastMove": "You played {{san}} — {{label}}.",
+      "strengthLabel": "Strength:",
+      "back": "Back",
+      "forward": "Forward",
+      "backShortcut": "Back (← arrow)",
+      "forwardShortcut": "Forward (→ arrow)",
+      "reviewingPast": "Reviewing past position ({{ply}} / {{total}}) — make a move to branch off, or press → to return to the latest position.",
+      "resign": "Resign",
+      "restart": "Restart from line end",
+      "backToPractice": "Back to practice",
+      "gameOver": {
+        "checkmate": "Checkmate. Game over.",
+        "stalemate": "Stalemate. Drawn.",
+        "fiftyMove": "Fifty-move rule. Drawn.",
+        "repetition": "Threefold repetition. Drawn.",
+        "insufficient": "Insufficient material. Drawn.",
+        "resigned": "You resigned."
+      }
+    },
     "session": {
       "repeatTitle": "Repeat-until-perfect",
       "crossedOff": "{{perfect}} / {{target}} crossed off",

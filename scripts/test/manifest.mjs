@@ -63,6 +63,7 @@ export const BROWSER_TESTS = [
   { name: 'touch-longpress-arrow',      file: 'scripts/test/e2e/touch-longpress-arrow.mjs',              category: 'e2e' },
   { name: 'puzzle-auto-retry',          file: 'scripts/test/e2e/puzzle-auto-retry.mjs',                  category: 'e2e' },
   { name: 'repertoire-line-auto-retry', file: 'scripts/test/e2e/repertoire-line-auto-retry.mjs',         category: 'e2e' },
+  { name: 'practice-freeplay',          file: 'scripts/test/e2e/practice-freeplay.mjs',                  category: 'e2e' },
 ];
 
 export const CATEGORIES = ['unit', 'integration', 'e2e', 'live'];

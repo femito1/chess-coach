@@ -243,6 +243,22 @@ export interface Settings {
    *  boot so a freshly-installed device picks up the cloud-side
    *  preference once Settings finishes loading. */
   locale?: string;
+  /** Default Stockfish strength used by the "Play it out vs engine"
+   *  free-play flow on the practice page (kicked off from the inline
+   *  CTA when an opening line completes). One of:
+   *    - `'max'`  — full-strength Stockfish (depth 14, no limit).
+   *    - `'2000'` / `'1600'` / `'1200'` — `UCI_LimitStrength=true` plus
+   *       a Skill Level + capped depth tuned to roughly that Elo. The
+   *       runtime mapping lives in `src/engine/freePlayEngine.ts`
+   *       (`strengthToOptions`) and is unit-tested.
+   *  Optional + non-indexed: same migration-free shape as `locale` /
+   *  `extensionPromoDismissedAt`. The Dexie v10 → v11 bump only exists
+   *  to satisfy the project rule that all new persistent fields go
+   *  through a version bump; the v11 `.stores(...)` block is identical
+   *  to v10. Unrecognised values fall through to `'max'` via
+   *  `strengthToOptions` so corrupted rows or a future cloud-sync of an
+   *  unknown level can't softlock the play page. */
+  freePlayStrength?: 'max' | '2000' | '1600' | '1200';
 }
 
 /* =======================================================================
@@ -739,6 +755,31 @@ export class CoachDB extends Dexie {
         await tx.table('repertoireCards').clear();
         await tx.table('repertoireLineStats').clear();
       });
+
+    // v11: introduces `Settings.freePlayStrength` for the
+    // "Play it out vs engine" practice-page free-play flow. The field
+    // is optional + non-indexed, so the schema strings are identical
+    // to v10 and there's no upgrade hook needed — Dexie carries the
+    // existing row forward and any read-side default lives in the
+    // strength-mapping helper. We bump anyway because the project
+    // convention (CLAUDE.md) is that all new persistent Settings
+    // fields go through a Dexie version bump so the schema history
+    // makes the addition discoverable without diffing the interface.
+    this.version(11).stores({
+      games:
+        'id, url, username, endTime, analysisStatus, timeClass, eco, result',
+      analyses: 'gameId, analyzedAt, depth',
+      settings: 'key',
+      puzzles: 'id, gameId, generatedAt, *motifs, *tags, [srs.dueAt+id]',
+      repertoires: 'id, color, updatedAt',
+      repertoireNodes: 'id, repertoireId, fen, parentFen',
+      repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',
+      repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
+      notes: 'fenKey, updatedAt',
+      evalCache: 'key, fen, depth, savedAt',
+      importRecords:
+        'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
+    });
   }
 }
 

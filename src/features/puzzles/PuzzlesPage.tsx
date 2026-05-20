@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -18,6 +18,7 @@ import { SolutionControls } from '@/components/SolutionControls';
 import { useLiveEval } from '@/features/review/LiveEval';
 import { regeneratePuzzles } from './generate';
 import { applyPuzzleMove } from './solve';
+import { PUZZLE_REPLY_DELAY_MS, sampleDelay } from '@/lib/humanTiming';
 import { gradeSrs, isDue, newSrsState, summarizeIntervals, type Grade } from '@/srs/sm2';
 import { MOTIF_ORDER } from '@/engine/motifs';
 import { tMotifLabel } from '@/i18n/chess';
@@ -202,6 +203,19 @@ function PuzzleSolver({
   /** Solution-playback cursor for the "Reveal" simulation. Reused on
    *  the same main board (no second mini-board pops up next to it). */
   const [playbackIdx, setPlaybackIdx] = useState(0);
+  /** Pending opponent-reply timer. We commit the user's move immediately
+   *  for instant feedback, then schedule the auto-played reply on a
+   *  human-feeling delay (`PUZZLE_REPLY_DELAY_MS`) so the position
+   *  doesn't jump two plies in one frame. The timer is captured in a
+   *  ref so unmount / restart / reveal can cancel it cleanly — without
+   *  this, navigating to the next puzzle while a reply is queued would
+   *  fire the reply onto the new puzzle's position and stomp `fen`. */
+  const replyTimerRef = useRef<number | null>(null);
+  /** Whether the user is currently locked out of moving while we wait
+   *  for the queued opponent reply to land. Mirrors the timer's
+   *  presence — exposed as state so the Board can flip into a
+   *  read-only `viewOnly` mode for the ~700 ms gap. */
+  const [awaitingReply, setAwaitingReply] = useState(false);
 
   // Build the playthrough steps once per puzzle. Cheap (chess.js
   // replay over ~10 moves) so the memo deps are just the puzzle id.
@@ -210,7 +224,20 @@ function PuzzleSolver({
     [puzzle.fen, puzzle.solutionUci],
   );
 
+  /** Cancel any in-flight opponent-reply timer. Idempotent. Called
+   *  before navigating to a new puzzle, on restart, on reveal, and on
+   *  unmount so a queued reply can't fire onto the next puzzle's
+   *  position. */
+  const cancelPendingReply = () => {
+    if (replyTimerRef.current != null) {
+      window.clearTimeout(replyTimerRef.current);
+      replyTimerRef.current = null;
+    }
+    setAwaitingReply(false);
+  };
+
   useEffect(() => {
+    cancelPendingReply();
     setFen(puzzle.fen);
     setSolvedIdx(0);
     setStatus('solving');
@@ -222,6 +249,16 @@ function PuzzleSolver({
     setMistakeMade(false);
     setPlaybackIdx(0);
   }, [puzzle.id]);
+
+  // Cleanup on unmount: cancel any dangling reply timer.
+  useEffect(() => {
+    return () => {
+      if (replyTimerRef.current != null) {
+        window.clearTimeout(replyTimerRef.current);
+        replyTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const solverColor = puzzle.fen.split(' ')[1] === 'w' ? 'white' : 'black';
 
@@ -244,6 +281,11 @@ function PuzzleSolver({
 
   function onMove(m: { from: string; to: string; promotion?: string }): boolean {
     if (status !== 'solving') return false;
+    // Lock out further input while we're animating an opponent reply.
+    // Without this, a fast user could drag a second move during the
+    // ~700 ms gap and either double-stomp the position or have their
+    // input swallowed when the reply finally lands.
+    if (awaitingReply) return false;
     // Either way, the user has now committed to a move — hide any
     // currently-displayed hint ring. (`hintUsed` stays sticky.)
     setHintShown(false);
@@ -269,6 +311,35 @@ function PuzzleSolver({
       setMistakeMade(true);
       return false;
     }
+    // Two-phase commit when the line has an auto-played opponent reply
+    // queued: render the user's move now (instant feedback, board is
+    // visually responsive), then schedule the reply on a short
+    // human-feeling delay so the puzzle plays like a real game rather
+    // than two pieces moving on the same frame. When the user's move
+    // *was* the final move (no reply queued), `userOnly` is undefined
+    // and we fall straight through to the single-phase commit.
+    if (result.userOnly) {
+      setFen(result.userOnly.fen);
+      setLastUci(result.userOnly.lastUci);
+      setSolvedIdx(result.userOnly.nextSolvedIdx);
+      setAwaitingReply(true);
+      const delay = sampleDelay(PUZZLE_REPLY_DELAY_MS);
+      // Capture the values we need so a stale closure can't fire onto
+      // a different puzzle / position if the user navigates fast.
+      const finalFen = result.fen;
+      const finalUci = result.lastUci;
+      const finalIdx = result.nextSolvedIdx;
+      const finalSolved = result.solved;
+      replyTimerRef.current = window.setTimeout(() => {
+        replyTimerRef.current = null;
+        setFen(finalFen);
+        setLastUci(finalUci);
+        setSolvedIdx(finalIdx);
+        setAwaitingReply(false);
+        if (finalSolved) setStatus('solved');
+      }, delay);
+      return true;
+    }
     setFen(result.fen);
     setLastUci(result.lastUci);
     setSolvedIdx(result.nextSolvedIdx);
@@ -290,6 +361,7 @@ function PuzzleSolver({
    * the wrong-attempt counter so the user gets a clean slate.
    */
   function restart() {
+    cancelPendingReply();
     setFen(puzzle.fen);
     setSolvedIdx(0);
     setStatus('solving');
@@ -304,6 +376,7 @@ function PuzzleSolver({
   }
 
   function revealAndFail() {
+    cancelPendingReply();
     setShowSolution(true);
     setStatus('wrong');
     setHintShown(false);
@@ -348,7 +421,12 @@ function PuzzleSolver({
               fen={boardFen}
               orientation={solverColor}
               lastMoveUci={boardLastUci}
-              viewOnly={showSolution || status === 'solved' || status === 'wrong'}
+              viewOnly={
+                showSolution ||
+                status === 'solved' ||
+                status === 'wrong' ||
+                awaitingReply
+              }
               onMove={(m) => onMove(m)}
               highlightSquares={showSolution ? [] : hintSquares}
             />

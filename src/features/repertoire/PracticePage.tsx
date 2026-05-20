@@ -9,7 +9,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Repertoire } from '@/db/schema';
+import { db, getSettings, type Repertoire } from '@/db/schema';
 import {
   enumerateLines,
   getLineStatsMap,
@@ -19,6 +19,11 @@ import {
 import type { RepertoireLineStats } from '@/db/schema';
 import { identifyOpening } from '@/features/openings/library';
 import { LineRunner, type LineRunnerControlState } from './LineRunner';
+import { FreePlayRunner } from './FreePlayRunner';
+import {
+  FREE_PLAY_STRENGTHS,
+  type FreePlayStrength,
+} from '@/engine/freePlayEngine';
 import {
   initSession,
   reduceSession,
@@ -390,18 +395,89 @@ function ActivePractice({
     session.currentIndex == null &&
     session.selectedIndices.length > 0;
 
+  // When `LineRunner` reports completion we *don't* auto-advance the
+  // session anymore. The previous behaviour (800 ms timer → dispatch
+  // 'finished') made the new "Play it out vs engine" CTA effectively
+  // un-clickable: the button rendered for less than a second before
+  // the runner remounted onto the next line. Now we stash the result
+  // on a ref and let the user choose what to do — clicking "Play it
+  // out", "Skip", "Restart line", or jumping to another line via the
+  // picker each transition the session deliberately. "Skip" and the
+  // picker's `jumpTo` flush the pending result via `flushPendingFinish`
+  // so completion stats land before we move on; "Restart line" leaves
+  // the pending result alone (the user is replaying the same line and
+  // the next completion will overwrite it).
+  const pendingFinishRef = useRef<{ perfect: boolean } | null>(null);
+
   const handleLineFinished = useCallback(
     ({ perfect }: { perfect: boolean }) => {
-      // The runner reports completion via this hook; we feed the
-      // reducer so the next line is queued per the active mode.
-      // We schedule a small delay so the user can see the "line
-      // complete" status before the runner remounts on the next line.
-      window.setTimeout(() => {
-        dispatch({ type: 'finished', perfect });
-      }, 800);
+      pendingFinishRef.current = { perfect };
     },
     [],
   );
+
+  /** Fire the held 'finished' dispatch (if any) so SessionState advances
+   *  with the right perfect flag. Safe to call when nothing is pending. */
+  const flushPendingFinish = useCallback(() => {
+    if (pendingFinishRef.current) {
+      const { perfect } = pendingFinishRef.current;
+      pendingFinishRef.current = null;
+      dispatch({ type: 'finished', perfect });
+    }
+  }, []);
+
+  // ── Free-play (vs engine) state ─────────────────────────────────────
+  // When the user finishes drilling a line and clicks "Play it out vs
+  // engine", we snapshot the line's last FEN + the user's colour and
+  // flip phase to 'freeplay'. The runner column swaps to <FreePlayRunner>
+  // while the right-hand picker / family stats / session summary stay
+  // visible. "Back to practice" flips phase back and re-fires the
+  // pending finished dispatch so the practice session resumes.
+  const [phase, setPhase] = useState<'practicing' | 'freeplay'>('practicing');
+  const [freePlayStart, setFreePlayStart] = useState<{
+    fen: string;
+    userColor: 'white' | 'black';
+    strength: FreePlayStrength;
+  } | null>(null);
+  const [defaultStrength, setDefaultStrength] = useState<FreePlayStrength>('max');
+
+  // Pull the user's stored free-play default once on mount. We
+  // deliberately don't subscribe to Settings via useLiveQuery — a
+  // mid-session settings change should NOT yank the strength out from
+  // under an in-flight free-play session.
+  useEffect(() => {
+    void getSettings().then((s) => {
+      const stored = (FREE_PLAY_STRENGTHS as readonly string[]).includes(
+        s.freePlayStrength ?? '',
+      )
+        ? (s.freePlayStrength as FreePlayStrength)
+        : 'max';
+      setDefaultStrength(stored);
+    });
+  }, []);
+
+  const startFreePlay = useCallback(() => {
+    if (!currentLine) return;
+    const fens = currentLine.line.fens;
+    const lastFen = fens[fens.length - 1];
+    setFreePlayStart({
+      fen: lastFen,
+      userColor: rep.color,
+      strength: defaultStrength,
+    });
+    setPhase('freeplay');
+  }, [currentLine, rep.color, defaultStrength]);
+
+  const exitFreePlay = useCallback(() => {
+    setPhase('practicing');
+    setFreePlayStart(null);
+    // Resume the practice session right where it was. If the user got
+    // here from a perfect / imperfect completion, fire the finished
+    // dispatch now so the next line is queued; otherwise this is a
+    // no-op (e.g. the runner was somehow re-entered without finishing,
+    // shouldn't happen in practice but cheap to guard).
+    flushPendingFinish();
+  }, [flushPendingFinish]);
   return (
     <div className="space-y-4">
       <header className="flex items-baseline justify-between flex-wrap gap-2">
@@ -462,6 +538,13 @@ function ActivePractice({
                 </button>
               </div>
             </div>
+          ) : phase === 'freeplay' && freePlayStart ? (
+            <FreePlayRunner
+              startFen={freePlayStart.fen}
+              userColor={freePlayStart.userColor}
+              initialStrength={freePlayStart.strength}
+              onExit={exitFreePlay}
+            />
           ) : (
             currentLine && (
               <LineRunner
@@ -477,7 +560,17 @@ function ActivePractice({
                     decorated={currentLine}
                     userColor={rep.color}
                     sessionPlays={session.sessionPlays}
-                    onSkip={() => dispatch({ type: 'skip' })}
+                    onSkip={() => {
+                      // Skip after completion advances the session
+                      // with the recorded perfect flag; skip mid-line
+                      // is a normal skip event.
+                      if (pendingFinishRef.current) {
+                        flushPendingFinish();
+                      } else {
+                        dispatch({ type: 'skip' });
+                      }
+                    }}
+                    onPlayItOut={startFreePlay}
                   />
                 )}
               />
@@ -509,7 +602,12 @@ function ActivePractice({
             onSelectAll={selectAll}
             onSelectNone={selectNone}
             onSelectFiltered={selectFiltered}
-            onJumpTo={(i) => dispatch({ type: 'jumpTo', index: i })}
+            onJumpTo={(i) => {
+              // Jumping mid-completion should still register the
+              // completion before moving to the requested line.
+              flushPendingFinish();
+              dispatch({ type: 'jumpTo', index: i });
+            }}
           />
         </aside>
       </div>
@@ -566,12 +664,18 @@ function PracticeStatusBar({
   userColor,
   sessionPlays,
   onSkip,
+  onPlayItOut,
 }: {
   control: LineRunnerControlState;
   decorated: DecoratedLine;
   userColor: 'white' | 'black';
   sessionPlays: number;
   onSkip: () => void;
+  /** Inline CTA shown when the line is `done`. Drops the user into
+   *  free-play vs Stockfish from this position. The plan deliberately
+   *  uses an inline button (not a modal) so the transition is
+   *  optional + obvious + non-blocking. */
+  onPlayItOut: () => void;
 }) {
   const { t } = useTranslation();
   const {
@@ -665,12 +769,31 @@ function PracticeStatusBar({
             {t('practice.playItForMe')}
           </button>
         )}
+        {/* "Play it out vs engine" — shown only on line completion.
+         *  Sits in the primary action slot (left of Restart / Skip)
+         *  styled as `btn-primary` so the user notices it's the new
+         *  next-step affordance, but it's still a sibling of the
+         *  existing buttons so a user who just wants to keep drilling
+         *  can ignore it without dismissing anything. */}
+        {status === 'done' && (
+          <button
+            type="button"
+            className="btn-primary text-xs"
+            onClick={onPlayItOut}
+          >
+            {t('practice.playItOut')}
+          </button>
+        )}
         <div className="ml-auto flex flex-wrap gap-2">
           <button type="button" className="btn text-xs" onClick={onRestart}>
             {t('practice.restartLine')}
           </button>
           <button type="button" className="btn text-xs" onClick={onSkip}>
-            {t('practice.skip')}
+            {/* On a completed line, "Skip" really means "advance to the
+             *  next line" — relabel so the affordance matches what the
+             *  user is doing. Mid-line it stays "Skip" (the user is
+             *  giving up on the current drill). */}
+            {status === 'done' ? t('practice.nextLine') : t('practice.skip')}
           </button>
         </div>
       </div>

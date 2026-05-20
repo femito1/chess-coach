@@ -20,6 +20,10 @@ import {
   setLocale,
   type SupportedLocale,
 } from '@/i18n';
+import {
+  FREE_PLAY_STRENGTHS,
+  type FreePlayStrength,
+} from '@/engine/freePlayEngine';
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
@@ -33,6 +37,8 @@ export function SettingsPage() {
   const [extensionDismissedAt, setExtensionDismissedAt] = useState<number | undefined>(
     undefined,
   );
+  const [freePlayStrength, setFreePlayStrength] =
+    useState<FreePlayStrength>('max');
   // Settings only uses `games` to populate the time-class filter dropdown
   // — staleness of a few seconds is invisible. Throttled for the same
   // reason as the dashboard / weaknesses pages, and uses the light
@@ -47,6 +53,15 @@ export function SettingsPage() {
       setAutoAnalyze(s.autoAnalyze);
       setTimeClassFilter(normalizeTimeClassSelection(s.timeClassFilter));
       setExtensionDismissedAt(s.extensionPromoDismissedAt);
+      // Default `Settings.freePlayStrength` to `'max'` if unset or
+      // corrupted — same fall-through as `strengthToOptions` so the
+      // dropdown always shows a meaningful selection.
+      const stored = (FREE_PLAY_STRENGTHS as readonly string[]).includes(
+        s.freePlayStrength ?? '',
+      )
+        ? (s.freePlayStrength as FreePlayStrength)
+        : 'max';
+      setFreePlayStrength(stored);
     });
   }, []);
 
@@ -101,6 +116,11 @@ export function SettingsPage() {
   async function changeLocale(locale: SupportedLocale): Promise<void> {
     await setLocale(locale);
     await updateSettings({ locale });
+  }
+
+  async function changeFreePlayStrength(level: FreePlayStrength): Promise<void> {
+    setFreePlayStrength(level);
+    await updateSettings({ freePlayStrength: level });
   }
 
   const currentLocale: SupportedLocale = isSupportedLocale(i18n.resolvedLanguage)
@@ -242,6 +262,34 @@ export function SettingsPage() {
                 }
               >
                 {LOCALE_DISPLAY_NAMES[loc]}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Free-play strength. Sets the default Stockfish strength for
+       *  the "Play it out vs engine" CTA on the practice page. The
+       *  practice page itself surfaces a per-session override so a
+       *  user can drop down to 1200 to drill an opening tactically
+       *  without rewriting their global preference. */}
+      <section className="card p-4 space-y-3">
+        <h2 className="font-medium">{t('settings.freePlayStrength.title')}</h2>
+        <p className="text-xs text-text-muted">
+          {t('settings.freePlayStrength.description')}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {FREE_PLAY_STRENGTHS.map((level) => {
+            const active = level === freePlayStrength;
+            return (
+              <button
+                key={level}
+                type="button"
+                aria-pressed={active}
+                onClick={() => void changeFreePlayStrength(level)}
+                className={active ? 'btn-primary text-sm' : 'btn text-sm'}
+              >
+                {t(`settings.freePlayStrength.level.${level}`)}
               </button>
             );
           })}
