@@ -1,35 +1,41 @@
 /**
  * Chess Coach — Review After Game (content script)
  *
- * Watches the chess.com tab for the end-of-game state. When detected,
- * injects a small floating panel offering a one-click "Review in Chess
- * Coach" CTA that opens the deep link in a new tab.
+ * Watches the chess.com tab for finished-game pages. When the user
+ * lands on one, injects a small floating panel offering a one-click
+ * "Review in Chess Coach" CTA that opens the deep link in a new tab.
  *
  * Loads on every chess.com page (manifest match `https://www.chess.com/*`)
- * and short-circuits inside `start()` until the URL becomes a live-game
- * URL. This is more robust than narrow URL match patterns because
- * chess.com sometimes resolves the post-game UI before the page URL
- * transitions to the canonical `/game/live/<id>` shape.
+ * and short-circuits inside `maybePrompt()` until the URL is a
+ * finished-game URL.
  *
- * Detection strategy (defensive — chess.com renames classes regularly):
- *   1. PRIMARY: `.game-over-modal-content` — the dedicated modal that
- *      pops up after a finished game. This selector has been stable
- *      enough that other long-lived userscripts (e.g. wintrcat-uk) rely
- *      on it as their sole hook.
- *   2. SECONDARY: any visible element whose class string contains
- *      `game-over` (case-insensitive).
- *   3. TERTIARY: a button labelled "Game Review" or "Rematch" that's
- *      currently in the DOM (the post-game CTAs).
- * Any of (1)/(2)/(3) is enough to fire.
+ * Detection strategy: we use the **URL itself** as the signal.
+ * Chess.com only mints a numeric game id once the game is finished
+ * — live games in progress sit at `/play/online` (no id in the URL).
+ * The moment the URL contains a numeric game id under any of the
+ * known finished-game URL shapes (see `currentGameId`), we prompt.
  *
- * The panel dedupes per game URL: once shown for a given game, we
- * don't re-inject it (chess.com re-mounts the modal sometimes when
- * the user clicks "Game Review" inline).
+ * This was a rewrite of an earlier DOM-heuristic approach that tried
+ * to detect specific result-modal class names. That approach kept
+ * regressing every time chess.com refactored its markup, and worse,
+ * it missed the historical-game case entirely — opening any past
+ * game from the archive renders no live "game over" UI but is still
+ * a perfectly valid moment to offer a Chess Coach review. The URL
+ * is both more reliable and cheaper to evaluate.
+ *
+ * Behaviour contract:
+ *   - Every navigation to a finished-game URL prompts (modulo a
+ *     same-page-visit dismissal, see below).
+ *   - If the user dismisses the prompt for game A, we don't re-show
+ *     it for A on this page visit. But if they navigate away and
+ *     back, or to game B, the prompt fires again.
+ *   - The moment the URL transitions away from a finished-game URL
+ *     (typically the user starting a new game → `/play/online`), we
+ *     hide whatever panel is currently on screen.
  *
  * Diagnostics: every meaningful state change is logged with the
  * `[chess-coach]` prefix, so a user reporting "the prompt didn't
- * appear" can open DevTools and read what the script saw — far more
- * useful than a silent script.
+ * appear" can open DevTools and read what the script saw.
  */
 
 const LOG_PREFIX = '[chess-coach]';
@@ -37,9 +43,23 @@ const log = (...args) => console.log(LOG_PREFIX, ...args);
 const warn = (...args) => console.warn(LOG_PREFIX, ...args);
 
 const STATE = {
-  lastPromptedUrl: /** @type {string | null} */ (null),
+  /**
+   * Game URL that's currently being prompted for. We use this only to
+   * avoid re-injecting an identical panel on every heartbeat tick — it
+   * is NOT a "never prompt this URL again" flag. Cleared on navigation
+   * away from the game and on user dismissal so the next finished
+   * game (or a re-visit of the same one in a fresh navigation) prompts
+   * fresh.
+   */
+  activePromptUrl: /** @type {string | null} */ (null),
+  /**
+   * Game URL the user explicitly dismissed on the *current* page
+   * visit. Distinct from `activePromptUrl` so we know not to re-show
+   * the panel for the rest of this visit, but we still reset on URL
+   * change (so the next finished game we land on prompts again).
+   */
+  dismissedUrl: /** @type {string | null} */ (null),
   panelEl: /** @type {HTMLElement | null} */ (null),
-  observer: /** @type {MutationObserver | null} */ (null),
   started: false,
 };
 
@@ -105,73 +125,6 @@ function canonicalGameUrl(id) {
 }
 
 /**
- * Robust visibility check that — unlike `el.offsetParent !== null` —
- * works for `position: fixed` elements (chess.com's modal containers
- * are typically fixed-positioned, which makes `offsetParent` null
- * even when they're plainly visible on screen).
- */
-function isVisible(el) {
-  if (!el || !(el instanceof Element)) return false;
-  const style = getComputedStyle(el);
-  if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
-    return false;
-  }
-  const rect = el.getBoundingClientRect();
-  return rect.width > 0 && rect.height > 0;
-}
-
-/**
- * True when the page currently shows a post-game modal/UI. See the
- * file header for the heuristic priority list.
- *
- * Note: each layer is independent — any one is enough. The user-
- * provided diagnostic on 2026-05-08 showed that chess.com had moved
- * to a single `class="game-result"` element on the finished-game
- * page (no `game-over*` class anywhere in the DOM at that point),
- * which is why the original `game-over`-only heuristic missed every
- * real finished game. The selectors below now cover both the
- * `game-over*` and `game-result*` lineages so we ride out either
- * markup style.
- */
-function isGameOverShowing() {
-  // Primary: the dedicated modal class. Long-lived userscripts pin
-  // their detection to this selector and it has survived multiple
-  // chess.com refactors.
-  const modal = document.querySelector('.game-over-modal-content');
-  if (modal && isVisible(modal)) return true;
-
-  // Secondary: any visible `game-over*` OR `game-result*` element.
-  // The 2026-05-08 chess.com refactor dropped the `game-over`
-  // ancestor entirely and just kept a `game-result` chip inline on
-  // the finished-game page; the OR here covers both worlds.
-  const candidates = document.querySelectorAll(
-    '[class*="game-over" i], [class*="game-result" i], [class*="game-finished" i]',
-  );
-  for (const el of candidates) {
-    if (isVisible(el)) return true;
-  }
-
-  // Tertiary: the post-game CTAs. We *don't* require a result chip
-  // alongside (an earlier version did, which was the cause of "I
-  // finished a game but it didn't pop up" — chess.com had refactored
-  // the result chip out of the markup we were watching for, so the
-  // and-clause silently rejected every detection).
-  const buttons = document.querySelectorAll('button, a');
-  for (const b of buttons) {
-    const txt = (b.textContent || '').trim().toLowerCase();
-    if (
-      txt === 'game review' ||
-      txt === 'rematch' ||
-      txt === 'new game' ||
-      txt === 'play again'
-    ) {
-      if (isVisible(b)) return true;
-    }
-  }
-  return false;
-}
-
-/**
  * Try to read the chess.com username from the page DOM as a fallback
  * for users who haven't filled in the option. Looks at a few stable-ish
  * places that have survived multiple chess.com refactors.
@@ -227,6 +180,7 @@ function hidePanel() {
     STATE.panelEl.remove();
     STATE.panelEl = null;
   }
+  STATE.activePromptUrl = null;
 }
 
 async function showPanel(gameUrl) {
@@ -247,7 +201,11 @@ async function showPanel(gameUrl) {
   const primary = root.querySelector('.cc-primary');
   const secondary = root.querySelector('.cc-secondary');
 
-  const onDismiss = () => hidePanel();
+  const onDismiss = () => {
+    log('user dismissed prompt for', gameUrl);
+    STATE.dismissedUrl = gameUrl;
+    hidePanel();
+  };
   closeBtn?.addEventListener('click', onDismiss);
   secondary?.addEventListener('click', onDismiss);
   primary?.addEventListener('click', () => {
@@ -270,21 +228,56 @@ async function showPanel(gameUrl) {
 function maybePrompt({ force = false } = {}) {
   const id = currentGameId();
   if (!id) {
-    if (force) warn('manual trigger ignored: not on a live-game URL');
+    if (force) warn('manual trigger ignored: not on a finished-game URL');
     return;
   }
   const url = canonicalGameUrl(id);
-  if (!force && STATE.lastPromptedUrl === url) return;
-  if (!force && !isGameOverShowing()) return;
-  STATE.lastPromptedUrl = url;
+
+  // Manual force trigger from the toolbar action — bypass every gate.
+  if (force) {
+    STATE.dismissedUrl = null;
+    STATE.activePromptUrl = url;
+    void showPanel(url);
+    return;
+  }
+
+  // Already showing for this exact URL — nothing to do (heartbeat
+  // tick after the panel was injected). Cheap early exit.
+  if (STATE.activePromptUrl === url && STATE.panelEl) return;
+
+  // User dismissed the panel for this URL during the current page
+  // visit. Respect that — don't re-nag. The dismiss flag is cleared
+  // on URL change, so finishing the next game (or revisiting any
+  // other game) prompts fresh.
+  if (STATE.dismissedUrl === url) return;
+
+  // The page URL itself is the signal: chess.com only mints a numeric
+  // game id once the game is finished (live games in progress sit at
+  // `/play/online` with no id in the URL until completion). Skipping
+  // the brittle DOM heuristic means we no longer miss prompts when
+  // chess.com refactors its result-modal markup, and we now also fire
+  // on archive revisits of historical games (no live modal renders
+  // there but the user explicitly navigated to a finished game and
+  // wants the option to review it).
+  STATE.activePromptUrl = url;
   void showPanel(url);
 }
 
 /**
- * Drive detection from a coalesced MutationObserver + a low-frequency
- * heartbeat. Chess.com's modal often mounts via React after a network
- * round-trip, so observing alone occasionally races; the heartbeat
- * makes detection eventually-consistent without hammering the page.
+ * Drive detection from an SPA-aware URL watcher.
+ *
+ * Chess.com is a SPA: navigating between games is a `pushState`, not
+ * a full reload, so a single content-script lifetime can see many
+ * `/play/online` ↔ `/game/<id>` transitions. The watcher polls
+ * `location.href` every 750 ms; on each transition we hide any
+ * lingering panel, clear the dismissal flag, and fire a fresh
+ * prompt-check. URL-only detection means we don't need a
+ * MutationObserver — the URL itself tells us whether we're on a
+ * finished-game page.
+ *
+ * We also fire once on script load to cover the cold-load case where
+ * the user lands directly on a finished-game URL (refresh, deep link
+ * from the archive, or a tab re-open).
  */
 function start() {
   if (STATE.started) return;
@@ -292,43 +285,25 @@ function start() {
 
   log('content script loaded on', location.href);
 
-  let scheduled = false;
   const fire = () => {
-    scheduled = false;
     try {
       maybePrompt();
     } catch (e) {
       warn('detection error', e);
     }
   };
-  STATE.observer = new MutationObserver(() => {
-    if (scheduled) return;
-    scheduled = true;
-    setTimeout(fire, 250);
-  });
-  STATE.observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-  });
-  // Heartbeat — every 1.5 s, cheap. Does nothing if the panel is
-  // already showing (deduped via `lastPromptedUrl`).
-  setInterval(fire, 1500);
 
-  // Reset the dedupe state on URL changes (chess.com is an SPA;
-  // navigating to the next game is a pushState, not a full reload).
   let lastUrl = location.href;
   setInterval(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
       log('navigation detected →', lastUrl);
-      STATE.lastPromptedUrl = null;
+      STATE.dismissedUrl = null;
       hidePanel();
+      fire();
     }
   }, 750);
 
-  // Fire once on script load — covers the case where the user
-  // reloaded the page on a finished-game URL and the modal is
-  // already in the DOM by `document_idle`.
   fire();
 }
 

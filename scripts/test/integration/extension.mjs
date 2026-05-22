@@ -200,6 +200,122 @@ async function runScenario(ctx, svcWorker, scenario) {
   };
 }
 
+/**
+ * Cross-navigation contract test (added 2026-05-21).
+ *
+ * Drives the content script through a sequence of SPA navigations
+ * inside a single tab to verify the user-visible behaviours added in
+ * the URL-based-detection rewrite:
+ *
+ *   1. Hide-on-new-game — finishing a game then starting a new one
+ *      (URL transitions away from a game id) tears down the panel.
+ *   2. Re-prompt-after-dismiss — dismissing the panel for game A and
+ *      then SPA-navigating to a different finished game (game B)
+ *      shows the panel again. This is the "I closed it, finish next
+ *      game, it should pop again" behaviour the user asked for.
+ */
+async function runNavigationContracts(ctx) {
+  const consoleLines = [];
+
+  const stubHtml = `<!DOCTYPE html>
+<html>
+  <head><meta charset="utf-8" /><meta name="user" content="HeroUser" /></head>
+  <body><div id="stub">stub page (URL-based detection — no DOM heuristic needed)</div></body>
+</html>`;
+
+  const page = await ctx.newPage();
+  page.on('console', (m) => consoleLines.push(`[${m.type()}] ${m.text()}`));
+  page.on('pageerror', (e) => consoleLines.push(`[pageerror] ${e.message}`));
+
+  await page.route('https://www.chess.com/**', (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: stubHtml,
+    });
+  });
+
+  await page.goto('https://www.chess.com/game/1111111', { waitUntil: 'domcontentloaded' });
+  try {
+    await page.waitForSelector('#chess-coach-prompt', { timeout: 5000 });
+  } catch {
+    await page.close();
+    return {
+      passed: false,
+      failure: 'panel did not appear on initial load of /game/1111111',
+      consoleLines: consoleLines.filter((l) => l.includes('[chess-coach]')),
+    };
+  }
+
+  await page.evaluate(() => {
+    history.pushState({}, '', '/play/online');
+  });
+  let panelHidAfterNav = false;
+  for (let i = 0; i < 15; i++) {
+    await page.waitForTimeout(200);
+    const present = await page.locator('#chess-coach-prompt').count();
+    if (present === 0) {
+      panelHidAfterNav = true;
+      break;
+    }
+  }
+  if (!panelHidAfterNav) {
+    await page.close();
+    return {
+      passed: false,
+      failure: 'panel did not disappear after URL changed to /play/online',
+      consoleLines: consoleLines.filter((l) => l.includes('[chess-coach]')),
+    };
+  }
+
+  await page.evaluate(() => {
+    history.pushState({}, '', '/game/2222222');
+  });
+  try {
+    await page.waitForSelector('#chess-coach-prompt', { timeout: 5000 });
+  } catch {
+    await page.close();
+    return {
+      passed: false,
+      failure: 'panel did not reappear on SPA nav to /game/2222222',
+      consoleLines: consoleLines.filter((l) => l.includes('[chess-coach]')),
+    };
+  }
+
+  await page.locator('#chess-coach-prompt .cc-secondary').click();
+  await page.waitForTimeout(1500);
+  const stillDismissedB = (await page.locator('#chess-coach-prompt').count()) === 0;
+  if (!stillDismissedB) {
+    await page.close();
+    return {
+      passed: false,
+      failure:
+        'panel re-injected for game B after dismissal (should respect dismissal until URL change)',
+      consoleLines: consoleLines.filter((l) => l.includes('[chess-coach]')),
+    };
+  }
+
+  await page.evaluate(() => {
+    history.pushState({}, '', '/game/3333333');
+  });
+  try {
+    await page.waitForSelector('#chess-coach-prompt', { timeout: 5000 });
+  } catch {
+    await page.close();
+    return {
+      passed: false,
+      failure: 'panel did not re-appear for game C after dismissing on game B',
+      consoleLines: consoleLines.filter((l) => l.includes('[chess-coach]')),
+    };
+  }
+
+  await page.close();
+  return {
+    passed: true,
+    consoleLines: consoleLines.filter((l) => l.includes('[chess-coach]')),
+  };
+}
+
 async function main() {
   // Each run gets a fresh Chrome profile so configured options /
   // storage state don't leak across runs.
@@ -239,6 +355,37 @@ async function main() {
     results.push({ scenario, ...r });
   }
 
+  // Cross-navigation contracts (added 2026-05-21):
+  //   1. Hide-on-new-game     — finish game A, start a new game
+  //                             (URL → /play/online with no game id),
+  //                             panel disappears.
+  //   2. Re-prompt-after-dismiss — finish game A, dismiss the panel,
+  //                                finish game B (SPA pushState),
+  //                                panel re-appears for B.
+  const navResult = await runNavigationContracts(ctx);
+  if (!navResult.passed) {
+    results.push({
+      scenario: { name: 'navigation-contracts' },
+      auto: false,
+      manual: false,
+      deepLink: null,
+      screenshotPath: null,
+      consoleLines: navResult.consoleLines,
+      errorLines: [navResult.failure ?? 'unknown failure'],
+    });
+  } else {
+    results.push({
+      scenario: { name: 'navigation-contracts' },
+      auto: true,
+      manual: true,
+      deepLink: 'n/a',
+      screenshotPath: null,
+      consoleLines: navResult.consoleLines,
+      errorLines: [],
+      isNav: true,
+    });
+  }
+
   await ctx.close();
   await fs.rm(userDataDir, { recursive: true, force: true });
 
@@ -246,25 +393,32 @@ async function main() {
   console.log('\n══ Extension smoke test ══');
   let allPassed = true;
   for (const r of results) {
-    const okAuto = r.auto;
-    const okManual = r.manual;
-    const okLink =
-      typeof r.deepLink === 'string' &&
-      r.deepLink.includes(`url=https%3A%2F%2Fwww.chess.com%2F`) &&
-      r.deepLink.includes(r.scenario.expectedDeepLinkId);
-    const allOk = okAuto && okManual && okLink;
-    if (!allOk) allPassed = false;
     console.log(`\n  scenario: ${r.scenario.name}`);
-    console.log(`    auto-detection: ${okAuto ? 'PASS' : 'FAIL'}`);
-    console.log(`    manual-trigger: ${okManual ? 'PASS' : 'FAIL'}`);
-    console.log(
-      `    deep link OK:   ${okLink ? 'PASS' : 'FAIL'} ${
-        r.deepLink ? `(${r.deepLink})` : '(no link captured)'
-      }`,
-    );
-    console.log(
-      `    screenshot:     ${r.screenshotPath ?? '(skipped — capture failed, see notes in script)'}`,
-    );
+    if (r.isNav) {
+      const ok = r.auto && r.manual && r.errorLines.length === 0;
+      if (!ok) allPassed = false;
+      console.log(`    hide-on-new-game:        ${r.auto ? 'PASS' : 'FAIL'}`);
+      console.log(`    re-prompt-after-dismiss: ${r.manual ? 'PASS' : 'FAIL'}`);
+    } else {
+      const okAuto = r.auto;
+      const okManual = r.manual;
+      const okLink =
+        typeof r.deepLink === 'string' &&
+        r.deepLink.includes(`url=https%3A%2F%2Fwww.chess.com%2F`) &&
+        r.deepLink.includes(r.scenario.expectedDeepLinkId);
+      const allOk = okAuto && okManual && okLink;
+      if (!allOk) allPassed = false;
+      console.log(`    auto-detection: ${okAuto ? 'PASS' : 'FAIL'}`);
+      console.log(`    manual-trigger: ${okManual ? 'PASS' : 'FAIL'}`);
+      console.log(
+        `    deep link OK:   ${okLink ? 'PASS' : 'FAIL'} ${
+          r.deepLink ? `(${r.deepLink})` : '(no link captured)'
+        }`,
+      );
+      console.log(
+        `    screenshot:     ${r.screenshotPath ?? '(skipped — capture failed, see notes in script)'}`,
+      );
+    }
     if (r.errorLines.length > 0) {
       console.log('    errors:');
       for (const line of r.errorLines) console.log('      ' + line);
