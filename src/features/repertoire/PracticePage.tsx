@@ -32,6 +32,7 @@ import {
   type SessionEvent,
 } from './practiceMode';
 import { tPracticeMode, tPracticeModeDescription } from '@/i18n/chess';
+import { LineMoveTokens } from '@/components/LineMoveTokens';
 
 interface DecoratedLine {
   line: RepertoireLine;
@@ -593,6 +594,7 @@ function ActivePractice({
             decoratedLines={decoratedLines}
             filteredIndices={filteredIndices}
             selected={selected}
+            userColor={rep.color}
             currentIndex={session.currentIndex}
             perfectThisSession={session.perfectThisSession}
             stats={stats ?? null}
@@ -714,6 +716,20 @@ function PracticeStatusBar({
           {t('practice.statusbar.ply', { ply, total: totalPly, wrong: sessionStats.wrong, play: sessionPlays + 1 })}
         </div>
       </div>
+      {/* Move ribbon: numbered, colour-coded by side, the
+       *  current ply is ringed so the user always knows where in the
+       *  line they are. Wraps onto multiple rows if the line is long
+       *  (the picker / status row used to truncate at 8 SAN tokens
+       *  with an ellipsis — long lines were unreadable). */}
+      {decorated.line.san.length > 0 && (
+        <LineMoveTokens
+          sans={decorated.line.san}
+          fens={decorated.line.fens}
+          userColor={userColor}
+          currentPly={ply}
+          size="md"
+        />
+      )}
       <div className="text-sm min-h-[1.5rem]">
         {status === 'done' ? (
           <span className="text-good">{t('practice.lineComplete')}</span>
@@ -978,6 +994,7 @@ function LinePicker({
   decoratedLines,
   filteredIndices,
   selected,
+  userColor,
   currentIndex,
   perfectThisSession,
   stats,
@@ -992,6 +1009,10 @@ function LinePicker({
   decoratedLines: DecoratedLine[];
   filteredIndices: number[];
   selected: Set<number>;
+  /** Which side the user is preparing — feeds into per-token colour
+   *  coding so the picker can show "your" moves in accent and the
+   *  opponent's in muted text. */
+  userColor: 'white' | 'black';
   currentIndex: number | null;
   perfectThisSession: number[];
   stats: Awaited<ReturnType<typeof getLineStatsMap>> | null;
@@ -1083,25 +1104,34 @@ function LinePicker({
                         onChange={() => onToggle(i)}
                       />
                       <label htmlFor={id} className="flex-1 min-w-0 cursor-pointer">
-                        <div className="text-sm truncate">
+                        <div className="flex items-baseline gap-2">
                           {d.eco && (
-                            <span className="font-mono text-[11px] text-text-muted mr-2">
+                            <span className="font-mono text-[11px] text-text-muted shrink-0">
                               {d.eco}
                             </span>
                           )}
-                          {d.variation || t('practice.linePicker.mainline')}
+                          <span className="text-sm truncate flex-1">
+                            {d.variation || t('practice.linePicker.mainline')}
+                          </span>
+                          <span className="text-[10px] text-text-muted shrink-0 tabular-nums">
+                            {t('practice.linePicker.plyTag', { count: d.line.uci.length })}
+                          </span>
                           {isPerfectSession && (
-                            <span className="ml-1 text-good" title={t('practice.linePicker.donePerfectThisSession')}>
+                            <span className="text-good shrink-0" title={t('practice.linePicker.donePerfectThisSession')}>
                               ✓
                             </span>
                           )}
                         </div>
-                        <div className="text-[11px] text-text-muted truncate font-mono">
-                          {d.line.san.slice(0, 8).join(' ')}
-                          {d.line.san.length > 8 && '…'}
+                        <div className="mt-0.5">
+                          <LineMoveTokens
+                            sans={d.line.san}
+                            fens={d.line.fens}
+                            userColor={userColor}
+                            size="sm"
+                          />
                         </div>
                         {persisted && persisted.attempts > 0 && (
-                          <div className="text-[10px] text-text-muted">
+                          <div className="text-[10px] text-text-muted mt-0.5">
                             {t('practice.linePicker.doneCount', { count: persisted.completions })}
                             {persisted.perfectCompletions > 0 && (
                               <span className="text-good">

@@ -1,5 +1,10 @@
 import { Chess } from 'chess.js';
-import { OPENING_LINES, type OpeningLine } from '@/data/openings.generated';
+import {
+  OPENING_FAMILIES,
+  OPENING_LINES,
+  type OpeningFamilyMeta,
+  type OpeningLine,
+} from '@/data/openings.generated';
 import { db, type Color, type Repertoire } from '@/db/schema';
 import { addMove, createRepertoire } from '@/features/repertoire/store';
 
@@ -14,35 +19,116 @@ export interface FamilyGroup {
    *  (responder). Surfaced everywhere lines are listed so the user knows
    *  what side they'll be playing if they pick this. */
   color: Color;
+  /** Authored popularity rank from `data/openings/popularity.tsv` (1 = most
+   *  popular per chess.com's published top-20 + master-game frequency
+   *  rankings; 999 = obscure / joke opening). Used by `sortFamilies`. */
+  popularity: number;
+  /** Plain-English blurb explaining the opening's main idea + which kind
+   *  of player it suits. Empty string when no description has been
+   *  authored (only happens for opening data that landed after the last
+   *  popularity.tsv update). */
+  description: string;
 }
 
 export interface VariationEntry extends OpeningLine {
   plies: number;
 }
 
-/**
- * Group every line by its top-level family name. Families are sorted
- * alphabetically; the list is stable across reloads.
- */
-export function getFamilies(): FamilyGroup[] {
-  const map = new Map<string, { count: number; ecos: Set<string> }>();
+/** UI-side sort modes for the openings library + persistence. The
+ *  string literals are stable; persisted under `chess-coach:openings:sort`
+ *  by `LibraryPage`. Bump the persisted-state version if a label is
+ *  removed so old rows aren't accidentally rehydrated. */
+export type FamilySort = 'popular' | 'most-lines' | 'fewest-lines' | 'alpha';
+
+const FAMILY_SORT_VALUES: readonly FamilySort[] = [
+  'popular',
+  'most-lines',
+  'fewest-lines',
+  'alpha',
+];
+
+export function isFamilySort(v: unknown): v is FamilySort {
+  return typeof v === 'string' && (FAMILY_SORT_VALUES as readonly string[]).includes(v);
+}
+
+/** Build the per-family aggregate by joining `OPENING_LINES` with the
+ *  authored `OPENING_FAMILIES` metadata (popularity + description).
+ *  Computed once at module load — `OPENING_LINES` and `OPENING_FAMILIES`
+ *  are both compile-time constants. */
+const FAMILIES_RAW: FamilyGroup[] = (() => {
+  // ECO set per family — built from OPENING_LINES because OPENING_FAMILIES
+  // doesn't carry it (the build script could carry it but it's cheap to
+  // recompute and saves bundle size).
+  const ecosPerFamily = new Map<string, Set<string>>();
   for (const line of OPENING_LINES) {
-    const agg = map.get(line.family);
-    if (agg) {
-      agg.count++;
-      agg.ecos.add(line.eco);
-    } else {
-      map.set(line.family, { count: 1, ecos: new Set([line.eco]) });
-    }
+    const set = ecosPerFamily.get(line.family) ?? new Set<string>();
+    set.add(line.eco);
+    ecosPerFamily.set(line.family, set);
   }
-  return Array.from(map.entries())
-    .map(([family, agg]) => ({
-      family,
-      count: agg.count,
-      ecos: Array.from(agg.ecos).sort(),
-      color: familyColor(family),
-    }))
-    .sort((a, b) => a.family.localeCompare(b.family));
+  return OPENING_FAMILIES.map(
+    (m: OpeningFamilyMeta): FamilyGroup => ({
+      family: m.family,
+      count: m.lineCount,
+      ecos: Array.from(ecosPerFamily.get(m.family) ?? []).sort(),
+      color: familyColor(m.family),
+      popularity: m.popularity,
+      description: m.description,
+    }),
+  );
+})();
+
+/**
+ * Group every line by its top-level family name and apply the requested
+ * sort. The `'popular'` mode (default) ranks by the authored popularity
+ * map from `data/openings/popularity.tsv` with a stable alphabetical
+ * tiebreaker, so multiple unranked obscure openings still surface in a
+ * deterministic order.
+ */
+export function getFamilies(sort: FamilySort = 'popular'): FamilyGroup[] {
+  return sortFamilies(FAMILIES_RAW, sort);
+}
+
+/** Pure sort, exported separately so the unit test can pin every mode
+ *  without going through the live dataset. */
+export function sortFamilies(
+  groups: readonly FamilyGroup[],
+  sort: FamilySort,
+): FamilyGroup[] {
+  const out = groups.slice();
+  switch (sort) {
+    case 'popular':
+      // Lower popularity rank wins; obscure (999) drop to the bottom and
+      // tie-break alphabetically inside each rank tier so the order is
+      // stable and the user can find a family by scanning A→Z within a
+      // tier.
+      out.sort(
+        (a, b) =>
+          a.popularity - b.popularity || a.family.localeCompare(b.family),
+      );
+      break;
+    case 'most-lines':
+      out.sort(
+        (a, b) => b.count - a.count || a.family.localeCompare(b.family),
+      );
+      break;
+    case 'fewest-lines':
+      out.sort(
+        (a, b) => a.count - b.count || a.family.localeCompare(b.family),
+      );
+      break;
+    case 'alpha':
+      out.sort((a, b) => a.family.localeCompare(b.family));
+      break;
+  }
+  return out;
+}
+
+/** Look up the authored description for a family. Returns the empty
+ *  string when no description has been authored — the UI hides the
+ *  panel in that case rather than rendering an empty card. */
+export function familyDescription(family: string): string {
+  const meta = OPENING_FAMILIES.find((m) => m.family === family);
+  return meta?.description ?? '';
 }
 
 /**

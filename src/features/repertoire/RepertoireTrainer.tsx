@@ -22,11 +22,23 @@ export function RepertoireTrainer() {
   const [queue, setQueue] = useState<RepertoireCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [idx, setIdx] = useState(0);
-  const [status, setStatus] = useState<'thinking' | 'wrong' | 'right'>('thinking');
+  /** Status union: `'thinking'` while the user is still trying;
+   *  `'right'` after a correct answer (until the next card). The
+   *  legacy `'wrong'` state is gone — a wrong-but-legal move now
+   *  auto-retries via the Board's `onMove → false` revert path,
+   *  matching the puzzles + LineRunner pattern. The "Try again"
+   *  button is also gone; the user just plays again on the same
+   *  board. */
+  const [status, setStatus] = useState<'thinking' | 'right'>('thinking');
   const [shown, setShown] = useState(false);
   const [lastTry, setLastTry] = useState<string | null>(null);
   const [hintShown, setHintShown] = useState(false);
   const [wrongCount, setWrongCount] = useState(0);
+  /** Sticky for the card's lifetime: true once the user has made any
+   *  wrong attempt on this card. Mirrors the `mistakeMade` flag in
+   *  the puzzles flow. Surfaces Hint + Show-answer permanently
+   *  (pre-mistake we keep the action row lean — Show-answer only). */
+  const [mistakeMade, setMistakeMade] = useState(false);
   /** Opening identification for the *current* card. Recomputed in an
    *  effect (rather than during render) because it requires walking the
    *  repertoire tree async to recover the move sequence. Falls back to
@@ -56,6 +68,7 @@ export function RepertoireTrainer() {
       setLastTry(null);
       setHintShown(false);
       setWrongCount(0);
+      setMistakeMade(false);
       setLoading(false);
     })();
   }, [id]);
@@ -105,6 +118,7 @@ export function RepertoireTrainer() {
       setLastTry(null);
       setHintShown(false);
       setWrongCount(0);
+      setMistakeMade(false);
     } else {
       setQueue([]);
     }
@@ -121,20 +135,19 @@ export function RepertoireTrainer() {
     const playedBase = played.slice(0, 4);
     if (playedBase === expectedBase) {
       setStatus('right');
+      setLastTry(null);
       return true;
-    } else {
-      setStatus('wrong');
-      setLastTry(played);
-      setWrongCount((n) => n + 1);
-      // Snap the piece back so "Try again" / "Hint" picks up from the
-      // expected starting position rather than the user's wrong move.
-      return false;
     }
-  }
-
-  function retry() {
-    setStatus('thinking');
-    setLastTry(null);
+    // Wrong-but-legal move: bump the counter, sticky-unlock Hint +
+    // Show-answer via `mistakeMade`, but DON'T flip into a `'wrong'`
+    // status. The Board's `onMove → false` revert path already snaps
+    // the piece back to its source, so we stay in `'thinking'` and
+    // the user can just re-drag — no Try-again button click required.
+    // Mirrors the puzzles + LineRunner auto-retry pattern.
+    setLastTry(played);
+    setWrongCount((n) => n + 1);
+    setMistakeMade(true);
+    return false;
   }
 
   function showHint() {
@@ -260,36 +273,54 @@ export function RepertoireTrainer() {
                 lastMoveUci={
                   shown ? solutionSteps[playbackIdx]?.uci || undefined : undefined
                 }
-                viewOnly={shown || status === 'right'}
-                onMove={onMove}
-                highlightSquares={
-                  shown
-                    ? []
-                    : hintShown && status === 'thinking'
-                      ? [{ square: current.expectedUci.slice(0, 2), color: 'hint' }]
-                      : status === 'wrong' && lastTry
-                        ? [{ square: lastTry.slice(0, 2), color: 'wrong' }]
-                        : []
-                }
+              viewOnly={shown || status === 'right'}
+              onMove={onMove}
+              highlightSquares={
+                shown
+                  ? []
+                  : hintShown && status === 'thinking'
+                    ? [{ square: current.expectedUci.slice(0, 2), color: 'hint' }]
+                    : lastTry && status === 'thinking'
+                      ? // Brief red ring on the wrong from-square so
+                        // the user gets visual feedback even though we
+                        // don't lock into a `'wrong'` state. Cleared
+                        // on the next correct attempt or the next card.
+                        [{ square: lastTry.slice(0, 2), color: 'wrong' }]
+                      : []
+              }
               />
             }
           />
           {!shown && (
             <div className="text-sm min-h-[1.5rem]">
               {status === 'thinking' && (
-                <span className="text-text-muted">
-                  {t('repertoire.trainer.toMove', { color: orientation === 'white' ? t('common.white') : t('common.black') })}
+                <>
+                  {wrongCount > 0 ? (
+                    // Wrong-attempt callout that replaces the legacy
+                    // `'wrong'` status row. We stay in `'thinking'`
+                    // (matching the puzzles flow) but lead with the
+                    // red call-out so the eye lands on it; the board
+                    // is already back in the previous accepted state
+                    // so the implicit "try again" is immediate.
+                    <span className="text-blunder">
+                      {lastTrySan
+                        ? t('repertoire.trainer.notQuiteSan', { san: lastTrySan })
+                        : t('repertoire.trainer.notQuite')}
+                      <span className="ml-2 text-text-muted text-xs">
+                        {t('repertoire.trainer.wrongCount', { count: wrongCount })}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="text-text-muted">
+                      {t('repertoire.trainer.toMove', { color: orientation === 'white' ? t('common.white') : t('common.black') })}
+                    </span>
+                  )}
                   {hintShown && (
                     <span className="ml-2 text-accent">
                       {t('repertoire.trainer.hint')}
                     </span>
                   )}
-                </span>
-              )}
-              {status === 'wrong' && (
-                <span className="text-blunder">
-                  {t('repertoire.trainer.wrongLine', { san: lastTrySan })}
-                </span>
+                </>
               )}
               {status === 'right' && (
                 <span className="text-good">
@@ -305,32 +336,32 @@ export function RepertoireTrainer() {
               )}
             </div>
           )}
-          {/* Action buttons. Visible whenever the card is unsolved, so a
-              user who clicks "Try again" still has Hint / Show-answer
-              within reach (fixes the "buttons disappear after retry"
-              bug). Each button hides itself once it's been used. */}
-          {!shown && (status === 'wrong' || status === 'thinking') && (
+          {/* Action buttons. The legacy "Try again" button is gone —
+              wrong moves auto-retry via the Board's `onMove → false`
+              revert path (matches the puzzles + LineRunner pattern).
+              Hint and Show-answer remain; once the user has slipped
+              once on this card (`mistakeMade` sticky), Show-answer
+              stays surfaced even after correct follow-up moves so the
+              user can fall back to the reveal at any later attempt. */}
+          {!shown && status === 'thinking' && (
             <div className="flex flex-wrap gap-2">
-              {status === 'wrong' && (
-                <button type="button" className="btn-primary text-xs" onClick={retry}>
-                  {t('repertoire.trainer.tryAgain')}
-                </button>
-              )}
               {!hintShown && (
                 <button type="button" className="btn text-xs" onClick={showHint}>
                   {t('puzzles.solver.hint_btn')}
                 </button>
               )}
-              <button
-                type="button"
-                className="btn text-xs"
-                onClick={() => {
-                  setShown(true);
-                  setPlaybackIdx(solutionSteps.length - 1);
-                }}
-              >
-                {t('repertoire.trainer.showAnswer')}
-              </button>
+              {(mistakeMade || hintShown) && (
+                <button
+                  type="button"
+                  className="btn text-xs"
+                  onClick={() => {
+                    setShown(true);
+                    setPlaybackIdx(solutionSteps.length - 1);
+                  }}
+                >
+                  {t('repertoire.trainer.showAnswer')}
+                </button>
+              )}
             </div>
           )}
           {shown && (

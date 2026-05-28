@@ -5,16 +5,22 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Board } from '@/components/Board';
 import { BoardFrame } from '@/components/BoardFrame';
 import { db, type Color } from '@/db/schema';
+import { usePersistedState } from '@/lib/usePersistedState';
 import {
   addFamilyToRepertoire,
   addLineToRepertoire,
   colorHint,
   ensureFamilyRepertoire,
   familyColor,
+  familyDescription,
   getFamilies,
   getVariations,
+  isFamilySort,
   replayLine,
   searchOpenings,
+  sortFamilies,
+  type FamilyGroup,
+  type FamilySort,
   type OpeningLine,
   type VariationEntry,
 } from './library';
@@ -22,24 +28,48 @@ import { ColorBadge } from './ColorBadge';
 
 type ColorFilter = 'all' | Color;
 
-const FAMILIES = getFamilies();
+/** Snapshot the alphabetical aggregate once at module load — sorting is
+ *  applied per-render based on the user's persisted preference, not at
+ *  the data layer. Cheap (~150-element sort) so we don't memoise it. */
+const FAMILIES_ALPHA: readonly FamilyGroup[] = getFamilies('alpha');
 
 export function LibraryPage() {
   const { t } = useTranslation();
+  // Filters + sort are persisted UI preferences (not chess data), so
+  // they survive reloads / tab swaps without going through Dexie /
+  // cloud sync. Mirrors the dashboard chart-filter persistence pattern.
   const [query, setQuery] = useState('');
-  const [colorFilter, setColorFilter] = useState<ColorFilter>('all');
+  const [colorFilter, setColorFilter] = usePersistedState<ColorFilter>(
+    'openings:color-filter',
+    'all',
+    {
+      isValid: (v): v is ColorFilter =>
+        v === 'all' || v === 'white' || v === 'black',
+    },
+  );
+  const [sort, setSort] = usePersistedState<FamilySort>(
+    'openings:sort',
+    'popular',
+    { isValid: isFamilySort },
+  );
   const [selectedFamily, setSelectedFamily] = useState<string | null>(null);
   const [selectedLine, setSelectedLine] = useState<OpeningLine | null>(null);
   const [ply, setPly] = useState(0);
 
   const filteredFamilies = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return FAMILIES.filter((f) => {
+    const sorted = sortFamilies(FAMILIES_ALPHA, sort);
+    return sorted.filter((f) => {
       if (colorFilter !== 'all' && f.color !== colorFilter) return false;
       if (q && !f.family.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [query, colorFilter]);
+  }, [query, colorFilter, sort]);
+
+  const totalLines = useMemo(
+    () => FAMILIES_ALPHA.reduce((n, f) => n + f.count, 0),
+    [],
+  );
 
   const searchResults = useMemo(() => {
     if (query.trim().length < 2) return [];
@@ -73,7 +103,7 @@ export function LibraryPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{t('openings.title')}</h1>
         <p className="text-sm text-text-muted">
-          {t('openings.subtitle', { count: FAMILIES.reduce((n, f) => n + f.count, 0) })}
+          {t('openings.subtitle', { count: totalLines })}
         </p>
       </div>
 
@@ -105,6 +135,20 @@ export function LibraryPage() {
               color="black"
             />
           </div>
+
+          <label className="flex items-center gap-2 text-xs text-text-muted">
+            <span className="shrink-0">{t('openings.sortBy')}</span>
+            <select
+              className="input text-xs py-1 flex-1"
+              value={sort}
+              onChange={(e) => setSort(e.target.value as FamilySort)}
+            >
+              <option value="popular">{t('openings.sort.popular')}</option>
+              <option value="most-lines">{t('openings.sort.mostLines')}</option>
+              <option value="fewest-lines">{t('openings.sort.fewestLines')}</option>
+              <option value="alpha">{t('openings.sort.alpha')}</option>
+            </select>
+          </label>
 
           {searchResults.length > 0 && (
             <div className="space-y-1 border-b border-border pb-2">
@@ -201,6 +245,7 @@ function VariationsList({
 }) {
   const { t } = useTranslation();
   const color = familyColor(family);
+  const description = familyDescription(family);
   return (
     <div className="card p-3 space-y-3">
       <div className="flex items-baseline justify-between gap-2">
@@ -212,6 +257,9 @@ function VariationsList({
           {t('openings.linesCount', { count: variations.length })}
         </div>
       </div>
+      {description && (
+        <FamilyDescriptionCard description={description} variant="inline" />
+      )}
       <div className="text-sm text-text-muted">
         {color === 'white' ? t('openings.youPlayWhite') : t('openings.youPlayBlack')}
       </div>
@@ -346,6 +394,11 @@ function LinePreview({
           </div>
         </div>
 
+        <FamilyDescriptionCard
+          description={familyDescription(line.family)}
+          variant="card"
+        />
+
         <MoveListPreview sans={sans} currentPly={ply} onPly={onPly} />
 
         <AddToRepertoirePanel line={line} defaultColor={hint} />
@@ -355,6 +408,50 @@ function LinePreview({
 }
 
 
+
+/**
+ * Plain-English blurb for a family. Two render modes:
+ *   - `inline`: lives directly inside the variations-list card, no
+ *               outer card chrome (just a subtle label + paragraph).
+ *   - `card`:   stands alone as its own card in the right aside on the
+ *               line preview pane. Used when the user has already
+ *               clicked into a specific line and we want the
+ *               description to be the second card after the title.
+ *
+ * Returns `null` when no description has been authored — never renders
+ * an empty card. Truthy-only consumers (e.g. inside `VariationsList`)
+ * already gate the call site with `description &&`, but we belt-and-
+ * suspenders here too so any future caller that forgets the guard
+ * still does the right thing.
+ */
+function FamilyDescriptionCard({
+  description,
+  variant,
+}: {
+  description: string;
+  variant: 'inline' | 'card';
+}) {
+  const { t } = useTranslation();
+  if (!description) return null;
+  if (variant === 'card') {
+    return (
+      <div className="card p-3 space-y-1">
+        <div className="text-xs uppercase tracking-wide text-text-muted">
+          {t('openings.aboutThisOpening')}
+        </div>
+        <p className="text-sm leading-relaxed">{description}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-md border border-border/50 bg-bg-raised/40 px-3 py-2 space-y-1">
+      <div className="text-[11px] uppercase tracking-wide text-text-muted">
+        {t('openings.aboutThisOpening')}
+      </div>
+      <p className="text-sm leading-relaxed">{description}</p>
+    </div>
+  );
+}
 
 function MoveListPreview({
   sans,

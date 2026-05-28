@@ -5,14 +5,52 @@ import { listGamesLight, requeueGame } from '@/db/queries';
 import type {
   AnalysisStatus,
   GameResult,
+  TimeClass,
   TimeClassSelection,
 } from '@/db/schema';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 import { TimeClassChips } from '@/components/TimeClassFilter';
 import { gameMatchesSelection } from '@/lib/timeClass';
+import { usePersistedState } from '@/lib/usePersistedState';
 
 type ResultFilter = 'all' | GameResult;
 type StatusFilter = 'all' | AnalysisStatus;
+
+const RESULT_VALUES: readonly ResultFilter[] = ['all', 'win', 'loss', 'draw', 'unknown'];
+const STATUS_VALUES: readonly StatusFilter[] = [
+  'all',
+  'pending',
+  'running',
+  'done',
+  'error',
+];
+const TIME_CLASS_VALUES: readonly TimeClass[] = [
+  'bullet',
+  'blitz',
+  'rapid',
+  'classical',
+  'daily',
+];
+/** The chip bar uses this sentinel to represent "deselect all" while
+ *  keeping the persisted shape `TimeClass[]`-compatible (see the
+ *  comment in `src/lib/timeClass.ts`). It's not a real `TimeClass`
+ *  value — we accept it on read for round-trip stability. */
+const TIME_CLASS_SENTINEL = '__none__';
+
+function isResultFilter(v: unknown): v is ResultFilter {
+  return typeof v === 'string' && (RESULT_VALUES as readonly string[]).includes(v);
+}
+function isStatusFilter(v: unknown): v is StatusFilter {
+  return typeof v === 'string' && (STATUS_VALUES as readonly string[]).includes(v);
+}
+function isTimeClassSelection(v: unknown): v is TimeClassSelection {
+  if (!Array.isArray(v)) return false;
+  return v.every(
+    (item) =>
+      item === TIME_CLASS_SENTINEL ||
+      (typeof item === 'string' && (TIME_CLASS_VALUES as readonly string[]).includes(item)),
+  );
+}
 
 export function GamesPage() {
   const { t } = useTranslation();
@@ -22,11 +60,30 @@ export function GamesPage() {
   // ~50 KB on a 1 k-game library, which removes the dominant cause of
   // page lag during analysis runs.
   const games = useThrottledLiveQuery(() => listGamesLight(), [], 1000);
+  // The live search query is intentionally NOT persisted — typing a
+  // throwaway opponent name shouldn't leak into the next session.
+  // The structural filters (result / status / time class) ARE
+  // persisted because the user's preference for "rapid only" is the
+  // kind of thing they expect to survive reloads, and the lack of
+  // persistence on this page (vs the Weaknesses + dashboard pages
+  // that already persist) was the user's specific complaint.
   const [query, setQuery] = useState('');
-  const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [resultFilter, setResultFilter] = usePersistedState<ResultFilter>(
+    'games:result-filter',
+    'all',
+    { isValid: isResultFilter },
+  );
+  const [statusFilter, setStatusFilter] = usePersistedState<StatusFilter>(
+    'games:status-filter',
+    'all',
+    { isValid: isStatusFilter },
+  );
   const [timeClassSelection, setTimeClassSelection] =
-    useState<TimeClassSelection>([]);
+    usePersistedState<TimeClassSelection>(
+      'games:time-class-selection',
+      [],
+      { isValid: isTimeClassSelection },
+    );
 
   const filtered = useMemo(() => {
     if (!games) return [];
