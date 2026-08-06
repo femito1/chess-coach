@@ -8,6 +8,26 @@
   #root {
     height: 100%;
   }
+  html {
+    /* Tell the browser this is a dark UI.
+     *
+     * `<html class="dark">` is a *Tailwind* convention — it only drives
+     * `dark:` variants in our own CSS. The browser has no idea, so every
+     * piece of native chrome it draws itself keeps rendering in light
+     * mode regardless of how dark our page is:
+     *
+     *   - scrollbars (the "white sidebar" down the right edge)
+     *   - <select> option popups (white menu; our near-white option text
+     *     became invisible on it)
+     *   - date/color pickers, autofill highlights, spinner buttons
+     *
+     * None of those can be reached with normal CSS — `color-scheme` is
+     * the supported switch, and it inherits, so declaring it once here
+     * covers the whole app. Without this, each such control needs its
+     * own local override and the next one added starts out broken again.
+     */
+    color-scheme: dark;
+  }
   body {
     @apply bg-bg text-text antialiased;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';

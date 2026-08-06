@@ -257,15 +257,13 @@ function FilterSelect({
   return (
     <label className="flex items-center gap-1.5 rounded-md bg-bg-soft border border-border pl-2.5 pr-1 text-sm focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/30">
       <span className="text-text-muted whitespace-nowrap text-xs">{label}</span>
-      {/* The native option popup inherits the <select>'s own background,
-          NOT the wrapper's — `bg-transparent` here rendered a white menu
-          with near-white text (unreadable). Keep a real dark background
-          on the element itself, matching `.input`. `color-scheme: dark`
-          additionally tells the OS to draw its native menu chrome dark,
-          which is what fixes the popup on Chromium/Windows where the
-          background alone isn't honoured. */}
+      {/* Keep a real background on the select itself, not just the
+          wrapper: the native option popup inherits the *select's*
+          background, so `bg-transparent` here rendered a white menu.
+          The dark popup chrome comes from the global `color-scheme: dark`
+          in `styles/index.css`. */}
       <select
-        className="border-0 bg-bg-soft py-1.5 pr-1 text-sm text-text focus:outline-none focus:ring-0 [color-scheme:dark]"
+        className="border-0 bg-bg-soft py-1.5 pr-1 text-sm text-text focus:outline-none focus:ring-0"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
