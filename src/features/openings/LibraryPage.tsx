@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Board } from '@/components/Board';
 import { BoardFrame } from '@/components/BoardFrame';
@@ -16,6 +16,7 @@ import {
   getFamilies,
   getVariations,
   isFamilySort,
+  isKnownOpeningFamily,
   replayLine,
   searchOpenings,
   sortFamilies,
@@ -40,6 +41,7 @@ const FAMILIES_ALPHA: readonly FamilyGroup[] = getFamilies('alpha');
 
 export function LibraryPage() {
   const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
   // Filters + sort are persisted UI preferences (not chess data), so
   // they survive reloads / tab swaps without going through Dexie /
   // cloud sync. Mirrors the dashboard chart-filter persistence pattern.
@@ -57,13 +59,37 @@ export function LibraryPage() {
     'popular',
     { isValid: isFamilySort },
   );
-  const [selectedFamily, setSelectedFamily] = useState<string | null>(null);
+  // Dashboard (and any other deep link) can land on `/openings?family=…`.
+  // Keep `family` in the URL as source of truth — stripping it broke
+  // StrictMode remounts (state reset after the param was already gone).
+  // Manual family picks write the same param, so URL absence means
+  // "no family selected" (e.g. nav from `/openings?family=X` → `/openings`).
+  const familyParam = searchParams.get('family')?.trim() ?? '';
+  const [selectedFamily, setSelectedFamily] = useState<string | null>(() =>
+    familyParam && isKnownOpeningFamily(familyParam) ? familyParam : null,
+  );
   const [selectedLine, setSelectedLine] = useState<OpeningLine | null>(null);
   const [ply, setPly] = useState(0);
   const [variationSort, setVariationSort] = useState<
     'recommended' | 'global' | 'personal' | 'shortest' | 'alpha'
   >('recommended');
   const games = useLiveQuery(() => db.games.toArray(), []);
+
+  useEffect(() => {
+    if (familyParam && isKnownOpeningFamily(familyParam)) {
+      setSelectedFamily(familyParam);
+      setSelectedLine(null);
+      setPly(0);
+      setQuery('');
+      return;
+    }
+    // No / unknown family in the URL — drop any ghost selection so the
+    // library isn't stuck after the query param disappears. Never touch
+    // the persisted color filter.
+    setSelectedFamily(null);
+    setSelectedLine(null);
+    setPly(0);
+  }, [familyParam]);
   const personalByColor = useMemo(
     () => ({
       white: buildPersonalOpeningStats(games ?? [], 'white'),
@@ -76,11 +102,14 @@ export function LibraryPage() {
     const q = query.trim().toLowerCase();
     const sorted = sortFamilies(FAMILIES_ALPHA, sort);
     return sorted.filter((f) => {
+      // Keep a deep-linked / currently selected family visible even if
+      // the active color/search filter would otherwise hide it.
+      if (selectedFamily && f.family === selectedFamily) return true;
       if (colorFilter !== 'all' && f.color !== colorFilter) return false;
       if (q && !f.family.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [query, colorFilter, sort]);
+  }, [query, colorFilter, sort, selectedFamily]);
 
   const totalLines = useMemo(
     () => FAMILIES_ALPHA.reduce((n, f) => n + f.count, 0),
@@ -223,6 +252,9 @@ export function LibraryPage() {
                       setSelectedFamily(f.family);
                       setSelectedLine(null);
                       setPly(0);
+                      const next = new URLSearchParams(searchParams);
+                      next.set('family', f.family);
+                      setSearchParams(next, { replace: true });
                     }}
                     className={`w-full flex items-center gap-2 py-1 text-sm text-left hover:text-accent ${
                       selectedFamily === f.family ? 'text-accent' : ''

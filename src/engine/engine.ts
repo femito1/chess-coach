@@ -379,6 +379,22 @@ export class EngineWorker {
   isBusy(): boolean {
     return this.currentJob !== null;
   }
+
+  /** Cancel any in-flight analysis without starting a new one. Used when
+   *  a live-eval consumer goes idle (empty FEN / unmount) so `isBusy()`
+   *  clears and idle teardown can free the WASM heap. */
+  cancelAnalysis(): void {
+    if (!this.currentJob) return;
+    this.currentJob.cancel();
+    this.currentJob = null;
+  }
+
+  /** Ensure the worker has completed WASM init + UCI handshake. Cheap
+   *  no-op when already warm; used to prefetch before free-play mounts
+   *  the live-eval consumer. */
+  async ensureReady(): Promise<void> {
+    await this.init();
+  }
 }
 
 /** Singleton worker used by single-position consumers (live eval in the

@@ -113,6 +113,51 @@ export async function pickEngineMove(
   return next;
 }
 
+export async function warmFreePlayEngine(
+  level: FreePlayStrength = 'max',
+): Promise<void> {
+  // Force the singleton worker through WASM init + UCI handshake without
+  // kicking off a full-depth search. Called when the "Play it out" CTA
+  // appears so the first free-play click doesn't hitch on cold boot.
+  const prior = inflight.catch(() => undefined);
+  const next = (async () => {
+    await prior;
+    await applyStrength(level);
+  })();
+  inflight = next;
+  await next;
+}
+
+/** Shared idle-teardown for the opponent singleton. Armed when the
+ *  practice CTA unmounts or FreePlayRunner unmounts; cancelled on the
+ *  next FreePlayRunner / CTA remount so StrictMode and CTA→freeplay
+ *  transitions don't kill a worker that's about to be used.
+ *
+ *  Teardown waits for any in-flight `warm`/`pickEngineMove` to settle
+ *  first: `setOption` calls `init()`, so terminating mid-warm lets the
+ *  warm's next `setOption` quietly respawn the worker and leak it. */
+let pendingIdleTeardown: ReturnType<typeof setTimeout> | null = null;
+let idleTeardownGen = 0;
+
+export function scheduleFreePlayIdleTeardown(ms = 1500): void {
+  if (pendingIdleTeardown != null) clearTimeout(pendingIdleTeardown);
+  const gen = ++idleTeardownGen;
+  pendingIdleTeardown = setTimeout(() => {
+    pendingIdleTeardown = null;
+    void inflight.catch(() => undefined).then(() => {
+      if (gen !== idleTeardownGen) return;
+      terminateFreePlayEngineIfIdle();
+    });
+  }, ms);
+}
+
+export function cancelFreePlayIdleTeardown(): void {
+  idleTeardownGen++;
+  if (pendingIdleTeardown == null) return;
+  clearTimeout(pendingIdleTeardown);
+  pendingIdleTeardown = null;
+}
+
 /**
  * Best-effort idle teardown. Mirrors `terminateEngineIfIdle` for the
  * review-page worker — the runner unmount-hook calls this so leaving

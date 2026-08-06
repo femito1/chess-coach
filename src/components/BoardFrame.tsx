@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { EVAL_BAR_WIDTH_PX } from '@/components/EvalBar';
 
 /**
  * Canonical "primary chess board" size.
@@ -30,12 +31,9 @@ export const PRIMARY_BOARD_MAX_PX = 640;
 export const THUMBNAIL_BOARD_MAX_PX = 360;
 
 /**
- * Small ratio (eval bar / 24 px) that we subtract from the outer
- * frame width when an eval bar is rendered alongside the board. Keeps
- * the *board* itself at `PRIMARY_BOARD_MAX_PX` regardless of whether
- * a bar is present.
+ * Gap between eval bar and board. Bar width comes from
+ * `EVAL_BAR_WIDTH_PX` so both stay in sync.
  */
-const EVAL_BAR_PX = 24;
 const EVAL_BAR_GAP_PX = 8;
 
 export interface BoardFrameProps {
@@ -72,7 +70,7 @@ export function BoardFrame({
   // `PRIMARY_BOARD_MAX_PX`. Without a bar, the frame width matches the
   // board cap directly.
   const outerMax = evalBar
-    ? PRIMARY_BOARD_MAX_PX + EVAL_BAR_PX + EVAL_BAR_GAP_PX
+    ? PRIMARY_BOARD_MAX_PX + EVAL_BAR_WIDTH_PX + EVAL_BAR_GAP_PX
     : PRIMARY_BOARD_MAX_PX;
   const maxWidth =
     viewportClampPx > 0

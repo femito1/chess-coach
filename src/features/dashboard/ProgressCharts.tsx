@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import {
   CartesianGrid,
   Legend,
@@ -18,6 +19,7 @@ import {
   type GameForCharts,
 } from './progress';
 import { usePersistedState } from '@/lib/usePersistedState';
+import { isKnownOpeningFamily } from '@/features/openings/library';
 
 const AXIS_COLOR = '#9aa3b2';
 const GRID_COLOR = '#2a313d';
@@ -529,6 +531,7 @@ function OpeningWinRateList({
             : o.winRate >= 0.45
               ? '#f0c36d'
               : '#e06c75';
+        const inLibrary = isKnownOpeningFamily(o.family);
         return (
           <li
             key={o.family}
@@ -541,7 +544,22 @@ function OpeningWinRateList({
               games: o.games,
             })}
           >
-            <span className="text-sm truncate">{o.family}</span>
+            <div className="min-w-0 flex items-center gap-2">
+              <span className="text-sm truncate">{o.family}</span>
+              {inLibrary && (
+                <Link
+                  to={`/openings?family=${encodeURIComponent(o.family)}`}
+                  className="shrink-0 inline-flex items-center gap-1 rounded-md border border-border/80 bg-bg-raised/60 px-1.5 py-0.5 text-[11px] text-accent hover:border-accent/50 hover:bg-accent/10 transition-colors"
+                  title={t('charts.openInLibraryTitle', { family: o.family })}
+                  aria-label={t('charts.openInLibraryTitle', { family: o.family })}
+                >
+                  {t('charts.openInLibrary')}
+                  <span aria-hidden className="opacity-70">
+                    →
+                  </span>
+                </Link>
+              )}
+            </div>
             <span className="text-xs text-text-muted font-mono whitespace-nowrap">
               {t('charts.openingRow', {
                 wins: o.wins,

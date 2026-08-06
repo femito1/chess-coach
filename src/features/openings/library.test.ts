@@ -3,6 +3,7 @@ import {
   familyDescription,
   getVariations,
   isFamilySort,
+  isKnownOpeningFamily,
   sortFamilies,
   type FamilyGroup,
   type FamilySort,
@@ -139,6 +140,18 @@ describe('familyDescription', () => {
 
   it('returns the empty string for a family that does not exist', () => {
     expect(familyDescription('No Such Family')).toBe('');
+  });
+});
+
+describe('isKnownOpeningFamily', () => {
+  it('recognises families from the openings library', () => {
+    expect(isKnownOpeningFamily('Italian Game')).toBe(true);
+    expect(isKnownOpeningFamily('Sicilian Defense')).toBe(true);
+  });
+
+  it('rejects unknown / dashboard-only labels', () => {
+    expect(isKnownOpeningFamily('Unknown')).toBe(false);
+    expect(isKnownOpeningFamily('Not A Real Opening')).toBe(false);
   });
 });
 

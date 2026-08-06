@@ -21,11 +21,18 @@ function acquireLiveEval(): void {
 
 function releaseLiveEval(): void {
   liveEvalConsumers = Math.max(0, liveEvalConsumers - 1);
-  if (liveEvalConsumers === 0 && liveEvalTeardownTimer === null) {
-    liveEvalTeardownTimer = setTimeout(() => {
-      liveEvalTeardownTimer = null;
-      if (liveEvalConsumers === 0) terminateEngineIfIdle();
-    }, LIVE_EVAL_IDLE_MS);
+  if (liveEvalConsumers === 0) {
+    // Stop any in-flight search so `isBusy()` clears and the idle
+    // teardown below can actually free the WASM heap. Without this,
+    // unmount while analyzing left the worker busy for up to the full
+    // remaining depth and `terminateEngineIfIdle` no-op'd.
+    engine.cancelAnalysis();
+    if (liveEvalTeardownTimer === null) {
+      liveEvalTeardownTimer = setTimeout(() => {
+        liveEvalTeardownTimer = null;
+        if (liveEvalConsumers === 0) terminateEngineIfIdle();
+      }, LIVE_EVAL_IDLE_MS);
+    }
   }
 }
 
@@ -85,6 +92,17 @@ export function useLiveEval(fen: string, depth = 14): LiveEvalData | null {
 
   useEffect(() => {
     let cancelled = false;
+    if (!fen) {
+      // Stop any in-flight search. Previously callers passed `''` into
+      // `analyze`, which cancelled via the "new job replaces old" path
+      // but also kicked off a useless empty-FEN search. Cancel-only is
+      // the correct idle behaviour.
+      engine.cancelAnalysis();
+      setData(null);
+      return () => {
+        cancelled = true;
+      };
+    }
     setData((prev) => (prev ? { ...prev, running: true } : null));
 
     (async () => {

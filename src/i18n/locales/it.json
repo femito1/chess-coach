@@ -130,7 +130,9 @@
       "openingsEmpty": "Nessun dato di apertura ancora."
     },
     "openingTooltip": "{{family}} — {{wins}}V {{draws}}P {{losses}}S su {{games}} partite",
-    "openingRow": "{{wins}}V · {{draws}}P · {{losses}}S · {{games}}p"
+    "openingRow": "{{wins}}V · {{draws}}P · {{losses}}S · {{games}}p",
+    "openInLibrary": "Apri",
+    "openInLibraryTitle": "Vedi {{family}} nella libreria aperture"
   },
   "settings": {
     "title": "Impostazioni",

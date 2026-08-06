@@ -89,6 +89,13 @@ export function getFamilies(sort: FamilySort = 'popular'): FamilyGroup[] {
   return sortFamilies(FAMILIES_RAW, sort);
 }
 
+/** True when `family` is a real openings-library family (not a Chess.com
+ *  oddity / "Unknown"). Used by dashboard deep-links so we don't offer
+ *  a dead "Open" button for names the library can't resolve. */
+export function isKnownOpeningFamily(family: string): boolean {
+  return FAMILIES_RAW.some((g) => g.family === family);
+}
+
 /** Pure sort, exported separately so the unit test can pin every mode
  *  without going through the live dataset. */
 export function sortFamilies(

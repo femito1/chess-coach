@@ -11,7 +11,8 @@ import { tClassification } from '@/i18n/chess';
 import {
   FREE_PLAY_STRENGTHS,
   pickEngineMove,
-  terminateFreePlayEngineIfIdle,
+  cancelFreePlayIdleTeardown,
+  scheduleFreePlayIdleTeardown,
   type FreePlayStrength,
 } from '@/engine/freePlayEngine';
 import {
@@ -53,12 +54,6 @@ interface MoveRecord {
   side: 'user' | 'engine';
   classification?: Classification;
 }
-
-/** Module-global handle for a pending engine teardown timer. We
- *  schedule one on unmount and cancel it on the next mount, so React
- *  StrictMode's dev-only fake unmount/remount doesn't kill the worker
- *  mid-search. */
-let pendingTeardownTimer: number | null = null;
 
 function detectGameOver(chess: Chess): GameOverReason | null {
   if (chess.isCheckmate()) return 'checkmate';
@@ -102,7 +97,6 @@ export function FreePlayRunner({
   initialStrength,
   onExit,
 }: FreePlayRunnerProps) {
-  const { t } = useTranslation();
   const opponentColor = userColor === 'white' ? 'black' : 'white';
 
   // ── State model ─────────────────────────────────────────────────────
@@ -124,8 +118,11 @@ export function FreePlayRunner({
   const [strength, setStrength] = useState<FreePlayStrength>(initialStrength);
   const [thinking, setThinking] = useState(false);
   const [gameOver, setGameOver] = useState<GameOverReason | null>(null);
-  /** True for ~4s after mount, then fades. The transition banner. */
+  /** True for ~4s after mount — status-bar hint only (does not push layout). */
   const [showBanner, setShowBanner] = useState(true);
+  /** Delay engine work until after first paint so remounting the board
+   *  isn't competing with two Stockfish cold-boots on the same frame. */
+  const [enginesReady, setEnginesReady] = useState(false);
 
   // Derived board-state: position the user is currently *viewing*
   // (which is the tip when `cursor === history.length`, otherwise a
@@ -157,6 +154,28 @@ export function FreePlayRunner({
     return () => window.clearTimeout(id);
   }, []);
 
+  // Open the engine gate after paint. Double-rAF waits for the board
+  // layout to settle; a short timeout keeps WASM init off the click
+  // frame so the transition doesn't feel hitchy.
+  useEffect(() => {
+    let cancelled = false;
+    let timeoutId = 0;
+    let raf2 = 0;
+    const raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        timeoutId = window.setTimeout(() => {
+          if (!cancelled) setEnginesReady(true);
+        }, 80);
+      });
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+      if (timeoutId) window.clearTimeout(timeoutId);
+    };
+  }, []);
+
   // Bump the opponent token on unmount so any in-flight Stockfish reply
   // is dropped instead of being committed onto a stale board. Defer the
   // worker teardown via a short idle timer (same pattern as
@@ -174,25 +193,17 @@ export function FreePlayRunner({
   useEffect(() => {
     return () => {
       opponentTokenRef.current += 1;
-      const t = window.setTimeout(() => {
-        terminateFreePlayEngineIfIdle();
-      }, 1500);
-      // The next mount (StrictMode dev or a real re-entry into
-      // FreePlayRunner) clears any pending teardown via this module-
-      // global handle.
-      pendingTeardownTimer = t;
+      // Next mount (StrictMode remount or re-entry) cancels this via
+      // `cancelFreePlayIdleTeardown` so we don't kill an in-flight
+      // search between mount-1 and mount-2.
+      scheduleFreePlayIdleTeardown(1500);
     };
   }, []);
 
-  // On mount, cancel any pending teardown from a just-prior unmount —
-  // this is the StrictMode dev path. In production the timer never gets
-  // a chance to fire because the same component instance is never
-  // un-and-re-mounted in close succession.
+  // Cancel any pending teardown from a just-prior CTA unmount or
+  // StrictMode fake unmount before we start using the opponent worker.
   useEffect(() => {
-    if (pendingTeardownTimer != null) {
-      window.clearTimeout(pendingTeardownTimer);
-      pendingTeardownTimer = null;
-    }
+    cancelFreePlayIdleTeardown();
   }, []);
 
   // Live engine eval for the *current* board position (i.e. whichever
@@ -203,7 +214,10 @@ export function FreePlayRunner({
   // move. Scrubbing back makes the bar reflect the historical
   // position — this is consistent with review-page exploration and is
   // exactly what the user expects when looking at a prior decision.
-  const liveEval = useLiveEval(gameOver ? '' : currentFen, 14);
+  // Keep evaluating after game-over so the mating / final user move can
+  // still classify (and the eval bar shows the terminal position). Only
+  // the opponent search loop is gated on `gameOver`.
+  const liveEval = useLiveEval(enginesReady ? currentFen : '', 14);
 
   // Side to move at the current position. Derived from the FEN so we
   // don't have to trust an external source-of-truth.
@@ -272,6 +286,7 @@ export function FreePlayRunner({
   // has since rewound away from, restarted, or replaced via a
   // different move) is dropped instead of being applied.
   useEffect(() => {
+    if (!enginesReady) return;
     if (isUserTurn || gameOver) return;
     if (!atTip) return;
     const token = ++opponentTokenRef.current;
@@ -341,7 +356,7 @@ export function FreePlayRunner({
         setThinking(false);
       }
     })();
-  }, [isUserTurn, gameOver, currentFen, strength, atTip]);
+  }, [enginesReady, isUserTurn, gameOver, currentFen, strength, atTip]);
 
   const handleUserMove = useCallback(
     (m: { from: string; to: string; promotion?: string }): boolean | void => {
@@ -528,12 +543,6 @@ export function FreePlayRunner({
 
   return (
     <div className="space-y-3">
-      {showBanner && (
-        <div className="card p-3 border-accent/40 bg-accent/5 text-sm">
-          {t('practice.freePlay.banner')}
-        </div>
-      )}
-
       <BoardFrame
         evalBar={
           <EvalBar
@@ -577,6 +586,7 @@ export function FreePlayRunner({
         history={history}
         cursor={cursor}
         strength={strength}
+        showBanner={showBanner}
         onChangeStrength={setStrength}
         onResign={resign}
         onRestart={restart}
@@ -598,6 +608,7 @@ function FreePlayStatusBar({
   history,
   cursor,
   strength,
+  showBanner,
   onChangeStrength,
   onResign,
   onRestart,
@@ -617,6 +628,7 @@ function FreePlayStatusBar({
    *  position" hint and the engine pauses replying. */
   cursor: number;
   strength: FreePlayStrength;
+  showBanner: boolean;
   onChangeStrength: (level: FreePlayStrength) => void;
   onResign: () => void;
   onRestart: () => void;
@@ -649,7 +661,11 @@ function FreePlayStatusBar({
         </div>
       </div>
 
-      <div className="text-sm min-h-[1.5rem]">
+      {/* Single status row — intro hint reuses this slot so the board
+          above never jumps when the banner appears or dismisses.
+          Scrub/mate status always wins; the intro can overlay the
+          initial "thinking…" window so the transition still reads. */}
+      <div className="text-sm min-h-[2.5rem]">
         {cursor < history.length ? (
           // The user is reviewing a past position. Surface a clear
           // "you're not on the tip" hint so they don't think their
@@ -666,6 +682,8 @@ function FreePlayStatusBar({
           <span className="text-text">
             {t(`practice.freePlay.gameOver.${gameOver}`)}
           </span>
+        ) : showBanner ? (
+          <span className="text-accent">{t('practice.freePlay.banner')}</span>
         ) : thinking ? (
           <span className="text-text-muted">{t('practice.freePlay.thinking')}</span>
         ) : lastUserMove?.classification ? (

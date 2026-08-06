@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Board } from '@/components/Board';
 import { BoardFrame } from '@/components/BoardFrame';
+import { EVAL_BAR_WIDTH_PX } from '@/components/EvalBar';
 import {
   recordLineAttempt,
   recordLineCompletion,
@@ -294,6 +295,18 @@ export function LineRunner({
   return (
     <div className="space-y-3">
       <BoardFrame
+        // Reserve the eval-bar gutter once the line is finished so
+        // "Play it out vs engine" can mount FreePlayRunner (with a real
+        // EvalBar) without shoving the board sideways.
+        evalBar={
+          status === 'done' ? (
+            <div
+              className="shrink-0 self-stretch"
+              style={{ width: EVAL_BAR_WIDTH_PX }}
+              aria-hidden
+            />
+          ) : undefined
+        }
         board={
           <Board
             fen={fen}

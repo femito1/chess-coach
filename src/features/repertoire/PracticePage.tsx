@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -34,6 +27,9 @@ import { LineRunner, type LineRunnerControlState } from './LineRunner';
 import { FreePlayRunner } from './FreePlayRunner';
 import {
   FREE_PLAY_STRENGTHS,
+  cancelFreePlayIdleTeardown,
+  scheduleFreePlayIdleTeardown,
+  warmFreePlayEngine,
   type FreePlayStrength,
 } from '@/engine/freePlayEngine';
 import {
@@ -521,12 +517,14 @@ function ActivePractice({
     if (!currentLine) return;
     const fens = currentLine.line.fens;
     const lastFen = fens[fens.length - 1];
-    setFreePlayStart({
-      fen: lastFen,
-      userColor: rep.color,
-      strength: defaultStrength,
+    startTransition(() => {
+      setFreePlayStart({
+        fen: lastFen,
+        userColor: rep.color,
+        strength: defaultStrength,
+      });
+      setPhase('freeplay');
     });
-    setPhase('freeplay');
   }, [currentLine, rep.color, defaultStrength]);
 
   const exitFreePlay = useCallback(() => {
@@ -806,6 +804,25 @@ function PracticeStatusBar({
   const showRevealButton =
     isUserTurn && status === 'thinking' && mistakeMade && !revealShown;
   const showPlayItButton = revealShown && isUserTurn && status === 'thinking';
+
+  // Warm the free-play opponent worker while the CTA is visible so the
+  // click transition doesn't hitch on WASM cold-boot. Do NOT warm the
+  // review/live-eval singleton here — that worker is refcounted by
+  // `useLiveEval`, and warming it with no consumer leaks ~30 MB until
+  // something else happens to mount a live-eval. FreePlayRunner boots
+  // live-eval itself after paint. Cancel any pending teardown on (re)
+  // mount so StrictMode's fake unmount doesn't kill the just-warmed
+  // worker while the CTA is still showing; re-arm on unmount so a Skip /
+  // Next that never enters free-play still frees the heap.
+  useEffect(() => {
+    if (status !== 'done') return;
+    cancelFreePlayIdleTeardown();
+    void warmFreePlayEngine().catch(() => undefined);
+    return () => {
+      scheduleFreePlayIdleTeardown(1500);
+    };
+  }, [status]);
+
   return (
     <div className="card p-3 space-y-2">
       <div className="flex items-baseline justify-between gap-2">

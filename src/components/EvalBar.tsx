@@ -51,8 +51,11 @@ export function mateForWhite(
  * height.
  *
  * Layout: parent wraps board + bar in `<div class="flex gap-2">`. Width
- * is fixed (24px) so the board's max-width math is unaffected.
+ * is fixed (`EVAL_BAR_WIDTH_PX`); `BoardFrame` imports the same constant
+ * so outer sizing stays aligned.
  */
+export const EVAL_BAR_WIDTH_PX = 36;
+
 export function EvalBar({
   cpWhite,
   mate,
@@ -82,7 +85,8 @@ export function EvalBar({
 
   return (
     <div
-      className={`relative w-6 shrink-0 rounded-md overflow-hidden border border-border bg-bg-raised ${className ?? ''}`}
+      className={`relative shrink-0 rounded-md overflow-hidden border border-border bg-bg-raised ${className ?? ''}`}
+      style={{ width: EVAL_BAR_WIDTH_PX }}
       title={label ? `Eval: ${label}` : 'Engine thinking…'}
     >
       <div
@@ -101,8 +105,8 @@ export function EvalBar({
       />
       {label && (
         <div
-          className={`absolute left-0 right-0 text-center text-[10px] leading-none py-0.5 font-mono ${labelTextColor}`}
-          style={{ [labelAtTop ? 'top' : 'bottom']: 0 }}
+          className={`absolute inset-x-0 px-0.5 text-center text-[9px] leading-none font-mono tabular-nums tracking-tight whitespace-nowrap ${labelTextColor}`}
+          style={{ [labelAtTop ? 'top' : 'bottom']: 2 }}
         >
           {label}
         </div>

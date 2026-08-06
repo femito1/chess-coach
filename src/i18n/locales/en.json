@@ -130,7 +130,9 @@
       "openingsEmpty": "No opening data yet."
     },
     "openingTooltip": "{{family}} — {{wins}}W {{draws}}D {{losses}}L over {{games}} games",
-    "openingRow": "{{wins}}W · {{draws}}D · {{losses}}L · {{games}}g"
+    "openingRow": "{{wins}}W · {{draws}}D · {{losses}}L · {{games}}g",
+    "openInLibrary": "Open",
+    "openInLibraryTitle": "View {{family}} in the openings library"
   },
   "settings": {
     "title": "Settings",
