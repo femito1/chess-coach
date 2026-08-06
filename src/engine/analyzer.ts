@@ -271,25 +271,69 @@ export async function analyzeGamePgn(
  * count more than single good ones. We floor each value at `floor` (default
  * 20) so a "move-acc = 0" outlier doesn't crater an otherwise decent game.
  */
-function harmonicMean(xs: number[], floor = 20): number {
+export function harmonicMean(xs: number[], floor = 20): number {
   if (xs.length === 0) return 100;
   let recip = 0;
   for (const x of xs) {
     const v = Math.max(floor, x);
+    if (v <= 0) return 0;
     recip += 1 / v;
   }
   return xs.length / recip;
+}
+
+export interface AccuracyAggregationOptions {
+  /** Synthetic book plies carry no engine information. */
+  includeBook: boolean;
+  /** Lower bound applied before the harmonic mean. */
+  floor: number;
+  /** Calibrates distance from 100 while preserving endpoints/order. */
+  gapMultiplier?: number;
+}
+
+export const CURRENT_ACCURACY_MODEL: AccuracyAggregationOptions = {
+  includeBook: false,
+  floor: 20,
+  gapMultiplier: 1.5,
+};
+
+export function computeAccuracyWithModel(
+  moves: MoveEval[],
+  model: AccuracyAggregationOptions,
+): { white: number; black: number } {
+  const scoresFor = (white: boolean): number[] =>
+    moves
+      .filter((move) => (move.ply % 2 === 1) === white)
+      .filter((move) => model.includeBook || move.classification !== 'book')
+      .map((move) => {
+        const lossPct = Math.max(0, (move.winrateBefore - move.winrateAfter) * 100);
+        return moveAccuracy(lossPct);
+      });
+
+  const rounded = (scores: number[]) => {
+    const raw = harmonicMean(scores, model.floor);
+    const calibrated = 100 - (100 - raw) * (model.gapMultiplier ?? 1);
+    return Math.round(Math.max(0, Math.min(100, calibrated)) * 10) / 10;
+  };
+
+  return {
+    white: rounded(scoresFor(true)),
+    black: rounded(scoresFor(false)),
+  };
 }
 
 /**
  * Compute per-color accuracy from the move list.
  *
  * Approach:
- *  1) Per-move accuracy comes from the Lichess logistic formula applied to
- *     the player's winrate loss.
- *  2) The game accuracy for each color is the **harmonic mean** of their
- *     per-move accuracies (flooring each at 20 to avoid one disaster
- *     completely flattening the aggregate).
+ *  1) Per-move accuracy comes from the Lichess exponential formula applied
+ *     to the player's winrate loss.
+ *  2) Synthetic book plies are excluded because no engine evaluation ran.
+ *  3) The game accuracy is the harmonic mean of engine-scored moves, with a
+ *     floor of 20 before aggregation.
+ *  4) Distance from 100 is multiplied by 1.5. This monotonic calibration
+ *     corrects the former high-score bias without depending on Chess.com at
+ *     runtime.
  *
  * Rationale: the earlier version blended a std-dev-weighted mean with the
  * harmonic mean, which in quiet games (lots of ~0% winrate-loss moves) pulled
@@ -298,27 +342,12 @@ function harmonicMean(xs: number[], floor = 20): number {
  * two or three real mistakes drops meaningfully (-5 to -15 pts), which is
  * the signal you actually want for improvement.
  *
- * We no longer try to mimic Chess.com's unpublished formula. The aim is an
- * *informative* accuracy, not a match against a paid product.
+ * Calibration evidence (20 public games / 40 color scores, Stockfish depth
+ * 16): on a Magnus Carlsen archive, MAE fell from 5.97 to 4.30 and signed
+ * bias from +5.88 to +0.91; on a separate Hikaru Nakamura holdout archive,
+ * MAE fell from 6.10 to 4.25 and bias from +5.56 to -0.56.
  */
 export function computeAccuracy(moves: MoveEval[]): { white: number; black: number } {
   if (moves.length === 0) return { white: 100, black: 100 };
-
-  const whiteAccs: number[] = [];
-  const blackAccs: number[] = [];
-  for (const m of moves) {
-    const isWhite = m.ply % 2 === 1;
-    const lossPct = Math.max(0, (m.winrateBefore - m.winrateAfter) * 100);
-    const acc = moveAccuracy(lossPct);
-    if (isWhite) whiteAccs.push(acc);
-    else blackAccs.push(acc);
-  }
-
-  const whiteAcc = harmonicMean(whiteAccs);
-  const blackAcc = harmonicMean(blackAccs);
-
-  return {
-    white: Math.round(Math.max(0, Math.min(100, whiteAcc)) * 10) / 10,
-    black: Math.round(Math.max(0, Math.min(100, blackAcc)) * 10) / 10,
-  };
+  return computeAccuracyWithModel(moves, CURRENT_ACCURACY_MODEL);
 }

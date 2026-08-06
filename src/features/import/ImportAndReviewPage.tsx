@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { importGameByUrl } from '@/features/import/auto';
+import { requestNewGamesReconciliation } from '@/features/import/newGamesStorage';
 import { db, getSettings } from '@/db/schema';
 import { EngineCockpit } from '@/engine/EngineCockpit';
 
@@ -86,6 +87,10 @@ export function ImportAndReviewPage() {
         }
         const { gameId } = await importGameByUrl(u, gameUrl, { endTime });
         if (cancelled) return;
+        // The banner intentionally stays dormant on /review-by-url until
+        // this selected game exists. Reconcile now so it can offer every
+        // other missing game without counting the one already being reviewed.
+        requestNewGamesReconciliation();
         setImportedGameId(gameId);
         setPhase('analyzing');
       } catch (err) {

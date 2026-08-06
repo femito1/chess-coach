@@ -64,29 +64,52 @@ await runBrowserTest({
       await sleep(2000);
     }
 
-    const final = await page.evaluate(async (ids) => {
-  const { db } = await import('/src/db/schema.ts');
-  const out = [];
-  for (const id of ids) {
-    const g = await db.games.get(id);
-    out.push({
-      id,
-      status: g?.analysisStatus,
-      error: g?.analysisError,
-      opening: g?.opening,
-      eco: g?.eco,
-      ours: g?.accuracy,
-      chessCom: g?.chessComAccuracy,
-      moveCount: (await db.analyses.get(id))?.moves?.length ?? 0,
-    });
-  }
-  return out;
-}, prepared.ids);
+    const final = await page.evaluate(async ({ ids, meta }) => {
+      const { db } = await import('/src/db/schema.ts');
+      const { computeAccuracyWithModel } = await import('/src/engine/analyzer.ts');
+      const metaById = new Map(meta.map((entry) => [entry.id, entry]));
+      const models = {
+        legacy: { includeBook: true, floor: 20 },
+        calibrated: { includeBook: false, floor: 20, gapMultiplier: 1.5 },
+        noBookFloor20: { includeBook: false, floor: 20 },
+        noBookFloor10: { includeBook: false, floor: 10 },
+        noBookFloor5: { includeBook: false, floor: 5 },
+        noBookNoFloor: { includeBook: false, floor: 0 },
+        noBookFloor20Gap125: { includeBook: false, floor: 20, gapMultiplier: 1.25 },
+        noBookFloor20Gap150: { includeBook: false, floor: 20, gapMultiplier: 1.5 },
+        noBookGap125: { includeBook: false, floor: 10, gapMultiplier: 1.25 },
+        noBookGap150: { includeBook: false, floor: 10, gapMultiplier: 1.5 },
+        noBookGap175: { includeBook: false, floor: 10, gapMultiplier: 1.75 },
+        noBookGap200: { includeBook: false, floor: 10, gapMultiplier: 2 },
+      };
+      const out = [];
+      for (const id of ids) {
+        const g = await db.games.get(id);
+        const analysis = await db.analyses.get(id);
+        const candidates = {};
+        if (analysis) {
+          for (const [name, model] of Object.entries(models)) {
+            candidates[name] = computeAccuracyWithModel(analysis.moves, model);
+          }
+        }
+        out.push({
+          id,
+          status: g?.analysisStatus,
+          error: g?.analysisError,
+          opening: g?.opening,
+          eco: g?.eco,
+          ours: g?.accuracy,
+          chessCom: metaById.get(id)?.chessComAcc,
+          candidates,
+          moveCount: analysis?.moves?.length ?? 0,
+        });
+      }
+      return out;
+    }, { ids: prepared.ids, meta: prepared.meta });
 
 console.log('\n=== Results ===');
-let totalDiffW = 0;
-let totalDiffB = 0;
 let n = 0;
+const metrics = new Map();
 for (const r of final) {
   console.log(
     JSON.stringify({
@@ -97,18 +120,35 @@ for (const r of final) {
       eco: r.eco,
       ours: r.ours,
       chessCom: r.chessCom,
+      candidates: r.candidates,
     }),
   );
   if (r.status === 'done' && r.ours && r.chessCom) {
-    totalDiffW += Math.abs(r.ours.white - r.chessCom.white);
-    totalDiffB += Math.abs(r.ours.black - r.chessCom.black);
     n++;
+    for (const [name, score] of Object.entries(r.candidates)) {
+      const metric = metrics.get(name) ?? {
+        absoluteError: 0,
+        signedError: 0,
+        samples: 0,
+      };
+      for (const color of ['white', 'black']) {
+        const error = score[color] - r.chessCom[color];
+        metric.absoluteError += Math.abs(error);
+        metric.signedError += error;
+        metric.samples++;
+      }
+      metrics.set(name, metric);
+    }
   }
 }
     if (n > 0) {
-      console.log(
-        `\nMean absolute error vs Chess.com: white=${(totalDiffW / n).toFixed(2)}, black=${(totalDiffB / n).toFixed(2)}`,
-      );
+      console.log(`\n=== Calibration (${n} games / ${n * 2} color scores) ===`);
+      for (const [name, metric] of metrics) {
+        console.log(
+          `${name}: MAE=${(metric.absoluteError / metric.samples).toFixed(2)}, ` +
+            `signed bias=${(metric.signedError / metric.samples).toFixed(2)}`,
+        );
+      }
     }
 
     if (errors.length) {

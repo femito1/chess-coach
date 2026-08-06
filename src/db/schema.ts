@@ -372,6 +372,12 @@ export interface Repertoire {
    *  doesn't require a Dexie version bump because it's only consumed
    *  in JS. */
   bulkLoadedAt?: number;
+  /** Guided learning keeps a deliberately small active subset even when
+   *  the underlying tree contains many imported lines. Optional and
+   *  unindexed, so existing repertoires remain valid without migration. */
+  learningMode?: 'guided' | 'all';
+  /** Full UCI sequences (space-joined) selected for guided practice. */
+  activeLineKeys?: string[];
 }
 
 export interface RepertoireNode {

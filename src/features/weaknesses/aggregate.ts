@@ -1,5 +1,6 @@
 import type { Analysis, Game, Motif, MoveEval, Phase } from '@/db/schema';
 import { MOTIF_ORDER } from '@/engine/motifs';
+import { moveAccuracy } from '@/engine/classify';
 
 /**
  * Game shape consumed by the aggregator. Excludes `pgn` so callers can
@@ -125,7 +126,7 @@ export function buildMistakes(
         clockAfter: m.clockAfter,
         inTimeTrouble: inTimeTroubleFor(m, base),
         winrateDrop: drop,
-        moveAccuracy: 100 - drop * 100,
+        moveAccuracy: moveAccuracy(drop * 100),
         bestMoveSan: m.bestMoveSan,
       });
     }

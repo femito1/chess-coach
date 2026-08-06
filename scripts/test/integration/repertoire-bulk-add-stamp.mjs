@@ -28,8 +28,10 @@ await runBrowserTest({
       const {
         ensureFamilyRepertoire,
         addFamilyToRepertoire,
+        addGuidedLinesToRepertoire,
+        getVariations,
       } = await import('/src/features/openings/library.ts');
-      const { deleteRepertoire } = await import(
+      const { deleteRepertoire, enumerateLines } = await import(
         '/src/features/repertoire/store.ts'
       );
 
@@ -47,13 +49,22 @@ await runBrowserTest({
       const fresh = await ensureFamilyRepertoire(family);
       const stampedBefore = fresh.bulkLoadedAt != null;
 
-      // 2. After bulk add → bulkLoadedAt is a positive timestamp.
+      // 2. Guided import activates only five recommendations and does not
+      // pretend that the whole family was imported.
+      const starter = getVariations(family).slice(0, 5);
+      await addGuidedLinesToRepertoire(fresh.id, starter);
+      const afterGuided = await db.repertoires.get(fresh.id);
+      const guidedLeaves = await enumerateLines(fresh.id);
+
+      // 3. After bulk add → bulkLoadedAt is a positive timestamp, while
+      // guided active keys remain a small practice scope.
       await addFamilyToRepertoire(fresh.id, family);
       const after = await db.repertoires.get(fresh.id);
+      const allLeaves = await enumerateLines(fresh.id);
       const stampedAfter =
         after?.bulkLoadedAt != null && after.bulkLoadedAt > 0;
 
-      // 3. Delete + re-ensure → fresh row, no stamp.
+      // 4. Delete + re-ensure → fresh row, no stamp.
       await deleteRepertoire(fresh.id);
       const reborn = await ensureFamilyRepertoire(family);
       const stampedAfterDelete = reborn.bulkLoadedAt != null;
@@ -61,7 +72,12 @@ await runBrowserTest({
 
       return {
         stampedBefore,
+        guidedMode: afterGuided?.learningMode,
+        guidedActive: afterGuided?.activeLineKeys?.length ?? 0,
+        guidedLeaves: guidedLeaves.length,
         stampedAfter,
+        activeAfterBulk: after?.activeLineKeys?.length ?? 0,
+        allLeaves: allLeaves.length,
         stampedAfterDelete,
         reincarnated,
       };
@@ -72,8 +88,28 @@ await runBrowserTest({
       'fresh repertoire has no bulkLoadedAt',
     ).toBe(true);
     expect(
+      result.guidedMode,
+      'guided subset enables guided learning mode',
+    ).toBe('guided');
+    expect(
+      result.guidedActive,
+      'guided subset activates exactly five lines',
+    ).toBe(5);
+    expect(
+      result.guidedLeaves <= 5,
+      'guided subset creates at most five practice leaves',
+    ).toBe(true);
+    expect(
       result.stampedAfter,
       'addFamilyToRepertoire stamps bulkLoadedAt on completion',
+    ).toBe(true);
+    expect(
+      result.activeAfterBulk,
+      'bulk import preserves the five-line guided scope',
+    ).toBe(5);
+    expect(
+      result.allLeaves >= result.guidedLeaves,
+      'bulk import expands stored coverage without shrinking it',
     ).toBe(true);
     expect(
       !result.stampedAfterDelete,

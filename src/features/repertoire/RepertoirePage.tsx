@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Repertoire } from '@/db/schema';
-import { deleteRepertoire, dueCards } from './store';
+import { deleteRepertoire, dueCards, enumerateLines } from './store';
 
 /**
  * Repertoire list page. After the family-first refactor, repertoires
@@ -27,15 +27,28 @@ export function RepertoirePage() {
     [],
   );
   const [dueCounts, setDueCounts] = useState<Record<string, number>>({});
+  const [lineCounts, setLineCounts] = useState<
+    Record<string, { active: number; total: number }>
+  >({});
 
   useLiveQuery(async () => {
     if (!reps) return;
     const counts: Record<string, number> = {};
+    const lines: Record<string, { active: number; total: number }> = {};
     for (const r of reps) {
       const cards = await dueCards(r.id);
       counts[r.id] = cards.length;
+      const enumerated = await enumerateLines(r.id);
+      const guided = r.learningMode !== 'all';
+      lines[r.id] = {
+        active: guided
+          ? Math.min(r.activeLineKeys?.length ?? 5, enumerated.length)
+          : enumerated.length,
+        total: enumerated.length,
+      };
     }
     setDueCounts(counts);
+    setLineCounts(lines);
   }, [reps]);
 
   return (
@@ -80,6 +93,7 @@ export function RepertoirePage() {
               key={r.id}
               rep={r}
               dueCount={dueCounts[r.id] ?? 0}
+              lineCount={lineCounts[r.id]}
             />
           ))}
         </div>
@@ -91,9 +105,11 @@ export function RepertoirePage() {
 function RepertoireCard({
   rep,
   dueCount,
+  lineCount,
 }: {
   rep: Repertoire;
   dueCount: number;
+  lineCount?: { active: number; total: number };
 }) {
   const { t } = useTranslation();
   const isFamily = rep.kind === 'family' || (rep.kind == null && Boolean(rep.family));
@@ -129,6 +145,16 @@ function RepertoireCard({
             </>
           )}
         </div>
+        {lineCount && lineCount.total > 0 && (
+          <div className="text-xs text-accent mt-1">
+            {rep.learningMode === 'all'
+              ? t('repertoire.card.allLinesActive', { count: lineCount.total })
+              : t('repertoire.card.guidedLinesActive', {
+                  active: lineCount.active,
+                  total: lineCount.total,
+                })}
+          </div>
+        )}
       </div>
       <div className="flex flex-wrap gap-2">
         <Link
@@ -136,7 +162,9 @@ function RepertoireCard({
           className="btn-primary text-xs"
           title={t('repertoire.card.drillLinesTitle')}
         >
-          {t('repertoire.card.drillLines')}
+          {rep.learningMode === 'all'
+            ? t('repertoire.card.drillLines')
+            : t('repertoire.card.practiceGuided')}
         </Link>
         <Link
           to={`/repertoire/${rep.id}/train`}

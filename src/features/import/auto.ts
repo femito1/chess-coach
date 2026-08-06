@@ -144,6 +144,10 @@ export async function importLastNMonths(
  * If the game is already in IndexedDB (deterministic id = hash(url)),
  * we short-circuit and just return its id without re-fetching the
  * archive. That makes the deep link instant on the second click.
+ *
+ * Only the selected game is inserted. The remaining archive games stay
+ * eligible for the "new games" banner, whose exact-ID reconciliation will
+ * exclude this row while offering the rest.
  */
 export interface ImportGameByUrlResult {
   gameId: string;
@@ -200,21 +204,11 @@ export async function importGameByUrl(
         ? games.find((g) => extractChessComGameId(g.url) === targetGameId)
         : undefined);
     if (hit) {
-      // Upsert ALL games from that month so the user gets the
-      // surrounding context for free, and so re-clicking "Review"
-      // on adjacent games is instant.
-      const mapped = games.map((g) => chessComGameToGame(g, u));
-      const upsertRes = await upsertGames(mapped);
-      await recordImport({
-        source: 'chesscom',
-        username: u,
-        archiveUrl,
-        year,
-        month,
-        gameCount: games.length,
-        added: upsertRes.added,
-        skipped: upsertRes.skipped,
-      });
+      // A deep link represents one explicit review choice. Importing the
+      // entire month here silently queues unrelated games and makes the
+      // banner claim the user is caught up. Keep bulk checkpoints reserved
+      // for the bulk import paths.
+      await upsertGames([chessComGameToGame(hit, u)]);
       // The id we return is the one derived from chess.com's *own*
       // URL for the game, so /review/:id matches what the rest of
       // the app stored.

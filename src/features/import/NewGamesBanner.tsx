@@ -1,21 +1,34 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { getSettings, type Settings } from '@/db/schema';
+import { useLocation } from 'react-router-dom';
+import { db, getSettings, type Settings } from '@/db/schema';
 import { listImportRecordsFor, recordImport } from '@/db/imports';
 import { fetchArchives, fetchMonth, parseArchiveUrl } from '@/api/chesscom';
-import { chessComGameToGame } from '@/import/importer';
+import { chessComGameToGame, gameIdFromUrl } from '@/import/importer';
 import { upsertGames } from '@/db/queries';
 import {
   planNewGameFetches,
-  computeNewGameCount,
+  computeMissingGameCount,
   shouldCheckForNewGames,
   isDismissedForCount,
   isCacheEntryFresh,
-  type DismissalState,
   type LatestImportSnapshot,
-  type NewGamesCacheEntry,
 } from './newGames';
+import {
+  NEW_GAMES_RECONCILE_EVENT,
+  STORAGE_CACHE_KEY,
+  STORAGE_DISMISSED_KEY,
+  STORAGE_LAST_CHECKED_KEY,
+  clearCacheEntry,
+  clearDismissal,
+  persistCacheEntry,
+  persistDismissal,
+  persistNumber,
+  readCacheEntry,
+  readDismissal,
+  readNumber,
+} from './newGamesStorage';
 
 /**
  * Top-of-page banner that asks the returning user "you played N new
@@ -71,24 +84,38 @@ type State =
   | { kind: 'done'; added: number }
   | { kind: 'error'; message: string; count: number; archiveUrls: string[] };
 
-const STORAGE_CACHE_KEY = 'chess-coach:new-games-cache:v1';
-const STORAGE_DISMISSED_KEY = 'chess-coach:new-games-dismissed:v1';
-const STORAGE_LAST_CHECKED_KEY = 'chess-coach:new-games-last-checked:v1';
 const CHECKING_GRACE_MS = 700;
 const DONE_AUTO_HIDE_MS = 6000;
 
 export function NewGamesBanner() {
   const { t } = useTranslation();
+  const location = useLocation();
   const [state, setState] = useState<State>({ kind: 'hidden' });
   const [showCheckingUi, setShowCheckingUi] = useState(false);
   const startedRef = useRef(false);
 
   // On mount: paint immediately from the cached entry (so reload doesn't
-  // wipe the prompt), then optionally fire a background re-check.
+  // wipe the prompt), then optionally fire a background re-check. The
+  // extension entry route defers this until its selected game is stored;
+  // otherwise a stale cached count can briefly include that same game.
   useEffect(() => {
     if (startedRef.current) return;
+    if (location.pathname === '/review-by-url') return;
     startedRef.current = true;
     void boot(setState, setShowCheckingUi, t);
+  }, [location.pathname, t]);
+
+  useEffect(() => {
+    const reconcile = () => {
+      startedRef.current = true;
+      setState({ kind: 'hidden' });
+      void boot(setState, setShowCheckingUi, t, {
+        forceCheck: true,
+        hydrateCache: false,
+      });
+    };
+    window.addEventListener(NEW_GAMES_RECONCILE_EVENT, reconcile);
+    return () => window.removeEventListener(NEW_GAMES_RECONCILE_EVENT, reconcile);
   }, [t]);
 
   // Auto-hide the "Imported N — analysis running" success after a few
@@ -327,6 +354,7 @@ async function boot(
   setState: SetState,
   setShowCheckingUi: (b: boolean) => void,
   t: TFunction,
+  opts: { forceCheck?: boolean; hydrateCache?: boolean } = {},
 ): Promise<void> {
   let settings: Settings;
   try {
@@ -346,28 +374,32 @@ async function boot(
   const now = Date.now();
 
   // Phase A — hydrate from cache (synchronous-ish).
-  const cached = readCacheEntry();
-  const dismissal = readDismissal();
-  if (
-    isCacheEntryFresh(cached, username, now) &&
-    !isDismissedForCount(cached!.count, dismissal, now)
-  ) {
-    setState({
-      kind: 'prompting',
-      count: cached!.count,
-      archiveUrls: cached!.archiveUrls,
-    });
+  if (opts.hydrateCache !== false) {
+    const cached = readCacheEntry();
+    const dismissal = readDismissal();
+    if (
+      isCacheEntryFresh(cached, username, now) &&
+      !isDismissedForCount(cached!.count, dismissal, now)
+    ) {
+      setState({
+        kind: 'prompting',
+        count: cached!.count,
+        archiveUrls: cached!.archiveUrls,
+      });
+    }
   }
 
   // Phase B — refetch only when the throttle allows it.
   const lastCheckedAt = readNumber(STORAGE_LAST_CHECKED_KEY);
-  const ok = shouldCheckForNewGames({
-    username,
-    onboardingCompletedAt: settings.onboardingCompletedAt,
-    latestImportAt,
-    lastCheckedAt,
-    now,
-  });
+  const ok =
+    opts.forceCheck === true ||
+    shouldCheckForNewGames({
+      username,
+      onboardingCompletedAt: settings.onboardingCompletedAt,
+      latestImportAt,
+      lastCheckedAt,
+      now,
+    });
   if (!ok) return;
 
   await runCheck(username, latestRecord, setState, setShowCheckingUi, t);
@@ -397,18 +429,30 @@ async function runCheck(
       importedAt: latestRecord.importedAt,
     };
     const plans = planNewGameFetches(archiveUrls, latest);
-    const counts = new Map<string, number>();
+    const archiveGameIds = new Map<string, string[]>();
     await Promise.all(
       plans.map(async (p) => {
         try {
           const games = await fetchMonth(p.archiveUrl);
-          counts.set(p.archiveUrl, games.length);
+          archiveGameIds.set(
+            p.archiveUrl,
+            games.map((game) => gameIdFromUrl(game.url)),
+          );
         } catch {
-          counts.set(p.archiveUrl, 0);
+          archiveGameIds.set(p.archiveUrl, []);
         }
       }),
     );
-    const { count, archiveUrls: archivesWithNewGames } = computeNewGameCount(plans, counts);
+    const allIds = [...new Set([...archiveGameIds.values()].flat())];
+    const existingRows = await db.games.bulkGet(allIds);
+    const existingIds = new Set(
+      existingRows.flatMap((game) => (game ? [game.id] : [])),
+    );
+    const { count, archiveUrls: archivesWithNewGames } = computeMissingGameCount(
+      plans,
+      archiveGameIds,
+      existingIds,
+    );
 
     persistNumber(STORAGE_LAST_CHECKED_KEY, Date.now());
 
@@ -531,100 +575,6 @@ async function doImport(
   // subsequent banner check shouldn't immediately re-fire.
   persistNumber(STORAGE_LAST_CHECKED_KEY, Date.now());
   setState({ kind: 'done', added });
-}
-
-/* =======================================================================
- *  localStorage glue. Each helper is null-safe — if storage is
- *  unavailable (private browsing, quota exceeded), we silently fall
- *  back to "no cache" rather than crashing the layout.
- * ======================================================================= */
-
-function readNumber(key: string): number | null {
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
-  } catch {
-    return null;
-  }
-}
-
-function persistNumber(key: string, value: number): void {
-  try {
-    window.localStorage.setItem(key, String(value));
-  } catch {
-    /* storage unavailable */
-  }
-}
-
-function readCacheEntry(): NewGamesCacheEntry | null {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as NewGamesCacheEntry;
-    if (
-      typeof parsed?.username === 'string' &&
-      typeof parsed?.discoveredAt === 'number' &&
-      typeof parsed?.count === 'number' &&
-      Array.isArray(parsed?.archiveUrls)
-    ) {
-      return parsed;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function persistCacheEntry(entry: NewGamesCacheEntry): void {
-  try {
-    window.localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify(entry));
-  } catch {
-    /* storage unavailable */
-  }
-}
-
-function clearCacheEntry(): void {
-  try {
-    window.localStorage.removeItem(STORAGE_CACHE_KEY);
-  } catch {
-    /* storage unavailable */
-  }
-}
-
-function readDismissal(): DismissalState | null {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_DISMISSED_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as DismissalState;
-    if (
-      typeof parsed?.dismissedCount === 'number' &&
-      typeof parsed?.dismissedAt === 'number'
-    ) {
-      return parsed;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function persistDismissal(count: number, at: number): void {
-  try {
-    const value: DismissalState = { dismissedCount: count, dismissedAt: at };
-    window.localStorage.setItem(STORAGE_DISMISSED_KEY, JSON.stringify(value));
-  } catch {
-    /* storage unavailable */
-  }
-}
-
-function clearDismissal(): void {
-  try {
-    window.localStorage.removeItem(STORAGE_DISMISSED_KEY);
-  } catch {
-    /* storage unavailable */
-  }
 }
 
 // Tiny escape-hatch for browser-driven tests that want to seed or

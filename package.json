@@ -16,7 +16,9 @@
     "test:all": "node scripts/run-tests.mjs --all",
     "test:watch": "vitest",
     "extension:screenshots": "node scripts/screenshot-extension.mjs",
-    "extension:build": "node scripts/build-extension-icons.mjs && node scripts/build-extension.mjs"
+    "extension:build": "node scripts/build-extension-icons.mjs && node scripts/build-extension.mjs",
+    "openings:snapshot": "node scripts/snapshot-opening-popularity.mjs",
+    "openings:build": "node scripts/build-openings.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.6",

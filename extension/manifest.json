@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Chess Coach — Review After Game",
   "short_name": "Chess Coach",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Detect the end of a Chess.com game and offer a one-click deep link into your Chess Coach analysis tool.",
   "permissions": ["storage"],
   "host_permissions": [

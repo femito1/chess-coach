@@ -17,7 +17,19 @@ import {
   type RepertoireLine,
 } from './store';
 import type { RepertoireLineStats } from '@/db/schema';
-import { identifyOpening } from '@/features/openings/library';
+import {
+  addGuidedLinesToRepertoire,
+  familyColor,
+  getVariations,
+  identifyOpening,
+  setRepertoireLearningMode,
+} from '@/features/openings/library';
+import {
+  buildPersonalOpeningStats,
+  openingLineKey,
+  rankOpeningLines,
+  type RankedOpeningLine,
+} from '@/features/openings/recommendations';
 import { LineRunner, type LineRunnerControlState } from './LineRunner';
 import { FreePlayRunner } from './FreePlayRunner';
 import {
@@ -33,6 +45,12 @@ import {
 } from './practiceMode';
 import { tPracticeMode, tPracticeModeDescription } from '@/i18n/chess';
 import { LineMoveTokens } from '@/components/LineMoveTokens';
+import {
+  areGuidedLinesMastered,
+  guidedLineIndices,
+  initialActiveLineKeys,
+  nextRecommendedLines,
+} from './curriculum';
 
 interface DecoratedLine {
   line: RepertoireLine;
@@ -243,6 +261,32 @@ function PracticeRunner({
   // really an in-memory drill loop.
   const [lines, setLines] = useState<RepertoireLine[] | null>(null);
   const [statsBucket, setStatsBucket] = useState<number>(0);
+  const games = useLiveQuery(() => db.games.toArray(), []);
+  const rankedRecommendations = useMemo<RankedOpeningLine[]>(() => {
+    if (!rep.family) return [];
+    const personal = buildPersonalOpeningStats(
+      games ?? [],
+      familyColor(rep.family),
+    );
+    return rankOpeningLines(getVariations(rep.family), personal);
+  }, [games, rep.family]);
+
+  useEffect(() => {
+    if (
+      rep.learningMode != null ||
+      !rep.family ||
+      games === undefined ||
+      rankedRecommendations.length === 0
+    ) {
+      return;
+    }
+    const activeLineKeys = initialActiveLineKeys(rankedRecommendations);
+    void db.repertoires.update(rep.id, {
+      learningMode: 'guided',
+      activeLineKeys,
+      updatedAt: Date.now(),
+    });
+  }, [games, rankedRecommendations, rep.family, rep.id, rep.learningMode]);
   // Re-fetch lines when the repertoire id changes *or* when an
   // outside hand (e.g. import) bumps the rep's updatedAt.
   useEffect(() => {
@@ -262,6 +306,7 @@ function PracticeRunner({
     if (!lines) return null;
     return getLineStatsMap(rep.id);
   }, [rep.id, lines, statsBucket]);
+  const decorated = useMemo(() => decorate(lines ?? []), [lines]);
 
   if (!lines) {
     return (
@@ -289,8 +334,9 @@ function PracticeRunner({
   return (
     <ActivePractice
       rep={rep}
-      decoratedLines={decorate(lines)}
+      decoratedLines={decorated}
       stats={stats}
+      rankedRecommendations={rankedRecommendations}
       onStatsChanged={() => setStatsBucket((n) => n + 1)}
     />
   );
@@ -300,28 +346,63 @@ function ActivePractice({
   rep,
   decoratedLines,
   stats,
+  rankedRecommendations,
   onStatsChanged,
 }: {
   rep: Repertoire;
   decoratedLines: DecoratedLine[];
   stats: Awaited<ReturnType<typeof getLineStatsMap>> | null | undefined;
+  rankedRecommendations: RankedOpeningLine[];
   onStatsChanged: () => void;
 }) {
   const { t } = useTranslation();
-  // Selection state. Default = "everything selected" — that's the
-  // friendliest default per the user's "select one, many, or all"
-  // requirement: zero clicks gets you "all".
-  const [selected, setSelected] = useState<Set<number>>(
-    () => new Set(decoratedLines.map((_, i) => i)),
+  const decoratedRawLines = useMemo(
+    () => decoratedLines.map((entry) => entry.line),
+    [decoratedLines],
   );
-  // When the rep changes, reset the selection to all-selected. The
-  // PracticePage's outer key-based remount also handles this, but
-  // belt-and-suspenders: if the parent ever re-uses this component
-  // for a different rep, we start fresh.
-  // (Practical note: PracticePage doesn't reuse, but keeping this
-  // resilient costs nothing.)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => setSelected(new Set(decoratedLines.map((_, i) => i))), [rep.id]);
+  const fallbackActiveKeys = useMemo(
+    () =>
+      rankedRecommendations.length > 0
+        ? initialActiveLineKeys(rankedRecommendations)
+        : decoratedLines.slice(0, 5).map((entry) => openingLineKey(entry.line.uci)),
+    [decoratedLines, rankedRecommendations],
+  );
+  const activeLineKeys =
+    rep.activeLineKeys && rep.activeLineKeys.length > 0
+      ? rep.activeLineKeys
+      : fallbackActiveKeys;
+  const guidedIndices = useMemo(
+    () => guidedLineIndices(decoratedRawLines, activeLineKeys),
+    [activeLineKeys, decoratedRawLines],
+  );
+  const initialGuided = rep.learningMode !== 'all';
+  const [scope, setScope] = useState<'guided' | 'all'>(
+    initialGuided ? 'guided' : 'all',
+  );
+  const [selected, setSelected] = useState<Set<number>>(
+    () =>
+      new Set(
+        initialGuided
+          ? guidedIndices
+          : decoratedLines.map((_, index) => index),
+      ),
+  );
+  const activeKeySignature = activeLineKeys.join('|');
+  useEffect(() => {
+    const nextScope = rep.learningMode === 'all' ? 'all' : 'guided';
+    setScope(nextScope);
+    setSelected(
+      new Set(
+        nextScope === 'guided'
+          ? guidedIndices
+          : decoratedLines.map((_, index) => index),
+      ),
+    );
+    dispatch({
+      type: 'changeMode',
+      mode: nextScope === 'guided' ? 'repeat-until-perfect' : 'sequential',
+    });
+  }, [activeKeySignature, decoratedLines, guidedIndices, rep.id, rep.learningMode]);
 
   // Search query for the line picker. Lowercased once for matching.
   const [query, setQuery] = useState('');
@@ -345,7 +426,7 @@ function ActivePractice({
     null,
     () =>
       initSession({
-        mode: 'sequential',
+        mode: initialGuided ? 'repeat-until-perfect' : 'sequential',
         selectedIndices: Array.from(selected),
       }),
   );
@@ -366,6 +447,41 @@ function ActivePractice({
 
   function setMode(mode: PracticeMode) {
     dispatch({ type: 'changeMode', mode });
+  }
+
+  async function changeScope(nextScope: 'guided' | 'all') {
+    setScope(nextScope);
+    if (nextScope === 'guided') {
+      setSelected(new Set(guidedIndices));
+      setMode('repeat-until-perfect');
+    } else {
+      setSelected(new Set(decoratedLines.map((_, index) => index)));
+      setMode('sequential');
+    }
+    await setRepertoireLearningMode(rep.id, nextScope);
+  }
+
+  const guidedMastered = areGuidedLinesMastered(
+    decoratedRawLines,
+    guidedIndices,
+    stats ?? new Map(),
+  );
+  const nextLines = nextRecommendedLines(
+    rankedRecommendations,
+    activeLineKeys,
+  );
+  const [expanding, setExpanding] = useState(false);
+  async function expandGuidedPlan(linesToAdd: RankedOpeningLine[]) {
+    if (expanding || linesToAdd.length === 0) return;
+    setExpanding(true);
+    try {
+      await addGuidedLinesToRepertoire(
+        rep.id,
+        linesToAdd.map((entry) => entry.line),
+      );
+    } finally {
+      setExpanding(false);
+    }
   }
 
   function toggleLine(i: number) {
@@ -495,8 +611,30 @@ function ActivePractice({
               color: rep.color === 'white' ? t('common.white') : t('common.black'),
             })}
           </p>
+          {scope === 'guided' && (
+            <p className="text-xs text-accent">
+              {t('practice.guidedProgress', {
+                active: guidedIndices.length,
+                total: decoratedLines.length,
+              })}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={scope === 'guided' ? 'btn-primary text-xs' : 'btn text-xs'}
+            onClick={() => void changeScope('guided')}
+          >
+            {t('practice.guidedScope')}
+          </button>
+          <button
+            type="button"
+            className={scope === 'all' ? 'btn-primary text-xs' : 'btn text-xs'}
+            onClick={() => void changeScope('all')}
+          >
+            {t('practice.allScope')}
+          </button>
           <Link to="/repertoire" className="btn text-xs">
             {t('practice.allRepertoires')}
           </Link>
@@ -504,6 +642,30 @@ function ActivePractice({
       </header>
 
       <ModePicker mode={session.mode} onChange={setMode} />
+
+      {scope === 'guided' && guidedMastered && nextLines.length > 0 && (
+        <div className="card p-4 border-good/40 bg-good/5 flex flex-col sm:flex-row gap-3 sm:items-center">
+          <div className="flex-1">
+            <div className="font-medium text-good">{t('practice.nextLinesReady')}</div>
+            <p className="text-xs text-text-muted">
+              {t('practice.nextLinesDescription', { count: nextLines.length })}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn-primary text-xs"
+            data-next-line-keys={nextLines
+              .map((entry) => openingLineKey(entry.line.uci))
+              .join('|')}
+            disabled={expanding}
+            onClick={() => void expandGuidedPlan(nextLines)}
+          >
+            {expanding
+              ? t('practice.addingNextLines')
+              : t('practice.addNextLines', { count: nextLines.length })}
+          </button>
+        </div>
+      )}
 
       {/* Always render the runner+picker grid so the picker stays
           visible even when the user has temporarily de-selected every

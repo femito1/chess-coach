@@ -7,6 +7,7 @@ import {
 } from '@/data/openings.generated';
 import { db, type Color, type Repertoire } from '@/db/schema';
 import { addMove, createRepertoire } from '@/features/repertoire/store';
+import { openingLineKey } from './recommendations';
 
 export type { OpeningLine };
 
@@ -213,6 +214,41 @@ export async function addLineToRepertoire(
     if (node) added++;
   }
   return added;
+}
+
+export async function addGuidedLinesToRepertoire(
+  repertoireId: string,
+  lines: readonly OpeningLine[],
+): Promise<{ movesAdded: number; activeLineKeys: string[] }> {
+  const repertoire = await db.repertoires.get(repertoireId);
+  if (!repertoire) throw new Error(`Repertoire not found: ${repertoireId}`);
+
+  let movesAdded = 0;
+  for (const line of lines) {
+    movesAdded += await addLineToRepertoire(repertoireId, line);
+  }
+  const activeLineKeys = [
+    ...new Set([
+      ...(repertoire.activeLineKeys ?? []),
+      ...lines.map((line) => openingLineKey(line.uci)),
+    ]),
+  ];
+  await db.repertoires.update(repertoireId, {
+    learningMode: 'guided',
+    activeLineKeys,
+    updatedAt: Date.now(),
+  });
+  return { movesAdded, activeLineKeys };
+}
+
+export async function setRepertoireLearningMode(
+  repertoireId: string,
+  learningMode: 'guided' | 'all',
+): Promise<void> {
+  await db.repertoires.update(repertoireId, {
+    learningMode,
+    updatedAt: Date.now(),
+  });
 }
 
 /**

@@ -1,19 +1,10 @@
 // Smoke test for the Chrome extension. Loads the unpacked extension
-// into a persistent Chromium context and walks two scenarios:
+// into a persistent Chromium context and covers:
 //
-//   (A) "Old" chess.com markup — `.game-over-modal-content` modal
-//       on a `/game/live/<id>` URL. Ensures we haven't regressed
-//       detection for users whose chess.com still serves this.
-//
-//   (B) "New" chess.com markup — only a bare `class="game-result"`
-//       element on a `/game/<id>` URL (no `live/` segment, no
-//       `game-over` ancestor anywhere). This is the markup the
-//       user reported on 2026-05-08.
-//
-// Both must trigger the prompt with a structurally-correct deep link.
-// The script also exercises the manual-trigger fallback (toolbar
-// action → forcePrompt message). Captures a screenshot for visual
-// confirmation.
+//   - an in-progress game at a numeric URL must NOT auto-prompt;
+//   - old game-over and current game-result markup must auto-prompt;
+//   - result UI mounting without a URL change must trigger;
+//   - SPA navigation, dismissal, manual fallback, and deep-link shape.
 //
 // Run from the repo root:
 //   node scripts/test/integration/extension.mjs
@@ -45,9 +36,27 @@ const SCREENSHOT_DIR = REPO_ROOT;
  */
 const SCENARIOS = [
   {
+    name: 'in-progress-numeric-url',
+    url: 'https://www.chess.com/game/8888888',
+    expectedDeepLinkId: '8888888',
+    expectedAuto: false,
+    html: `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="user" content="HeroUser" />
+    <title>Chess.com (synthetic — game in progress)</title>
+  </head>
+  <body>
+    <main class="live-game"><div class="board">Game in progress</div></main>
+  </body>
+</html>`,
+  },
+  {
     name: 'old-game-over-modal',
     url: 'https://www.chess.com/game/live/9999999',
     expectedDeepLinkId: '9999999',
+    expectedAuto: true,
     html: `<!DOCTYPE html>
 <html>
   <head>
@@ -74,6 +83,7 @@ const SCENARIOS = [
     name: 'new-bare-game-result',
     url: 'https://www.chess.com/game/168426791620',
     expectedDeepLinkId: '168426791620',
+    expectedAuto: true,
     html: `<!DOCTYPE html>
 <html>
   <head>
@@ -118,10 +128,13 @@ async function runScenario(ctx, svcWorker, scenario) {
 
   await page.goto(scenario.url, { waitUntil: 'domcontentloaded' });
 
-  // Auto-detection — heartbeat is 1.5 s, give it 8 s.
+  // Auto-detection: completed pages should prompt, an in-progress page
+  // with the same numeric URL shape must stay quiet.
   let auto = false;
   try {
-    await page.waitForSelector('#chess-coach-prompt', { timeout: 8000 });
+    await page.waitForSelector('#chess-coach-prompt', {
+      timeout: scenario.expectedAuto ? 5000 : 1500,
+    });
     auto = true;
   } catch {
     auto = false;
@@ -149,15 +162,10 @@ async function runScenario(ctx, svcWorker, scenario) {
     }
   }
 
-  // Confirm the deep link the panel will open is structurally correct.
-  // The script logs `showing prompt for X → Y`; pull Y out.
-  const showingLine = consoleLines.find((l) =>
-    l.includes('[chess-coach] showing prompt for'),
-  );
-  let deepLink = null;
-  if (showingLine) {
-    const m = showingLine.match(/→ (.+)$/);
-    if (m) deepLink = m[1].trim();
+  // Click the automatic prompt when present. The URL (including endTime)
+  // is deliberately created at click time, so parse the opening log below.
+  if (auto) {
+    await page.locator('#chess-coach-prompt .cc-primary').click();
   }
 
   // Manual-trigger fallback: dismiss the panel, then send a
@@ -186,6 +194,22 @@ async function runScenario(ctx, svcWorker, scenario) {
     }
   }
 
+  // In-progress pages only get a prompt via the manual fallback; click it
+  // too so every scenario validates the click-time deep link.
+  if (!auto && manual) {
+    await page.locator('#chess-coach-prompt .cc-primary').click();
+  }
+  await page.waitForTimeout(200);
+
+  const openingLine = consoleLines.find((l) =>
+    l.includes('[chess-coach] opening review for'),
+  );
+  let deepLink = null;
+  if (openingLine) {
+    const m = openingLine.match(/→ (.+)$/);
+    if (m) deepLink = m[1].trim();
+  }
+
   await page.close();
 
   return {
@@ -201,15 +225,17 @@ async function runScenario(ctx, svcWorker, scenario) {
 }
 
 /**
- * Cross-navigation contract test (added 2026-05-21).
+ * Cross-navigation and same-URL completion contract.
  *
  * Drives the content script through a sequence of SPA navigations
  * inside a single tab to verify the user-visible behaviours added in
  * the URL-based-detection rewrite:
  *
- *   1. Hide-on-new-game — finishing a game then starting a new one
+ *   1. No early prompt — numeric game URL without result UI stays quiet.
+ *   2. Same-URL completion — mounting result UI triggers the prompt.
+ *   3. Hide-on-new-game — finishing a game then starting a new one
  *      (URL transitions away from a game id) tears down the panel.
- *   2. Re-prompt-after-dismiss — dismissing the panel for game A and
+ *   4. Re-prompt-after-dismiss — dismissing the panel for game A and
  *      then SPA-navigating to a different finished game (game B)
  *      shows the panel again. This is the "I closed it, finish next
  *      game, it should pop again" behaviour the user asked for.
@@ -236,13 +262,31 @@ async function runNavigationContracts(ctx) {
   });
 
   await page.goto('https://www.chess.com/game/1111111', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(1200);
+  if ((await page.locator('#chess-coach-prompt').count()) !== 0) {
+    await page.close();
+    return {
+      passed: false,
+      failure: 'panel appeared before any completed-game signal',
+      consoleLines: consoleLines.filter((l) => l.includes('[chess-coach]')),
+    };
+  }
+
+  // Chess.com can retain the numeric URL for the entire game. Mounting
+  // result UI must be enough to trigger without pushState/navigation.
+  await page.evaluate(() => {
+    const result = document.createElement('span');
+    result.className = 'game-result';
+    result.textContent = '1-0';
+    document.body.appendChild(result);
+  });
   try {
     await page.waitForSelector('#chess-coach-prompt', { timeout: 5000 });
   } catch {
     await page.close();
     return {
       passed: false,
-      failure: 'panel did not appear on initial load of /game/1111111',
+      failure: 'panel did not appear when result UI mounted on the same URL',
       consoleLines: consoleLines.filter((l) => l.includes('[chess-coach]')),
     };
   }
@@ -400,7 +444,7 @@ async function main() {
       console.log(`    hide-on-new-game:        ${r.auto ? 'PASS' : 'FAIL'}`);
       console.log(`    re-prompt-after-dismiss: ${r.manual ? 'PASS' : 'FAIL'}`);
     } else {
-      const okAuto = r.auto;
+      const okAuto = r.auto === r.scenario.expectedAuto;
       const okManual = r.manual;
       const okLink =
         typeof r.deepLink === 'string' &&
@@ -408,7 +452,9 @@ async function main() {
         r.deepLink.includes(r.scenario.expectedDeepLinkId);
       const allOk = okAuto && okManual && okLink;
       if (!allOk) allPassed = false;
-      console.log(`    auto-detection: ${okAuto ? 'PASS' : 'FAIL'}`);
+      console.log(
+        `    auto-detection: ${okAuto ? 'PASS' : 'FAIL'} (expected ${r.scenario.expectedAuto ? 'prompt' : 'quiet'})`,
+      );
       console.log(`    manual-trigger: ${okManual ? 'PASS' : 'FAIL'}`);
       console.log(
         `    deep link OK:   ${okLink ? 'PASS' : 'FAIL'} ${

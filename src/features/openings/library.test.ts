@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   familyDescription,
+  getVariations,
   isFamilySort,
   sortFamilies,
   type FamilyGroup,
@@ -138,5 +139,23 @@ describe('familyDescription', () => {
 
   it('returns the empty string for a family that does not exist', () => {
     expect(familyDescription('No Such Family')).toBe('');
+  });
+});
+
+describe('line popularity snapshot', () => {
+  it('emits finite offline popularity metadata for every generated line', () => {
+    const lines = getVariations('Italian Game');
+    expect(lines.length).toBeGreaterThan(5);
+    expect(
+      lines.every(
+        (line) =>
+          Number.isFinite(line.globalGames) &&
+          line.globalGames >= 0 &&
+          Number.isFinite(line.globalShare) &&
+          line.globalShare >= 0 &&
+          line.globalShare <= 1,
+      ),
+    ).toBe(true);
+    expect(lines.some((line) => line.globalGames > 0)).toBe(true);
   });
 });

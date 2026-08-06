@@ -25,8 +25,9 @@ const ARCHIVES = [
 /** Return a chess.com-shaped game for a given month. */
 function fakeGame(year, month, idx) {
   const endTime = Math.floor(new Date(`${year}-${String(month).padStart(2, '0')}-15T12:00:00Z`).getTime() / 1000);
+  const gameId = `${year}${String(month).padStart(2, '0')}${idx}000`;
   return {
-    url: `https://chess.com/game/live/${year}-${month}-${idx}`,
+    url: `https://www.chess.com/game/live/${gameId}`,
     pgn: `[Event "Live Chess"]\n[Site "Chess.com"]\n[Date "${year}.${String(month).padStart(2, '0')}.15"]\n[White "auto-import-tester"]\n[Black "opp${idx}"]\n[Result "1-0"]\n[ECO "C50"]\n[Opening "Italian Game"]\n[TimeControl "600"]\n[EndTime "12:00:00 PST"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 1-0`,
     time_control: '600',
     time_class: 'rapid',
@@ -148,5 +149,39 @@ await runBrowserTest({
     console.log('second run:', second);
     expect(second.added, 'second-run added (all dupes)').toBe(0);
     expect(second.skipped, 'second-run skipped').toBe(4);
+
+    // Deep-link imports are intentionally different from bulk imports:
+    // fetch the archive, insert only the selected game, and do not stamp a
+    // full-month ImportRecord that would hide the other missing game.
+    const selectedOnly = await page.evaluate(async () => {
+      const { db } = await import('/src/db/schema.ts');
+      const { importGameByUrl } = await import('/src/features/import/auto.ts');
+      await db.games.clear();
+      await db.importRecords.clear();
+
+      const endTime = new Date('2025-03-15T12:00:00Z').getTime();
+      const first = await importGameByUrl(
+        'auto-import-tester',
+        'https://www.chess.com/game/2025031000',
+        { endTime },
+      );
+      const secondClick = await importGameByUrl(
+        'auto-import-tester',
+        'https://www.chess.com/game/live/2025031000',
+        { endTime },
+      );
+
+      return {
+        first,
+        secondClick,
+        gameCount: await db.games.count(),
+        recordCount: await db.importRecords.count(),
+      };
+    });
+
+    expect(selectedOnly.first.alreadyImported, 'first deep-link fetches selected game').toBe(false);
+    expect(selectedOnly.secondClick.alreadyImported, 'URL variant hits selected-game cache').toBe(true);
+    expect(selectedOnly.gameCount, 'deep link inserts only one game').toBe(1);
+    expect(selectedOnly.recordCount, 'deep link does not stamp bulk checkpoint').toBe(0);
   },
 });

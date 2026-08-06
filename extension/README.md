@@ -7,10 +7,11 @@ deep-links into the local Chess Coach app.
 ## How it works
 
 The extension runs a content script on `https://www.chess.com/*` pages.
-When a post-game state is detected (the chess.com "Game Over" overlay or one
-of the post-game CTA buttons), the script injects a small floating card in
-the bottom-right corner of the page asking whether to send the game to
-Chess Coach. Clicking **Review** opens a new tab pointing at:
+It requires both a recognized game URL and visible post-game evidence (a
+result, "Game Over" UI, or a post-game CTA) before injecting a small floating
+card. This matters because Chess.com can assign `/game/<id>` at move one;
+the URL alone does not mean the game is finished. Clicking **Review** opens
+a new tab pointing at:
 
 ```
 <coach-origin>/review-by-url?url=<chesscom-game-url>&username=<your-username>&endTime=<ms>
@@ -84,18 +85,24 @@ The Chrome Web Store path is documented in the repo root
 
 ## Detection notes
 
-Chess.com renames CSS class names regularly, so the content script
-defensively layers three heuristics for "game is over" — any one is
-enough to fire the prompt:
+Chess.com renames CSS class names regularly, so the content script combines
+a recognized numeric game URL with layered visible DOM signals:
 
-1. **Primary:** `.game-over-modal-content` is visible — the dedicated
+1. **Primary:** `.game-over-modal-content` or another visible `game-over`
+   container — the dedicated
    post-game modal. Long-lived userscripts pin their detection to this
    selector and it has survived multiple chess.com refactors.
-2. **Secondary:** any visible element whose class string contains
-   `game-over` (case-insensitive). Catches sub-pieces of the modal
-   even if the wrapper class is renamed.
-3. **Tertiary:** a visible button labelled "Game Review" or
+2. **Secondary:** a visible `game-result` / `data-game-result` element
+   containing `1-0`, `0-1`, `1/2-1/2`, or result language such as
+   "checkmate" or "draw". This covers completed historical games too.
+3. **Tertiary:** a visible button labelled "Game Review", "Review", or
    "Rematch".
+
+A debounced `MutationObserver` catches game-over UI that appears while the
+numeric URL stays unchanged. A lightweight URL watcher handles SPA
+navigation between games. The toolbar action bypasses the DOM gate on a
+recognized game URL if Chess.com ships new markup before the extension is
+updated.
 
 The content script also dedupes per game URL so the prompt only
 appears once per game even if chess.com re-mounts its modal (e.g.
@@ -117,11 +124,9 @@ after clicking "Game Review" inline).
    and shows the prompt unconditionally. Useful when chess.com has
    refactored the modal class names again and the heuristic needs an
    update.
-3. The prompt only shows when the page URL matches a live-game shape
-   (`/game/live/<id>`, `/live/game/<id>`, or `/game/daily/<id>`). If
-   you're on `/play/online` and the game just ended but the URL
-   hasn't transitioned yet, wait a second — chess.com usually
-   rewrites the URL within a beat of the modal mounting.
+3. The prompt only shows when the page URL matches a game shape
+   (`/game/<id>`, `/game/live/<id>`, `/live/game/<id>`, or
+   `/game/daily/<id>`) and the page exposes a visible completion signal.
 4. Verify the **enabled** checkbox in the options page is on.
 
 ## Privacy

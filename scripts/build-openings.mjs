@@ -12,7 +12,7 @@
 // Source: https://github.com/lichess-org/chess-openings (MIT licensed).
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Chess } from 'chess.js';
 
@@ -21,6 +21,7 @@ const __dirname = dirname(__filename);
 
 const DATA_DIR = join(__dirname, '..', 'data', 'openings');
 const POPULARITY_FILE = join(DATA_DIR, 'popularity.tsv');
+const LINE_POPULARITY_FILE = join(DATA_DIR, 'line-popularity.tsv');
 const OUT_FILE = join(__dirname, '..', 'src', 'data', 'openings.generated.ts');
 
 function parseTsv(text) {
@@ -63,6 +64,29 @@ function parsePopularityTsv(text) {
     const popularity = parseInt(popStr, 10);
     if (Number.isNaN(popularity)) continue;
     out.set(family.trim(), { popularity, description });
+  }
+  return out;
+}
+
+export function parseLinePopularityTsv(text) {
+  const lines = text
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0 && !line.startsWith('#'));
+  if (lines.length === 0) return new Map();
+  const [, ...rows] = lines;
+  const out = new Map();
+  for (const row of rows) {
+    const [uciKey, gamesRaw, shareRaw] = row.split('\t');
+    const globalGames = Number(gamesRaw);
+    const globalShare = Number(shareRaw);
+    if (
+      !uciKey ||
+      !Number.isFinite(globalGames) ||
+      !Number.isFinite(globalShare)
+    ) {
+      continue;
+    }
+    out.set(uciKey.trim(), { globalGames, globalShare });
   }
   return out;
 }
@@ -126,6 +150,14 @@ function main() {
       `No ${POPULARITY_FILE} found — emitting bundle without descriptions.`,
     );
   }
+  const linePopularity = existsSync(LINE_POPULARITY_FILE)
+    ? parseLinePopularityTsv(readFileSync(LINE_POPULARITY_FILE, 'utf8'))
+    : new Map();
+  if (linePopularity.size === 0) {
+    console.warn(
+      `No ${LINE_POPULARITY_FILE} found — emitting lines without frequency data.`,
+    );
+  }
 
   const records = [];
   let skipped = 0;
@@ -138,6 +170,7 @@ function main() {
         continue;
       }
       const { family, variation } = splitName(row.name);
+      const lineMeta = linePopularity.get(uci.join(' '));
       records.push({
         eco: row.eco,
         name: row.name,
@@ -145,6 +178,8 @@ function main() {
         variation,
         uci,
         pgn: row.pgn,
+        globalGames: lineMeta?.globalGames ?? 0,
+        globalShare: lineMeta?.globalShare ?? 0,
       });
     }
   }
@@ -197,6 +232,10 @@ function main() {
     '  variation: string;',
     '  uci: string[];',
     '  pgn: string;',
+    '  /** Games reaching the final move in the bundled Lichess snapshot. */',
+    '  globalGames: number;',
+    '  /** Final move share among games reaching its parent position. */',
+    '  globalShare: number;',
     '}',
     '',
     '/**',
@@ -232,4 +271,6 @@ function main() {
   );
 }
 
-main();
+if (process.argv[1] && resolve(process.argv[1]) === __filename) {
+  main();
+}

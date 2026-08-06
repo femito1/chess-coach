@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   planNewGameFetches,
   computeNewGameCount,
+  computeMissingGameCount,
   shouldCheckForNewGames,
   isDismissedForCount,
   isCacheEntryFresh,
@@ -142,6 +143,80 @@ describe('computeNewGameCount', () => {
     const r = computeNewGameCount(plans, counts);
     expect(r.count).toBe(0);
     expect(r.archiveUrls).toEqual([]);
+  });
+});
+
+describe('computeMissingGameCount', () => {
+  it('reports 73 when one of 74 discovered games already exists locally', () => {
+    const latest: LatestImportSnapshot = {
+      archiveUrl: url(2026, 5),
+      year: 2026,
+      month: 5,
+      gameCount: 0,
+      importedAt: NOW,
+    };
+    const plans = planNewGameFetches([url(2026, 5)], latest);
+    const ids = Array.from({ length: 74 }, (_, i) => `game-${i + 1}`);
+    const result = computeMissingGameCount(
+      plans,
+      new Map([[url(2026, 5), ids]]),
+      new Set(['game-74']),
+    );
+
+    expect(result).toEqual({
+      count: 73,
+      archiveUrls: [url(2026, 5)],
+    });
+  });
+
+  it('counts exact missing IDs across newer archives instead of archive-size deltas', () => {
+    const latest: LatestImportSnapshot = {
+      archiveUrl: url(2026, 4),
+      year: 2026,
+      month: 4,
+      gameCount: 2,
+      importedAt: NOW,
+    };
+    const plans = planNewGameFetches([url(2026, 4), url(2026, 5)], latest);
+    const result = computeMissingGameCount(
+      plans,
+      new Map([
+        [url(2026, 5), ['may-1', 'may-2']],
+        [url(2026, 4), ['apr-1', 'apr-2', 'apr-3']],
+      ]),
+      new Set(['may-1', 'apr-1', 'apr-2']),
+    );
+
+    expect(result.count).toBe(2);
+    expect(result.archiveUrls).toEqual([url(2026, 5), url(2026, 4)]);
+  });
+
+  it('deduplicates repeated IDs and omits fully imported archives', () => {
+    const plans = [
+      {
+        archiveUrl: url(2026, 5),
+        year: 2026,
+        month: 5,
+        mode: 'whole-month' as const,
+      },
+      {
+        archiveUrl: url(2026, 4),
+        year: 2026,
+        month: 4,
+        mode: 'delta-from-record' as const,
+        recordedGameCount: 1,
+      },
+    ];
+    const result = computeMissingGameCount(
+      plans,
+      new Map([
+        [url(2026, 5), ['shared', 'new']],
+        [url(2026, 4), ['shared']],
+      ]),
+      new Set(['shared']),
+    );
+
+    expect(result).toEqual({ count: 1, archiveUrls: [url(2026, 5)] });
   });
 });
 

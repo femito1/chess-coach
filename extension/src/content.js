@@ -1,27 +1,18 @@
 /**
  * Chess Coach — Review After Game (content script)
  *
- * Watches the chess.com tab for finished-game pages. When the user
- * lands on one, injects a small floating panel offering a one-click
- * "Review in Chess Coach" CTA that opens the deep link in a new tab.
+ * Watches the chess.com tab for completed games. A game URL is necessary
+ * but not sufficient: chess.com now assigns numeric URLs while play is
+ * still in progress, so we wait for a visible result/game-over signal.
  *
  * Loads on every chess.com page (manifest match `https://www.chess.com/*`)
- * and short-circuits inside `maybePrompt()` until the URL is a
- * finished-game URL.
+ * and short-circuits inside `maybePrompt()` until both gates pass.
  *
- * Detection strategy: we use the **URL itself** as the signal.
- * Chess.com only mints a numeric game id once the game is finished
- * — live games in progress sit at `/play/online` (no id in the URL).
- * The moment the URL contains a numeric game id under any of the
- * known finished-game URL shapes (see `currentGameId`), we prompt.
- *
- * This was a rewrite of an earlier DOM-heuristic approach that tried
- * to detect specific result-modal class names. That approach kept
- * regressing every time chess.com refactored its markup, and worse,
- * it missed the historical-game case entirely — opening any past
- * game from the archive renders no live "game over" UI but is still
- * a perfectly valid moment to offer a Chess Coach review. The URL
- * is both more reliable and cheaper to evaluate.
+ * Detection strategy: recognized URL + layered, visible DOM evidence.
+ * A MutationObserver catches the result UI mounting without a URL change;
+ * the URL heartbeat still handles chess.com's SPA navigation. Historical
+ * completed games expose the same result/review controls, so they prompt
+ * too. The toolbar action bypasses the DOM gate as a safety valve.
  *
  * Behaviour contract:
  *   - Every navigation to a finished-game URL prompts (modulo a
@@ -60,6 +51,7 @@ const STATE = {
    */
   dismissedUrl: /** @type {string | null} */ (null),
   panelEl: /** @type {HTMLElement | null} */ (null),
+  detectionTimer: /** @type {ReturnType<typeof setTimeout> | null} */ (null),
   started: false,
 };
 
@@ -75,8 +67,9 @@ async function getOptions() {
 }
 
 /**
- * Find chess.com's numeric game id from the current URL. Returns
- * undefined if the page is not a finished-game page.
+ * Find chess.com's numeric game id from the current URL. A matching URL can
+ * represent either an in-progress or completed game; completion is a
+ * separate DOM gate below.
  *
  * Chess.com has shipped *three* URL shapes for finished games at
  * different points in 2024–2026:
@@ -103,6 +96,56 @@ function currentGameId() {
     /chess\.com\/(?:game\/live\/|live\/game\/|game\/daily\/|game\/)(\d+)(?:\b|\/|$)/,
   );
   return m?.[1];
+}
+
+const COMPLETION_SELECTORS = [
+  '.game-over-modal-content',
+  '[class*="game-over" i]',
+  '.game-result',
+  '[class*="game-result" i]',
+  '[data-game-result]',
+  '[data-test-element*="game-result" i]',
+];
+
+const RESULT_TEXT_RE =
+  /(?:^|\s)(?:1\s*-\s*0|0\s*-\s*1|1\s*\/\s*2\s*-\s*1\s*\/\s*2|½\s*-\s*½)(?:\s|$)|\b(?:game\s+over|checkmate|stalemate|draw|you\s+won|you\s+lost)\b/i;
+const POST_GAME_ACTION_RE = /^(?:game\s+review|review|rematch)$/i;
+
+function isVisible(el) {
+  if (!(el instanceof HTMLElement)) return false;
+  if (el.hidden || el.getAttribute('aria-hidden') === 'true') return false;
+  const style = getComputedStyle(el);
+  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+    return false;
+  }
+  return el.getClientRects().length > 0;
+}
+
+/**
+ * Require visible post-game evidence so a numeric `/game/<id>` URL at
+ * move one cannot trigger the prompt. Selectors are intentionally layered:
+ * dedicated game-over containers are sufficient by themselves; generic
+ * result containers must contain a result token; post-game action buttons
+ * cover completed archive pages whose result text lives in a shadow/root
+ * that the content script cannot inspect.
+ */
+function hasCompletedGameSignal() {
+  for (const selector of COMPLETION_SELECTORS) {
+    for (const el of document.querySelectorAll(selector)) {
+      if (!isVisible(el)) continue;
+      if (selector.includes('game-over')) return true;
+      if (RESULT_TEXT_RE.test(el.textContent ?? '')) return true;
+    }
+  }
+
+  for (const el of document.querySelectorAll('button, a[role="button"]')) {
+    if (!isVisible(el)) continue;
+    const label = (el.textContent || el.getAttribute('aria-label') || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (POST_GAME_ACTION_RE.test(label)) return true;
+  }
+  return false;
 }
 
 /**
@@ -143,11 +186,11 @@ function detectUsernameFromDom() {
   return '';
 }
 
-function buildDeepLink(coachOrigin, username, gameUrl) {
+function buildDeepLink(coachOrigin, username, gameUrl, endTime = Date.now()) {
   const params = new URLSearchParams();
   params.set('url', gameUrl);
   if (username) params.set('username', username);
-  params.set('endTime', String(Date.now()));
+  params.set('endTime', String(endTime));
   return `${coachOrigin.replace(/\/$/, '')}/review-by-url?${params.toString()}`;
 }
 
@@ -192,9 +235,7 @@ async function showPanel(gameUrl) {
 
   const username = (opts.chesscomUsername || detectUsernameFromDom() || '').trim();
   const coachOrigin = (opts.coachOrigin || DEFAULT_COACH_ORIGIN).trim();
-  const link = buildDeepLink(coachOrigin, username, gameUrl);
-
-  log('showing prompt for', gameUrl, '→', link);
+  log('showing prompt for', gameUrl);
 
   const root = ensurePanel();
   const closeBtn = root.querySelector('.cc-close');
@@ -206,9 +247,13 @@ async function showPanel(gameUrl) {
     STATE.dismissedUrl = gameUrl;
     hidePanel();
   };
-  closeBtn?.addEventListener('click', onDismiss);
-  secondary?.addEventListener('click', onDismiss);
-  primary?.addEventListener('click', () => {
+  if (closeBtn) closeBtn.onclick = onDismiss;
+  if (secondary) secondary.onclick = onDismiss;
+  if (primary) primary.onclick = () => {
+    // Capture the lookup hint at the user's click, not when the panel first
+    // appeared. This is especially important for long-open archive tabs.
+    const link = buildDeepLink(coachOrigin, username, gameUrl, Date.now());
+    log('opening review for', gameUrl, '→', link);
     // Service worker opens the tab — slightly more reliable than
     // window.open from a content script when popup blockers are in
     // play. Fall back to window.open if messaging fails.
@@ -222,13 +267,13 @@ async function showPanel(gameUrl) {
       window.open(link, '_blank', 'noopener');
     }
     hidePanel();
-  });
+  };
 }
 
 function maybePrompt({ force = false } = {}) {
   const id = currentGameId();
   if (!id) {
-    if (force) warn('manual trigger ignored: not on a finished-game URL');
+    if (force) warn('manual trigger ignored: not on a recognized game URL');
     return;
   }
   const url = canonicalGameUrl(id);
@@ -251,29 +296,34 @@ function maybePrompt({ force = false } = {}) {
   // other game) prompts fresh.
   if (STATE.dismissedUrl === url) return;
 
-  // The page URL itself is the signal: chess.com only mints a numeric
-  // game id once the game is finished (live games in progress sit at
-  // `/play/online` with no id in the URL until completion). Skipping
-  // the brittle DOM heuristic means we no longer miss prompts when
-  // chess.com refactors its result-modal markup, and we now also fire
-  // on archive revisits of historical games (no live modal renders
-  // there but the user explicitly navigated to a finished game and
-  // wants the option to review it).
+  if (!hasCompletedGameSignal()) return;
+
   STATE.activePromptUrl = url;
   void showPanel(url);
 }
 
+function schedulePromptCheck() {
+  if (STATE.detectionTimer) clearTimeout(STATE.detectionTimer);
+  STATE.detectionTimer = setTimeout(() => {
+    STATE.detectionTimer = null;
+    try {
+      maybePrompt();
+    } catch (e) {
+      warn('detection error', e);
+    }
+  }, 100);
+}
+
 /**
- * Drive detection from an SPA-aware URL watcher.
+ * Drive detection from an SPA-aware URL watcher plus a debounced DOM
+ * observer. The observer is required because a live game can keep the same
+ * numeric URL from the first move through the result modal.
  *
  * Chess.com is a SPA: navigating between games is a `pushState`, not
  * a full reload, so a single content-script lifetime can see many
  * `/play/online` ↔ `/game/<id>` transitions. The watcher polls
  * `location.href` every 750 ms; on each transition we hide any
- * lingering panel, clear the dismissal flag, and fire a fresh
- * prompt-check. URL-only detection means we don't need a
- * MutationObserver — the URL itself tells us whether we're on a
- * finished-game page.
+ * lingering panel, clear the dismissal flag, and fire a fresh check.
  *
  * We also fire once on script load to cover the cold-load case where
  * the user lands directly on a finished-game URL (refresh, deep link
@@ -285,14 +335,6 @@ function start() {
 
   log('content script loaded on', location.href);
 
-  const fire = () => {
-    try {
-      maybePrompt();
-    } catch (e) {
-      warn('detection error', e);
-    }
-  };
-
   let lastUrl = location.href;
   setInterval(() => {
     if (location.href !== lastUrl) {
@@ -300,11 +342,20 @@ function start() {
       log('navigation detected →', lastUrl);
       STATE.dismissedUrl = null;
       hidePanel();
-      fire();
+      schedulePromptCheck();
     }
   }, 750);
 
-  fire();
+  const observer = new MutationObserver(() => schedulePromptCheck());
+  observer.observe(document.documentElement, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+  });
+
+  schedulePromptCheck();
 }
 
 // Listen for manual triggers from the extension's toolbar action /

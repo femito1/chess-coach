@@ -8,7 +8,7 @@ import { db, type Color } from '@/db/schema';
 import { usePersistedState } from '@/lib/usePersistedState';
 import {
   addFamilyToRepertoire,
-  addLineToRepertoire,
+  addGuidedLinesToRepertoire,
   colorHint,
   ensureFamilyRepertoire,
   familyColor,
@@ -22,9 +22,14 @@ import {
   type FamilyGroup,
   type FamilySort,
   type OpeningLine,
-  type VariationEntry,
 } from './library';
 import { ColorBadge } from './ColorBadge';
+import {
+  buildPersonalOpeningStats,
+  openingLineKey,
+  rankOpeningLines,
+  type RankedOpeningLine,
+} from './recommendations';
 
 type ColorFilter = 'all' | Color;
 
@@ -55,6 +60,17 @@ export function LibraryPage() {
   const [selectedFamily, setSelectedFamily] = useState<string | null>(null);
   const [selectedLine, setSelectedLine] = useState<OpeningLine | null>(null);
   const [ply, setPly] = useState(0);
+  const [variationSort, setVariationSort] = useState<
+    'recommended' | 'global' | 'personal' | 'shortest' | 'alpha'
+  >('recommended');
+  const games = useLiveQuery(() => db.games.toArray(), []);
+  const personalByColor = useMemo(
+    () => ({
+      white: buildPersonalOpeningStats(games ?? [], 'white'),
+      black: buildPersonalOpeningStats(games ?? [], 'black'),
+    }),
+    [games],
+  );
 
   const filteredFamilies = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -79,10 +95,29 @@ export function LibraryPage() {
       : all.filter((r) => colorHint(r) === colorFilter).slice(0, 40);
   }, [query, colorFilter]);
 
-  const variations = useMemo(
-    () => (selectedFamily ? getVariations(selectedFamily) : []),
-    [selectedFamily],
-  );
+  const recommendedVariations = useMemo(() => {
+    if (!selectedFamily) return [];
+    return rankOpeningLines(
+      getVariations(selectedFamily),
+      personalByColor[familyColor(selectedFamily)],
+    );
+  }, [selectedFamily, personalByColor]);
+
+  const rankedVariations = useMemo(() => {
+    if (variationSort === 'recommended') return recommendedVariations;
+    return [...recommendedVariations].sort((a, b) => {
+      if (variationSort === 'global') {
+        return b.line.globalGames - a.line.globalGames || a.line.name.localeCompare(b.line.name);
+      }
+      if (variationSort === 'personal') {
+        return b.personalCount - a.personalCount || b.line.globalGames - a.line.globalGames;
+      }
+      if (variationSort === 'shortest') {
+        return a.line.uci.length - b.line.uci.length || a.line.name.localeCompare(b.line.name);
+      }
+      return a.line.name.localeCompare(b.line.name);
+    });
+  }, [recommendedVariations, variationSort]);
 
   function pickLine(line: OpeningLine) {
     setSelectedLine(line);
@@ -219,7 +254,10 @@ export function LibraryPage() {
           ) : selectedFamily ? (
             <VariationsList
               family={selectedFamily}
-              variations={variations}
+              ranked={rankedVariations}
+              recommended={recommendedVariations}
+              sort={variationSort}
+              onSort={setVariationSort}
               onPick={pickLine}
             />
           ) : (
@@ -236,16 +274,25 @@ export function LibraryPage() {
 
 function VariationsList({
   family,
-  variations,
+  ranked,
+  recommended,
+  sort,
+  onSort,
   onPick,
 }: {
   family: string;
-  variations: VariationEntry[];
+  ranked: RankedOpeningLine[];
+  recommended: RankedOpeningLine[];
+  sort: 'recommended' | 'global' | 'personal' | 'shortest' | 'alpha';
+  onSort: (sort: 'recommended' | 'global' | 'personal' | 'shortest' | 'alpha') => void;
   onPick: (line: OpeningLine) => void;
 }) {
   const { t } = useTranslation();
   const color = familyColor(family);
   const description = familyDescription(family);
+  const starterKeys = new Set(
+    recommended.slice(0, 5).map((entry) => openingLineKey(entry.line.uci)),
+  );
   return (
     <div className="card p-3 space-y-3">
       <div className="flex items-baseline justify-between gap-2">
@@ -254,7 +301,7 @@ function VariationsList({
           <h2 className="text-lg font-medium truncate">{family}</h2>
         </div>
         <div className="text-xs text-text-muted shrink-0">
-          {t('openings.linesCount', { count: variations.length })}
+          {t('openings.linesCount', { count: ranked.length })}
         </div>
       </div>
       {description && (
@@ -264,14 +311,28 @@ function VariationsList({
         {color === 'white' ? t('openings.youPlayWhite') : t('openings.youPlayBlack')}
       </div>
       <div className="flex justify-between items-center gap-2 flex-wrap">
-        <div className="text-xs text-text-muted">
-          {t('openings.clickVariation')}
-        </div>
-        <AddFamilyButton family={family} defaultColor={color} />
+        <label className="flex items-center gap-2 text-xs text-text-muted">
+          <span>{t('openings.sortBy')}</span>
+          <select
+            className="input text-xs py-1"
+            value={sort}
+            onChange={(event) => onSort(event.target.value as typeof sort)}
+          >
+            <option value="recommended">{t('openings.lineSort.recommended')}</option>
+            <option value="global">{t('openings.lineSort.global')}</option>
+            <option value="personal">{t('openings.lineSort.personal')}</option>
+            <option value="shortest">{t('openings.lineSort.shortest')}</option>
+            <option value="alpha">{t('openings.lineSort.alpha')}</option>
+          </select>
+        </label>
+        <AddFamilyButton family={family} recommended={recommended} />
       </div>
       <ul className="divide-y divide-border max-h-[70vh] overflow-auto scrollable pr-2">
-        {variations.map((v) => (
-          <li key={v.name}>
+        {ranked.map((entry) => {
+          const v = entry.line;
+          const isStarter = starterKeys.has(openingLineKey(v.uci));
+          return (
+          <li key={openingLineKey(v.uci)}>
             <button
               type="button"
               onClick={() => onPick(v)}
@@ -281,14 +342,27 @@ function VariationsList({
                 {v.eco}
               </span>
               <span className="flex-1 truncate">
+                {isStarter && (
+                  <span className="mr-2 text-[10px] uppercase tracking-wide text-accent">
+                    {t('openings.starterBadge')}
+                  </span>
+                )}
                 {v.variation || <em className="text-text-muted">{t('openings.mainLine')}</em>}
               </span>
-              <span className="text-xs text-text-muted shrink-0">
-                {t('openings.plyCount', { count: v.plies })}
+              <span className="text-right text-xs text-text-muted shrink-0">
+                {entry.personalCount > 0 && (
+                  <span className="block">
+                    {t('openings.seenInYourGames', { count: entry.personalCount })}
+                  </span>
+                )}
+                <span className="block">
+                  {t('openings.plyCount', { count: v.uci.length })}
+                </span>
               </span>
             </button>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );
@@ -522,7 +596,7 @@ function AddToRepertoirePanel({
     setStatus(null);
     try {
       const rep = await ensureFamilyRepertoire(family);
-      const added = await addLineToRepertoire(rep.id, line);
+      const { movesAdded: added } = await addGuidedLinesToRepertoire(rep.id, [line]);
       setStatus({
         msg:
           added > 0
@@ -559,7 +633,7 @@ function AddToRepertoirePanel({
           <span>{status.msg}</span>
           {status.repId && (
             <Link
-              to="/practice"
+              to={`/practice?rep=${encodeURIComponent(status.repId)}`}
               className="text-accent hover:underline shrink-0"
             >
               {t('openings.practice')}
@@ -573,13 +647,17 @@ function AddToRepertoirePanel({
 
 function AddFamilyButton({
   family,
+  recommended,
 }: {
   family: string;
-  defaultColor?: Color;
+  recommended: RankedOpeningLine[];
 }) {
   const { t } = useTranslation();
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [msg, setMsg] = useState<{ text: string; repId?: string } | null>(null);
+  const [guidedBusy, setGuidedBusy] = useState(false);
+  // Always the hybrid recommender's top five — independent of list sort.
+  const starter = recommended.slice(0, 5);
 
   // Live coverage check: a family-bound repertoire stamps itself with
   // `bulkLoadedAt` the moment "Add every line" finishes. We mirror that
@@ -604,6 +682,30 @@ function AddFamilyButton({
   }, [family]);
 
   const fullyCovered = familyRep?.bulkLoadedAt != null;
+  const guidedCount = familyRep?.activeLineKeys?.length ?? 0;
+
+  async function handleGuidedAdd() {
+    if (guidedBusy) return;
+    setGuidedBusy(true);
+    setMsg(null);
+    try {
+      const rep = await ensureFamilyRepertoire(family);
+      const { movesAdded, activeLineKeys } = await addGuidedLinesToRepertoire(
+        rep.id,
+        starter.map((entry) => entry.line),
+      );
+      setMsg({
+        text: t('openings.guidedAdded', {
+          count: activeLineKeys.length,
+          moves: movesAdded,
+          family,
+        }),
+        repId: rep.id,
+      });
+    } finally {
+      setGuidedBusy(false);
+    }
+  }
 
   async function handleBulkAdd() {
     setMsg(null);
@@ -626,20 +728,62 @@ function AddFamilyButton({
       : t('openings.addEveryLine', { family });
 
   return (
-    <div className="flex flex-col gap-2 w-full">
+    <div className="rounded-md border border-accent/30 bg-accent/5 p-3 space-y-3 w-full">
+      <div>
+        <div className="text-sm font-medium">{t('openings.guidedTitle')}</div>
+        <p className="text-xs text-text-muted">{t('openings.guidedDescription')}</p>
+      </div>
+      <ol className="grid gap-1 text-xs">
+        {starter.map((entry, index) => (
+          <li key={openingLineKey(entry.line.uci)} className="flex items-center gap-2">
+            <span className="font-mono text-text-muted w-4">{index + 1}.</span>
+            <span className="truncate flex-1">
+              {entry.line.variation || t('openings.mainLine')}
+            </span>
+            <span className="text-text-muted shrink-0">
+              {entry.personalCount > 0
+                ? t('openings.seenShort', { count: entry.personalCount })
+                : t('openings.globalPick')}
+            </span>
+          </li>
+        ))}
+      </ol>
       <button
         type="button"
         className="btn-primary text-xs"
-        onClick={handleBulkAdd}
-        disabled={disabled}
+        onClick={handleGuidedAdd}
+        disabled={starter.length === 0 || guidedCount > 0 || guidedBusy}
       >
-        {label}
+        {guidedBusy
+          ? t('openings.adding')
+          : guidedCount > 0
+          ? t('openings.guidedActive', { count: guidedCount })
+          : t('openings.startGuided', { count: starter.length })}
       </button>
+      <details className="text-xs text-text-muted">
+        <summary className="cursor-pointer hover:text-text">
+          {t('openings.advancedImport')}
+        </summary>
+        <div className="pt-2 space-y-2">
+          <p>{t('openings.advancedImportWarning')}</p>
+          <button
+            type="button"
+            className="btn text-xs w-full"
+            onClick={handleBulkAdd}
+            disabled={disabled}
+          >
+            {label}
+          </button>
+        </div>
+      </details>
       {msg && (
         <div className="text-xs text-text-muted flex items-center justify-between gap-2">
           <span>{msg.text}</span>
           {msg.repId && (
-            <Link to="/practice" className="text-accent hover:underline shrink-0">
+            <Link
+              to={`/practice?rep=${encodeURIComponent(msg.repId)}`}
+              className="text-accent hover:underline shrink-0"
+            >
               {t('openings.practice')}
             </Link>
           )}

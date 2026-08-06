@@ -12,12 +12,10 @@
  *   1. Look up `ImportRecord`s for the current username, find the
  *      most recent one (latest by year+month).
  *   2. Walk the chess.com archive list in chronological order:
- *        - Months strictly newer than the latest record → every game
- *          in that month is new (the user opened a new month since we
- *          last synced).
- *        - The same month as the latest record → the user kept playing
- *          in the same month; count = `currentMonthGames -
- *          recordedGameCount`.
+ *        - Months strictly newer than the latest record are candidates.
+ *        - The same month as the latest record is also a candidate.
+ *   3. Convert every candidate API game URL to its deterministic local ID
+ *      and count only IDs that are actually absent from IndexedDB.
  *        - Months older → ignored (already imported, or deliberately
  *          skipped).
  *
@@ -155,6 +153,40 @@ export function computeNewGameCount(
     }
   }
   return { count: total, archiveUrls: archives };
+}
+
+/**
+ * Count games that are genuinely absent from the local library.
+ *
+ * `ImportRecord.gameCount` is only a fetch-planning checkpoint. It cannot be
+ * the source of truth once a single game can arrive through the extension:
+ * the archive may contain 74 games while one of those 74 already exists
+ * locally. Comparing exact deterministic IDs correctly reports 73.
+ */
+export function computeMissingGameCount(
+  plans: ArchiveFetchPlan[],
+  archiveGameIds: ReadonlyMap<string, readonly string[]>,
+  existingGameIds: ReadonlySet<string>,
+): { count: number; archiveUrls: string[] } {
+  let count = 0;
+  const archiveUrls: string[] = [];
+  const seen = new Set<string>();
+
+  for (const plan of plans) {
+    const ids = archiveGameIds.get(plan.archiveUrl);
+    if (!ids) continue;
+    let missingInArchive = 0;
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (existingGameIds.has(id)) continue;
+      count++;
+      missingInArchive++;
+    }
+    if (missingInArchive > 0) archiveUrls.push(plan.archiveUrl);
+  }
+
+  return { count, archiveUrls };
 }
 
 /**
