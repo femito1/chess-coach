@@ -263,6 +263,52 @@
   color: var(--cg-coord-light);
 }
 
+/* ---------------------------------------------------------------- *
+ *  Page scrollbar.
+ * ---------------------------------------------------------------- *
+ *
+ *  `color-scheme: dark` on <html> is the *correct* way to ask for dark
+ *  native chrome, and it does fix <select> popups — but it does not
+ *  reliably repaint the scrollbar on Linux/GTK Chromium, which draws a
+ *  white track from the GTK theme regardless. So style the root
+ *  scrollbar explicitly, reusing the exact colours `.scrollable`
+ *  already uses for inner lists so the page and its panes match.
+ *
+ *  Applied to `html` rather than `body`: the viewport scrollbar is
+ *  propagated from the root element, and `body::-webkit-scrollbar` only
+ *  takes effect when <body> is itself the scroll container (it isn't
+ *  here — AppLayout is `min-h-screen`, so the document scrolls).
+ *
+ *  Firefox uses the standard `scrollbar-width` / `scrollbar-color`
+ *  shorthands; Chromium/WebKit need the `::-webkit-scrollbar*`
+ *  pseudo-elements. Both are declared: whichever the engine understands
+ *  wins, and neither breaks the other.
+ */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: #3a4252 theme('colors.bg.DEFAULT');
+}
+html::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+html::-webkit-scrollbar-track {
+  background-color: theme('colors.bg.DEFAULT');
+}
+html::-webkit-scrollbar-thumb {
+  background-color: #3a4252;
+  border-radius: 6px;
+  border: 3px solid theme('colors.bg.DEFAULT');
+  background-clip: padding-box;
+}
+html::-webkit-scrollbar-thumb:hover {
+  background-color: #4a5366;
+  background-clip: padding-box;
+}
+html::-webkit-scrollbar-corner {
+  background-color: theme('colors.bg.DEFAULT');
+}
+
 /* Slim, dark-themed scrollbar for any element marked .scrollable. The
    default OS scrollbar otherwise paints a wide opaque strip on top of
    list rows (esp. on Linux/Chromium), eating the right edge of long
