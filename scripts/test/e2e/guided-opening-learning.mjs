@@ -60,19 +60,21 @@ await runBrowserTest({
       };
     });
 
-    expect(setup.active, 'guided starter size').toBe(5);
+    expect(setup.active, 'recommended starter size').toBe(5);
     expect(setup.total, 'bulk repertoire has more than starter').toBeGreaterThan(5);
 
     await page.goto(
-      appendBypass(`${DEFAULT_URL}practice?rep=${encodeURIComponent(setup.repertoireId)}`),
+      appendBypass(
+        `${DEFAULT_URL}repertoire/${encodeURIComponent(setup.repertoireId)}/drill`,
+      ),
       { waitUntil: 'networkidle' },
     );
 
-    await page.getByText(/Practicing \d+ of \d+ lines/).waitFor();
-    await page.getByRole('button', { name: 'Guided' }).waitFor();
+    await page.getByText(/Drilling \d+ of \d+ lines/).waitFor();
+    await page.getByRole('button', { name: 'Include all lines' }).waitFor();
     await page.getByRole('button', { name: 'Add next 2 lines' }).waitFor();
 
-    await page.getByRole('button', { name: 'All lines' }).click();
+    await page.getByRole('button', { name: 'Include all lines' }).click();
     let allMode;
     for (let attempt = 0; attempt < 20; attempt++) {
       allMode = await page.evaluate(async (id) => {
@@ -82,9 +84,9 @@ await runBrowserTest({
       if (allMode === 'all') break;
       await page.waitForTimeout(100);
     }
-    expect(allMode, 'explicit all-lines scope persists').toBe('all');
+    expect(allMode, 'include-all persists learningMode=all').toBe('all');
 
-    await page.getByRole('button', { name: 'Guided' }).click();
+    await page.getByRole('button', { name: 'Use recommended set' }).click();
     const nextButton = page.getByRole('button', { name: 'Add next 2 lines' });
     await nextButton.waitFor();
     await nextButton.click();

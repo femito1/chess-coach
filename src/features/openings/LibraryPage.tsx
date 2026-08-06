@@ -633,7 +633,7 @@ function AddToRepertoirePanel({
           <span>{status.msg}</span>
           {status.repId && (
             <Link
-              to={`/practice?rep=${encodeURIComponent(status.repId)}`}
+              to={`/repertoire/${encodeURIComponent(status.repId)}/drill`}
               className="text-accent hover:underline shrink-0"
             >
               {t('openings.practice')}
@@ -781,7 +781,7 @@ function AddFamilyButton({
           <span>{msg.text}</span>
           {msg.repId && (
             <Link
-              to={`/practice?rep=${encodeURIComponent(msg.repId)}`}
+              to={`/repertoire/${encodeURIComponent(msg.repId)}/drill`}
               className="text-accent hover:underline shrink-0"
             >
               {t('openings.practice')}

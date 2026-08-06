@@ -37,7 +37,7 @@ const ROUTES = [
   { path: '/weaknesses',    label: 'weaknesses'    },
   { path: '/puzzles',       label: 'puzzles'       },
   { path: '/repertoire',    label: 'repertoire'    },
-  { path: '/practice',      label: 'practice'      },
+  { path: '/repertoire',    label: 'repertoire'    },
   { path: '/openings',      label: 'openings'      },
   { path: '/settings',      label: 'settings'      },
 ];

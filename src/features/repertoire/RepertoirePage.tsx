@@ -11,7 +11,7 @@ import { deleteRepertoire, dueCards, enumerateLines } from './store';
  * Game"). New repertoires are not created from this page — the user
  * creates them implicitly by adding lines from the Openings library
  * (`/openings`), which auto-creates the family-bound repertoire on
- * first add. This page is now a *list* + *practice launcher*.
+ * first add. This page is a *list* + *drill / review launcher*.
  *
  * The legacy "New repertoire" button + free-form "Custom" repertoires
  * are intentionally not exposed here. v10 wiped the legacy data and
@@ -39,9 +39,9 @@ export function RepertoirePage() {
       const cards = await dueCards(r.id);
       counts[r.id] = cards.length;
       const enumerated = await enumerateLines(r.id);
-      const guided = r.learningMode !== 'all';
+      const recommended = r.learningMode !== 'all';
       lines[r.id] = {
-        active: guided
+        active: recommended
           ? Math.min(r.activeLineKeys?.length ?? 5, enumerated.length)
           : enumerated.length,
         total: enumerated.length,
@@ -62,10 +62,6 @@ export function RepertoirePage() {
               {t('repertoire.subtitle2')}
             </Link>
             {t('repertoire.subtitle3')}
-            <Link to="/practice" className="text-accent hover:underline">
-              {t('repertoire.subtitle4')}
-            </Link>
-            {t('repertoire.subtitlePeriod')}
           </p>
         </div>
         <Link to="/openings" className="btn-primary text-xs">
@@ -149,7 +145,7 @@ function RepertoireCard({
           <div className="text-xs text-accent mt-1">
             {rep.learningMode === 'all'
               ? t('repertoire.card.allLinesActive', { count: lineCount.total })
-              : t('repertoire.card.guidedLinesActive', {
+              : t('repertoire.card.linesInRotation', {
                   active: lineCount.active,
                   total: lineCount.total,
                 })}
@@ -158,13 +154,11 @@ function RepertoireCard({
       </div>
       <div className="flex flex-wrap gap-2">
         <Link
-          to={`/practice?rep=${encodeURIComponent(rep.id)}`}
+          to={`/repertoire/${encodeURIComponent(rep.id)}/drill`}
           className="btn-primary text-xs"
           title={t('repertoire.card.drillLinesTitle')}
         >
-          {rep.learningMode === 'all'
-            ? t('repertoire.card.drillLines')
-            : t('repertoire.card.practiceGuided')}
+          {t('repertoire.card.drillLines')}
         </Link>
         <Link
           to={`/repertoire/${rep.id}/train`}

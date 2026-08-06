@@ -7,7 +7,7 @@
 //
 // Story:
 //   1. Seed a single Italian Game line into a family-bound repertoire.
-//   2. Open `/practice?rep=<id>` so the LineRunner mounts on that line.
+//   2. Open `/repertoire/<id>/drill` so the LineRunner mounts on that line.
 //   3. Walk the line to completion by playing each expected `uci` in
 //      sequence (the opponent autoplays at 600 ms intervals; we just
 //      drive the user's moves and let `LineRunner` flip turn).
@@ -51,7 +51,7 @@ await runBrowserTest({
     expect(seed.line && seed.line.uci.length > 0, 'line has plies').toBe(true);
 
     await page.goto(
-      `http://localhost:5173/practice?rep=${seed.repId}&e2e_auth_bypass=1`,
+      `http://localhost:5173/repertoire/${seed.repId}/drill?e2e_auth_bypass=1`,
       { waitUntil: 'domcontentloaded' },
     );
     await page.waitForSelector('.cg-wrap', { timeout: 10_000 });

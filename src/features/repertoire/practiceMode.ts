@@ -1,5 +1,5 @@
 /**
- * Pure logic for the `/practice` page's session controller. The page
+ * Pure logic for the `/repertoire/:id/drill` session controller. The page
  * picks a list of selected line indices + a mode, and we tell it which
  * line index to drill next given the previous outcome. By keeping this
  * logic pure we can unit-test the three modes without spinning up the

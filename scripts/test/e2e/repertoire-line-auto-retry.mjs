@@ -6,7 +6,7 @@
 //   1. Seed a single repertoire line ("e2-e4 …" — the first Sicilian
 //      line from the openings library) and a family-bound repertoire
 //      that owns it.
-//   2. Open `/practice?rep=<id>` so the practice page mounts the
+//   2. Open `/repertoire/<id>/drill` so the drill page mounts the
 //      LineRunner on that line.
 //   3. Pre-mistake: only the Hint button is on-screen. No "Try
 //      again", no "Show answer", no "Play it for me".
@@ -54,7 +54,7 @@ await runBrowserTest({
     expect(repId.length > 0, 'repertoire id seeded').toBe(true);
 
     await page.goto(
-      `http://localhost:5173/practice?rep=${repId}&e2e_auth_bypass=1`,
+      `http://localhost:5173/repertoire/${repId}/drill?e2e_auth_bypass=1`,
       { waitUntil: 'domcontentloaded' },
     );
     await page.waitForSelector('.cg-wrap', { timeout: 10_000 });

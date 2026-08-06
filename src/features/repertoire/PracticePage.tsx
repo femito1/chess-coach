@@ -7,7 +7,7 @@ import {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, getSettings, type Repertoire } from '@/db/schema';
 import {
@@ -144,43 +144,31 @@ function familyAccuracyPct(agg: FamilyAggregate): number | null {
 }
 
 /**
- * Practice the lines of a repertoire. Three modes (Sequential / Random
+ * Drill the lines of a repertoire. Three modes (Sequential / Random
  * / Repeat-until-perfect), all driven by the pure reducer in
- * `./practiceMode.ts`. The page is reachable from the repertoire list
- * card's primary "Practice" button (`/practice?rep=<id>`); navigating
- * to bare `/practice` shows a chooser.
- *
- * Layout:
- *   - Top: header with rep name + mode picker.
- *   - Left column: live LineRunner for the active line (key=lineKey to
- *     force a fresh runner per line). Below it, the runner's status bar
- *     and the "session crossed-off" counter (repeat mode only).
- *   - Right column: filtered+selectable line picker with search box
- *     and select-all/none toggles. Picker is hidden on small screens
- *     behind a "Pick lines" sheet (TODO: not yet wired; on phones we
- *     stack vertically).
- *
- * Why use a render-prop on the runner: the controls bar needs access
- * to the runner's *live* status (is the user mid-line? did they just
- * finish? did they get it right?), and lifting that state up into the
- * page would force the runner to expose a heavy state-observer. The
- * existing `renderControls` slot already gives us the live state so
- * the practice-mode controls can render below the board with the
- * exact same data the runner has.
+ * `./practiceMode.ts`. Reached from the repertoire card's "Drill lines"
+ * button at `/repertoire/:id/drill`. Legacy `/practice?rep=` links
+ * redirect here via `PracticeRedirect`.
  */
+export function PracticeRedirect() {
+  const [params] = useSearchParams();
+  const rep = params.get('rep');
+  if (rep) {
+    return <Navigate to={`/repertoire/${encodeURIComponent(rep)}/drill`} replace />;
+  }
+  return <Navigate to="/repertoire" replace />;
+}
+
 export function PracticePage() {
   const { t } = useTranslation();
-  const [params] = useSearchParams();
-  const repId = params.get('rep') ?? '';
+  const { id: repId = '' } = useParams();
   const reps = useLiveQuery(
     () => db.repertoires.orderBy('updatedAt').reverse().toArray(),
     [],
   );
 
-  // No repertoire chosen: show a list to pick from. Skips the `?rep=`
-  // path so the user always lands somewhere meaningful.
   if (!repId) {
-    return <RepertoireChooser reps={reps} />;
+    return <Navigate to="/repertoire" replace />;
   }
 
   const rep = reps?.find((r) => r.id === repId);
@@ -199,52 +187,6 @@ export function PracticePage() {
   }
 
   return <PracticeRunner rep={rep} />;
-}
-
-function RepertoireChooser({
-  reps,
-}: {
-  reps: Repertoire[] | undefined;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="space-y-3">
-      <h1 className="text-2xl font-semibold tracking-tight">{t('practice.title')}</h1>
-      <p className="text-sm text-text-muted">{t('practice.subtitle')}</p>
-      {!reps ? (
-        <div className="card p-6 text-center text-text-muted">{t('practice.loading')}</div>
-      ) : reps.length === 0 ? (
-        <div className="card p-6 text-center text-text-muted space-y-2">
-          <div>{t('practice.noRepertoires')}</div>
-          <Link to="/openings" className="text-accent hover:underline">
-            {t('practice.browseOpenings')}
-          </Link>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {reps.map((r) => (
-            <Link
-              key={r.id}
-              to={`/practice?rep=${encodeURIComponent(r.id)}`}
-              className="card p-4 hover:border-accent transition-colors"
-            >
-              <div className="flex items-baseline justify-between gap-2">
-                <div className="font-medium truncate">{r.name}</div>
-                <span
-                  className={`text-xs px-2 py-0.5 rounded shrink-0 ${r.color === 'white' ? 'bg-bg-raised text-text' : 'bg-text/90 text-bg'}`}
-                >
-                  {r.color === 'white' ? t('common.white') : t('common.black')}
-                </span>
-              </div>
-              <div className="text-xs text-text-muted mt-1">
-                {t('practice.updated', { date: new Date(r.updatedAt).toLocaleDateString() })}
-              </div>
-            </Link>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function PracticeRunner({
@@ -461,6 +403,8 @@ function ActivePractice({
     await setRepertoireLearningMode(rep.id, nextScope);
   }
 
+  const usingRecommendedSet = scope !== 'all';
+
   const guidedMastered = areGuidedLinesMastered(
     decoratedRawLines,
     guidedIndices,
@@ -611,9 +555,9 @@ function ActivePractice({
               color: rep.color === 'white' ? t('common.white') : t('common.black'),
             })}
           </p>
-          {scope === 'guided' && (
+          {usingRecommendedSet && (
             <p className="text-xs text-accent">
-              {t('practice.guidedProgress', {
+              {t('practice.drillProgress', {
                 active: guidedIndices.length,
                 total: decoratedLines.length,
               })}
@@ -623,17 +567,14 @@ function ActivePractice({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            className={scope === 'guided' ? 'btn-primary text-xs' : 'btn text-xs'}
-            onClick={() => void changeScope('guided')}
+            className="btn text-xs"
+            onClick={() =>
+              void changeScope(usingRecommendedSet ? 'all' : 'guided')
+            }
           >
-            {t('practice.guidedScope')}
-          </button>
-          <button
-            type="button"
-            className={scope === 'all' ? 'btn-primary text-xs' : 'btn text-xs'}
-            onClick={() => void changeScope('all')}
-          >
-            {t('practice.allScope')}
+            {usingRecommendedSet
+              ? t('practice.includeAllLines')
+              : t('practice.useRecommendedSet')}
           </button>
           <Link to="/repertoire" className="btn text-xs">
             {t('practice.allRepertoires')}
@@ -643,7 +584,7 @@ function ActivePractice({
 
       <ModePicker mode={session.mode} onChange={setMode} />
 
-      {scope === 'guided' && guidedMastered && nextLines.length > 0 && (
+      {usingRecommendedSet && guidedMastered && nextLines.length > 0 && (
         <div className="card p-4 border-good/40 bg-good/5 flex flex-col sm:flex-row gap-3 sm:items-center">
           <div className="flex-1">
             <div className="font-medium text-good">{t('practice.nextLinesReady')}</div>

@@ -12,7 +12,7 @@ import { WeaknessesPage } from '@/features/weaknesses/WeaknessesPage';
 import { PuzzlesPage } from '@/features/puzzles/PuzzlesPage';
 import { RepertoirePage } from '@/features/repertoire/RepertoirePage';
 import { RepertoireTrainer } from '@/features/repertoire/RepertoireTrainer';
-import { PracticePage } from '@/features/repertoire/PracticePage';
+import { PracticePage, PracticeRedirect } from '@/features/repertoire/PracticePage';
 import { LibraryPage } from '@/features/openings/LibraryPage';
 import { SignInPage } from '@/features/auth/SignInPage';
 import { OnboardingPage } from '@/features/onboarding/OnboardingPage';
@@ -76,7 +76,8 @@ export const router = createBrowserRouter([
                   { path: 'puzzles', element: <PuzzlesPage /> },
                   { path: 'repertoire', element: <RepertoirePage /> },
                   { path: 'repertoire/:id/train', element: <RepertoireTrainer /> },
-                  { path: 'practice', element: <PracticePage /> },
+                  { path: 'repertoire/:id/drill', element: <PracticePage /> },
+                  { path: 'practice', element: <PracticeRedirect /> },
                   { path: 'openings', element: <LibraryPage /> },
                   { path: 'settings', element: <SettingsPage /> },
                 ],
