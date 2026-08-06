@@ -286,7 +286,8 @@
     "retry": "Retry",
     "review": "Review",
     "brilliantTitle": "You played a brilliant move in this game",
-    "brilliantTitlePlural": "You played {{count}} brilliant moves in this game"
+    "brilliantTitlePlural": "You played {{count}} brilliant moves in this game",
+    "showMore": "Show {{count}} more ({{remaining}} not shown)"
   },
   "weaknesses": {
     "title": "Weaknesses",

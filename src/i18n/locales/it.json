@@ -286,7 +286,8 @@
     "retry": "Riprova",
     "review": "Rivedi",
     "brilliantTitle": "Hai giocato una mossa brillante in questa partita",
-    "brilliantTitlePlural": "Hai giocato {{count}} mosse brillanti in questa partita"
+    "brilliantTitlePlural": "Hai giocato {{count}} mosse brillanti in questa partita",
+    "showMore": "Mostra altre {{count}} ({{remaining}} non mostrate)"
   },
   "weaknesses": {
     "title": "Punti deboli",

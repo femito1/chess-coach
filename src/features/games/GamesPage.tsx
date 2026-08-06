@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { listGamesLight, requeueGame } from '@/db/queries';
@@ -36,6 +36,11 @@ const TIME_CLASS_VALUES: readonly TimeClass[] = [
  *  comment in `src/lib/timeClass.ts`). It's not a real `TimeClass`
  *  value — we accept it on read for round-trip stability. */
 const TIME_CLASS_SENTINEL = '__none__';
+
+/** Rows mounted per page. 100 fills any realistic viewport several times
+ *  over while keeping the initial commit small enough that navigating to
+ *  this tab stays responsive on a multi-thousand-game library. */
+const PAGE_SIZE = 100;
 
 function isResultFilter(v: unknown): v is ResultFilter {
   return typeof v === 'string' && (RESULT_VALUES as readonly string[]).includes(v);
@@ -99,6 +104,24 @@ export function GamesPage() {
       return true;
     });
   }, [games, resultFilter, statusFilter, timeClassSelection, query]);
+
+  // Render in pages. Every row here is 8 cells plus two badges and a
+  // link, so a 2.5 k-game library was mounting ~40 k DOM nodes in one
+  // synchronous commit — which is what made clicking this tab and
+  // immediately clicking away feel stuck. Filtering still runs over the
+  // *whole* library (the count below reports real totals); only the
+  // number of mounted rows is capped, and "Show more" reveals the rest.
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  // Any filter change resets the window, so narrowing a search doesn't
+  // leave the user scrolled into a page that no longer exists.
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [resultFilter, statusFilter, timeClassSelection, query]);
+  const visible = useMemo(
+    () => filtered.slice(0, visibleCount),
+    [filtered, visibleCount],
+  );
+  const hiddenCount = filtered.length - visible.length;
 
   return (
     <div className="space-y-4">
@@ -168,7 +191,7 @@ export function GamesPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {filtered.map((g) => {
+            {visible.map((g) => {
               const userAcc = g.accuracy
                 ? g.userColor === 'white'
                   ? g.accuracy.white
@@ -222,6 +245,22 @@ export function GamesPage() {
                 </tr>
               );
             })}
+            {hiddenCount > 0 && (
+              <tr>
+                <td colSpan={8} className="p-3 text-center">
+                  <button
+                    type="button"
+                    className="btn text-xs"
+                    onClick={() => setVisibleCount((n) => n + PAGE_SIZE)}
+                  >
+                    {t('games.showMore', {
+                      count: Math.min(PAGE_SIZE, hiddenCount),
+                      remaining: hiddenCount,
+                    })}
+                  </button>
+                </td>
+              </tr>
+            )}
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={8} className="p-8 text-center text-text-muted">

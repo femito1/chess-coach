@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 import { Board } from '@/components/Board';
 import { BoardFrame } from '@/components/BoardFrame';
 import { db, type Color } from '@/db/schema';
@@ -29,6 +30,7 @@ import {
   buildPersonalOpeningStats,
   openingLineKey,
   rankOpeningLines,
+  type PersonalOpeningStats,
   type RankedOpeningLine,
 } from './recommendations';
 
@@ -42,6 +44,14 @@ const FAMILIES_ALPHA: readonly FamilyGroup[] = getFamilies('alpha');
 /** Deep-link flash duration; matches the `deep-link-flash` keyframes in
  *  `styles/index.css`. */
 const FLASH_MS = 2000;
+
+/** Shared empty stats for "no family selected yet", so the memo below can
+ *  skip PGN parsing without handing `rankOpeningLines` a null. Frozen and
+ *  module-level so it's referentially stable across renders. */
+const EMPTY_PERSONAL_STATS: PersonalOpeningStats = {
+  relevantGames: 0,
+  prefixCounts: new Map(),
+};
 
 export function LibraryPage() {
   const { t } = useTranslation();
@@ -82,7 +92,11 @@ export function LibraryPage() {
   const [variationSort, setVariationSort] = useState<
     'recommended' | 'global' | 'personal' | 'shortest' | 'alpha'
   >('recommended');
-  const games = useLiveQuery(() => db.games.toArray(), []);
+  // Throttled: an un-throttled `useLiveQuery` over `games` refires on
+  // every analyzer write, and each refire busts the PGN-parse memo below.
+  // Same reasoning as the dashboard and Games pages, which already use
+  // this hook over the same hot table.
+  const games = useThrottledLiveQuery(() => db.games.toArray(), [], 1000);
   // Flash + scroll the deep-linked family in the sidebar list. With 148
   // families the list scrolls, so selecting one off-screen was silent.
   const [flashFamily, setFlashFamily] = useState<string | null>(() =>
@@ -134,12 +148,29 @@ export function LibraryPage() {
     },
     [flashFamily],
   );
-  const personalByColor = useMemo(
-    () => ({
-      white: buildPersonalOpeningStats(games ?? [], 'white'),
-      black: buildPersonalOpeningStats(games ?? [], 'black'),
-    }),
-    [games],
+  // Personal opening stats re-parse every game's PGN through chess.js,
+  // which is the single most expensive thing this page does: ~1.3 s of
+  // blocking main-thread work on a 2.5 k-game library, and it scales with
+  // library size. Two rules keep it off the critical path:
+  //
+  //   1. Only the colour actually being displayed. A family is either
+  //      White prep or Black prep, never both, so computing both colours
+  //      on mount doubled the cost for no benefit.
+  //   2. Only once a family is selected. Landing on `/openings` with no
+  //      selection renders the family list, which doesn't consult these
+  //      stats at all — so the parse can wait until it's needed. This is
+  //      what made clicking the Openings tab and immediately clicking
+  //      away feel stuck: the nav was queued behind a parse whose result
+  //      nothing on screen used yet.
+  //
+  // `null` (no family selected) yields empty stats rather than parsing.
+  const personalColor = selectedFamily ? familyColor(selectedFamily) : null;
+  const personalStats = useMemo(
+    () =>
+      personalColor
+        ? buildPersonalOpeningStats(games ?? [], personalColor)
+        : EMPTY_PERSONAL_STATS,
+    [games, personalColor],
   );
 
   const filteredFamilies = useMemo(() => {
@@ -170,11 +201,8 @@ export function LibraryPage() {
 
   const recommendedVariations = useMemo(() => {
     if (!selectedFamily) return [];
-    return rankOpeningLines(
-      getVariations(selectedFamily),
-      personalByColor[familyColor(selectedFamily)],
-    );
-  }, [selectedFamily, personalByColor]);
+    return rankOpeningLines(getVariations(selectedFamily), personalStats);
+  }, [selectedFamily, personalStats]);
 
   const rankedVariations = useMemo(() => {
     if (variationSort === 'recommended') return recommendedVariations;

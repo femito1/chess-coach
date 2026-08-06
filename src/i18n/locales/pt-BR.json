@@ -286,7 +286,8 @@
     "retry": "Tentar novamente",
     "review": "Revisar",
     "brilliantTitle": "Você jogou um lance brilhante nesta partida",
-    "brilliantTitlePlural": "Você jogou {{count}} lances brilhantes nesta partida"
+    "brilliantTitlePlural": "Você jogou {{count}} lances brilhantes nesta partida",
+    "showMore": "Mostrar mais {{count}} ({{remaining}} não exibidas)"
   },
   "weaknesses": {
     "title": "Pontos fracos",
