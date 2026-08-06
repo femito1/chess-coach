@@ -1,5 +1,9 @@
 import { create } from 'zustand';
-import { analyzeGamePgn, computeAccuracy } from './analyzer';
+import {
+  analyzeGamePgn,
+  computeAccuracy,
+  countUserBrilliancies,
+} from './analyzer';
 import {
   getSettings,
   db,
@@ -304,6 +308,7 @@ async function runLoop(): Promise<void> {
           analysisStatus: 'done',
           userTimeSec: timeStats.userTimeSec,
           userPlyCount: timeStats.userPlyCount,
+          brilliantCount: countUserBrilliancies(analysis.moves, game.userColor),
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

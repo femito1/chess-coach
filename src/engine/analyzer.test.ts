@@ -4,6 +4,7 @@ import {
   CURRENT_ACCURACY_MODEL,
   computeAccuracy,
   computeAccuracyWithModel,
+  countUserBrilliancies,
   harmonicMean,
 } from './analyzer';
 
@@ -26,6 +27,37 @@ function move(
     depth: 16,
   };
 }
+
+describe('countUserBrilliancies', () => {
+  // Ply is 1-indexed with White on odd plies — same convention
+  // `computeAccuracyWithModel` uses to split per-colour scores.
+  it('counts only the requested colour', () => {
+    const moves = [
+      move(1, 0, 'brilliant'), // white
+      move(2, 0, 'brilliant'), // black
+      move(3, 0, 'brilliant'), // white
+    ];
+    expect(countUserBrilliancies(moves, 'white')).toBe(2);
+    expect(countUserBrilliancies(moves, 'black')).toBe(1);
+  });
+
+  it('ignores every other classification', () => {
+    const moves = [
+      move(1, 0, 'best'),
+      move(3, 0, 'excellent'),
+      move(5, 0, 'book'),
+      move(7, 0, 'blunder'),
+    ];
+    expect(countUserBrilliancies(moves, 'white')).toBe(0);
+  });
+
+  /** `0` (analyzed, none found) must be distinguishable from a missing
+   *  field, which is what makes the boot backfill idempotent. */
+  it('returns 0 rather than a falsy sentinel for a clean game', () => {
+    expect(countUserBrilliancies([], 'white')).toBe(0);
+    expect(countUserBrilliancies([move(1, 0, 'best')], 'black')).toBe(0);
+  });
+});
 
 describe('harmonicMean', () => {
   it('returns 100 for an empty side', () => {

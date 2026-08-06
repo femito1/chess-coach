@@ -256,7 +256,9 @@
       "pending": "Pendente",
       "running": "Em execução",
       "analyzed": "Analisada",
-      "error": "Erro"
+      "error": "Erro",
+      "resultLabel": "Resultado",
+      "analysisLabel": "Análise"
     },
     "table": {
       "date": "Data",
@@ -282,7 +284,9 @@
       "error": "erro"
     },
     "retry": "Tentar novamente",
-    "review": "Revisar"
+    "review": "Revisar",
+    "brilliantTitle": "Você jogou um lance brilhante nesta partida",
+    "brilliantTitlePlural": "Você jogou {{count}} lances brilhantes nesta partida"
   },
   "weaknesses": {
     "title": "Pontos fracos",

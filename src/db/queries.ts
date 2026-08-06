@@ -1,5 +1,5 @@
 import { db, getSettings, updateSettings, type Game, type Analysis, type AnalysisStatus, type Motif } from './schema';
-import { computeAccuracy } from '@/engine/analyzer';
+import { computeAccuracy, countUserBrilliancies } from '@/engine/analyzer';
 import { classifyMove } from '@/engine/classify';
 import { detectMotifs } from '@/engine/motifs';
 import {
@@ -22,13 +22,15 @@ import {
  * Bump rules:
  *   RECOMPUTE_VERSION   — bump when classifyMove / detectMotifs /
  *                         computeAccuracy / detectPhase / clock-derivation
- *                         logic changes its output for existing data.
+ *                         logic changes its output for existing data, or
+ *                         when a new derived field needs stamping onto
+ *                         already-analyzed games (v3 = `brilliantCount`).
  *   OPENING_REFRESH_VERSION
  *                       — bump when reparseOpeningFromPgn changes its
  *                         output for existing PGNs (e.g. updated openings
  *                         dataset).
  */
-export const RECOMPUTE_VERSION = 2;
+export const RECOMPUTE_VERSION = 3;
 export const OPENING_REFRESH_VERSION = 1;
 /** Version stamp for the boot-time `backfillUserTimeStats` pass. Bump
  *  this any time `computeUserTimeStats` would produce different output
@@ -355,7 +357,11 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
     const analyses = await db.analyses.bulkGet(chunkIds);
 
     const analysisPatches: Analysis[] = [];
-    const gamePatches: Array<{ id: string; accuracy: { white: number; black: number } }> = [];
+    const gamePatches: Array<{
+      id: string;
+      accuracy: { white: number; black: number };
+      brilliantCount: number;
+    }> = [];
 
     for (let i = 0; i < chunkIds.length; i++) {
       const g = games[i];
@@ -436,9 +442,18 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
       const accuracyChanged =
         !prev || prev.white !== accuracy.white || prev.black !== accuracy.black;
 
-      if (changed || accuracyChanged) {
+      // Doubles as the backfill for games analyzed before
+      // `brilliantCount` existed: `undefined !== 0`, so a game with no
+      // brilliancies still gets stamped once and then compares equal on
+      // every later pass. Without that, "analyzed, none found" would be
+      // indistinguishable from "never counted" and the badge column
+      // could never be trusted.
+      const brilliantCount = countUserBrilliancies(newMoves, g.userColor);
+      const brilliantChanged = g.brilliantCount !== brilliantCount;
+
+      if (changed || accuracyChanged || brilliantChanged) {
         analysisPatches.push({ ...a, moves: newMoves });
-        gamePatches.push({ id: g.id, accuracy });
+        gamePatches.push({ id: g.id, accuracy, brilliantCount });
         updated++;
       }
     }
@@ -459,6 +474,7 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
         const merged: Game[] = gamePatches.map((p) => ({
           ...gamesById.get(p.id)!,
           accuracy: p.accuracy,
+          brilliantCount: p.brilliantCount,
         }));
         await db.games.bulkPut(merged);
       });

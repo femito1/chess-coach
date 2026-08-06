@@ -256,7 +256,9 @@
       "pending": "In attesa",
       "running": "In corso",
       "analyzed": "Analizzata",
-      "error": "Errore"
+      "error": "Errore",
+      "resultLabel": "Risultato",
+      "analysisLabel": "Analisi"
     },
     "table": {
       "date": "Data",
@@ -282,7 +284,9 @@
       "error": "errore"
     },
     "retry": "Riprova",
-    "review": "Rivedi"
+    "review": "Rivedi",
+    "brilliantTitle": "Hai giocato una mossa brillante in questa partita",
+    "brilliantTitlePlural": "Hai giocato {{count}} mosse brillanti in questa partita"
   },
   "weaknesses": {
     "title": "Punti deboli",

@@ -9,7 +9,7 @@ import {
   detectPhase,
   extractClocks,
 } from './phase';
-import type { Analysis, MoveEval } from '@/db/schema';
+import type { Analysis, Color, MoveEval } from '@/db/schema';
 
 export interface AnalyzeProgress {
   ply: number;
@@ -350,4 +350,29 @@ export function computeAccuracyWithModel(
 export function computeAccuracy(moves: MoveEval[]): { white: number; black: number } {
   if (moves.length === 0) return { white: 100, black: 100 };
   return computeAccuracyWithModel(moves, CURRENT_ACCURACY_MODEL);
+}
+
+/**
+ * Count `brilliant` moves played by `userColor` in an analyzed move list.
+ *
+ * Cached onto `Game.brilliantCount` so the Games table can badge
+ * brilliancies without loading the `analyses` rows. Shared by all three
+ * writers (queue on analysis, boot recompute, one-shot backfill) so the
+ * ply-parity convention lives in exactly one place.
+ *
+ * Ply is 1-indexed with White on odd plies — the same rule
+ * `computeAccuracyWithModel` uses to split its per-color scores.
+ */
+export function countUserBrilliancies(
+  moves: readonly MoveEval[],
+  userColor: Color,
+): number {
+  const userIsWhite = userColor === 'white';
+  let n = 0;
+  for (const m of moves) {
+    if (m.classification !== 'brilliant') continue;
+    if ((m.ply % 2 === 1) !== userIsWhite) continue;
+    n++;
+  }
+  return n;
 }

@@ -46,6 +46,7 @@ export const BROWSER_TESTS = [
   { name: 'dexie-v10-wipe',             file: 'scripts/test/integration/dexie-v10-wipe.mjs',             category: 'integration' },
   { name: 'repertoire-practice',        file: 'scripts/test/integration/repertoire-practice.mjs',        category: 'integration' },
   { name: 'repertoire-bulk-add-stamp',  file: 'scripts/test/integration/repertoire-bulk-add-stamp.mjs',  category: 'integration' },
+  { name: 'brilliant-backfill',         file: 'scripts/test/integration/brilliant-backfill.mjs',         category: 'integration' },
   { name: 'phase2',                     file: 'scripts/test/integration/phase2.mjs',                     category: 'integration' },
   { name: 'auto-import',                file: 'scripts/test/integration/auto-import.mjs',                category: 'integration' },
   { name: 'opening-popularity-build',   file: 'scripts/test/integration/opening-popularity-build.mjs',   category: 'integration' },

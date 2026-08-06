@@ -116,27 +116,32 @@ export function GamesPage() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <select
-          className="input w-auto"
+        {/* Both selects carry a visible field label. Bare "Wins" /
+            "Any status" read as free-floating words with no indication
+            of what they filter — and "Wins" in particular looks like a
+            stat rather than a control. The label sits inside the same
+            bordered control so it reads as one unit. */}
+        <FilterSelect
+          label={t('games.filters.resultLabel')}
           value={resultFilter}
-          onChange={(e) => setResultFilter(e.target.value as ResultFilter)}
+          onChange={(v) => setResultFilter(v as ResultFilter)}
         >
           <option value="all">{t('games.filters.allResults')}</option>
           <option value="win">{t('games.filters.wins')}</option>
           <option value="loss">{t('games.filters.losses')}</option>
           <option value="draw">{t('games.filters.draws')}</option>
-        </select>
-        <select
-          className="input w-auto"
+        </FilterSelect>
+        <FilterSelect
+          label={t('games.filters.analysisLabel')}
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+          onChange={(v) => setStatusFilter(v as StatusFilter)}
         >
           <option value="all">{t('games.filters.anyStatus')}</option>
           <option value="pending">{t('games.filters.pending')}</option>
           <option value="running">{t('games.filters.running')}</option>
           <option value="done">{t('games.filters.analyzed')}</option>
           <option value="error">{t('games.filters.error')}</option>
-        </select>
+        </FilterSelect>
         <TimeClassChips
           selection={timeClassSelection}
           onChange={setTimeClassSelection}
@@ -184,8 +189,13 @@ export function GamesPage() {
                       {g.userRating ? ` (${g.userRating})` : ''}
                     </div>
                   </td>
-                  <td className="p-2 text-text-muted truncate max-w-[200px]">
-                    {g.opening ?? '—'}
+                  <td className="p-2 max-w-[220px]">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-text-muted truncate">
+                        {g.opening ?? '—'}
+                      </span>
+                      <BrilliantBadge count={g.brilliantCount} />
+                    </div>
                   </td>
                   <td className="p-2">
                     <ResultBadge result={g.result} />
@@ -223,6 +233,68 @@ export function GamesPage() {
         </table>
       </div>
     </div>
+  );
+}
+
+/**
+ * A `<select>` with its field name rendered inline to the left, inside
+ * the control's border. Keeps the filter row compact (no stacked labels
+ * pushing the row taller) while making it unambiguous what each dropdown
+ * acts on. The native select keeps its own arrow and keyboard handling;
+ * we only strip its border so the wrapper draws the single outline.
+ */
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex items-center gap-1.5 rounded-md bg-bg-soft border border-border pl-2.5 pr-1 text-sm focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/30">
+      <span className="text-text-muted whitespace-nowrap text-xs">{label}</span>
+      <select
+        className="bg-transparent border-0 py-1.5 pr-1 text-sm text-text focus:outline-none focus:ring-0"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {children}
+      </select>
+    </label>
+  );
+}
+
+/**
+ * Teal `!!` badge marking a game where the user played a brilliancy.
+ * `!!` and the `brilliant` colour token are already how the move list
+ * and the on-board badge mark these, so the notation carries over
+ * without needing a legend.
+ *
+ * Renders nothing unless the count is a positive number: `undefined`
+ * means "not counted yet" (unanalyzed, or analyzed before the backfill
+ * ran) and `0` means "counted, none found" — neither should show a
+ * badge, and neither should be confused for the other.
+ */
+function BrilliantBadge({ count }: { count?: number }) {
+  const { t } = useTranslation();
+  if (!count || count < 1) return null;
+  const label = count > 1 ? `!!×${count}` : '!!';
+  const title =
+    count > 1
+      ? t('games.brilliantTitlePlural', { count })
+      : t('games.brilliantTitle');
+  return (
+    <span
+      className="shrink-0 rounded px-1 py-0.5 text-[11px] font-mono font-semibold leading-none bg-brilliant/15 text-brilliant"
+      title={title}
+      aria-label={title}
+    >
+      {label}
+    </span>
   );
 }
 

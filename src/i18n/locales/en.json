@@ -256,7 +256,9 @@
       "pending": "Pending",
       "running": "Running",
       "analyzed": "Analyzed",
-      "error": "Error"
+      "error": "Error",
+      "resultLabel": "Result",
+      "analysisLabel": "Analysis"
     },
     "table": {
       "date": "Date",
@@ -282,7 +284,9 @@
       "error": "error"
     },
     "retry": "Retry",
-    "review": "Review"
+    "review": "Review",
+    "brilliantTitle": "You played a brilliant move in this game",
+    "brilliantTitlePlural": "You played {{count}} brilliant moves in this game"
   },
   "weaknesses": {
     "title": "Weaknesses",

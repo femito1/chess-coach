@@ -82,6 +82,25 @@ export interface Game {
    *      we already iterated the moves. */
   userTimeSec?: number;
   userPlyCount?: number;
+  /** How many `brilliant` moves the *user* played in this game. Cached
+   *  onto the game row so the Games table can badge brilliancies from
+   *  the light projection — the classifications themselves live in the
+   *  separate `analyses` table, and reading every analysis row per
+   *  render is exactly the cost `listGamesLight` exists to avoid.
+   *
+   *  Same denormalization + lifecycle as `accuracy`: written by the
+   *  queue when a game finishes analysis, refreshed by the boot
+   *  recompute pass (so a change to the brilliant rules re-stamps the
+   *  library), and backfilled once for games analyzed before this
+   *  shipped.
+   *
+   *  `undefined` means "not known yet" (unanalyzed, or analyzed before
+   *  the backfill ran) and renders no badge; `0` means "analyzed, no
+   *  brilliancies". Keeping those distinct is what lets the backfill be
+   *  idempotent without re-reading already-stamped rows. Only the
+   *  user's own moves count — a badge for the opponent's brilliancy
+   *  would be actively misleading. */
+  brilliantCount?: number;
 }
 
 export interface MoveEval {
