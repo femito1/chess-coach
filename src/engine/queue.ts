@@ -9,6 +9,7 @@ import {
   db,
 } from '@/db/schema';
 import {
+  backfillBrilliantCounts,
   backfillUserTimeStats,
   nextPendingGame,
   recomputeClassificationsAndAccuracies,
@@ -208,6 +209,18 @@ export async function startAnalysisQueue(): Promise<void> {
         console.info(
           `[queue] cached user-time stats for ${backfilled} games`,
         );
+      }
+    });
+
+    // Stamp `brilliantCount` for games analyzed before the Games-tab
+    // badge shipped. Reuses the "caching" phase label rather than adding
+    // a banner of its own: it only re-reads classifications already in
+    // `analyses`, so it's orders of magnitude cheaper than the recompute
+    // above and finishes too fast to be worth announcing.
+    await bootStep('backfillBrilliantCounts', async () => {
+      const stamped = await backfillBrilliantCounts();
+      if (stamped > 0) {
+        console.info(`[queue] stamped brilliant counts for ${stamped} games`);
       }
     });
 

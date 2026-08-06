@@ -22,21 +22,36 @@ import {
  * Bump rules:
  *   RECOMPUTE_VERSION   — bump when classifyMove / detectMotifs /
  *                         computeAccuracy / detectPhase / clock-derivation
- *                         logic changes its output for existing data, or
- *                         when a new derived field needs stamping onto
- *                         already-analyzed games (v3 = `brilliantCount`).
+ *                         logic changes its output for existing data.
+ *
+ *                         Do NOT bump this merely to stamp a new derived
+ *                         field onto existing games. This pass re-runs
+ *                         `classifyMove` + `detectMotifs` + `detectPhase`
+ *                         over every move of every analyzed game, which
+ *                         parses FENs through chess.js and is measured in
+ *                         seconds-to-minutes on a large library. A field
+ *                         that can be computed from data already stored in
+ *                         `analyses` deserves its own cheap pass with its
+ *                         own version stamp — see
+ *                         `BRILLIANT_BACKFILL_VERSION`.
  *   OPENING_REFRESH_VERSION
  *                       — bump when reparseOpeningFromPgn changes its
  *                         output for existing PGNs (e.g. updated openings
  *                         dataset).
  */
-export const RECOMPUTE_VERSION = 3;
+export const RECOMPUTE_VERSION = 2;
 export const OPENING_REFRESH_VERSION = 1;
 /** Version stamp for the boot-time `backfillUserTimeStats` pass. Bump
  *  this any time `computeUserTimeStats` would produce different output
  *  for an existing PGN — e.g. a fix to how `%clk` increments are
  *  handled, or a change to the no-clock fallback heuristic. */
 export const USER_TIME_BACKFILL_VERSION = 1;
+/** Version stamp for the boot-time `backfillBrilliantCounts` pass. Cheap
+ *  by construction — it only re-reads stored classifications — so bumping
+ *  this is safe in a way that bumping `RECOMPUTE_VERSION` is not. Bump
+ *  when `countUserBrilliancies` or the `brilliant` classification rule
+ *  changes its output for existing analyses. */
+export const BRILLIANT_BACKFILL_VERSION = 1;
 
 /** Order-sensitive equality on two motif arrays. Cheap shortcut used
  *  by `recomputeClassificationsAndAccuracies` instead of a per-move
@@ -337,12 +352,21 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
   force?: boolean;
 }): Promise<number> {
   // Skip-version fast path: by far the most common case is "we already
-  // ran this exact recompute version against this DB". On a 1 k-game
-  // library that fast path returns in single-digit milliseconds instead
-  // of the multi-second pass that used to fire on every boot.
+  // ran this recompute version against this DB". On a 1 k-game library
+  // that fast path returns in single-digit milliseconds instead of the
+  // multi-second pass that used to fire on every boot.
+  //
+  // `>=`, not `===`, so a *rolled-back* version can't re-trigger the
+  // expensive pass. The v3 build (2026-08-07) bumped this to stamp a
+  // cheap counting field and was reverted to v2; with an equality check,
+  // every DB that briefly saw v3 would run the full re-classification
+  // one final time on the next load — re-freezing exactly the users the
+  // rollback is meant to rescue. A DB carrying a newer stamp has by
+  // definition already been through at least as new a rule set.
   if (!opts?.force) {
     const settings = await getSettings();
-    if (settings.lastRecomputeVersion === RECOMPUTE_VERSION) return 0;
+    const stamped = settings.lastRecomputeVersion;
+    if (stamped != null && stamped >= RECOMPUTE_VERSION) return 0;
   }
 
   const doneIds = (await db.games
@@ -442,12 +466,11 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
       const accuracyChanged =
         !prev || prev.white !== accuracy.white || prev.black !== accuracy.black;
 
-      // Doubles as the backfill for games analyzed before
-      // `brilliantCount` existed: `undefined !== 0`, so a game with no
-      // brilliancies still gets stamped once and then compares equal on
-      // every later pass. Without that, "analyzed, none found" would be
-      // indistinguishable from "never counted" and the badge column
-      // could never be trusted.
+      // `brilliantCount` is refreshed here too, but only as a rider on a
+      // pass that was already going to run — it must never be the
+      // *reason* this pass runs (see the RECOMPUTE_VERSION bump rules).
+      // Since we just re-derived every classification, the freshly
+      // computed count is the authoritative one.
       const brilliantCount = countUserBrilliancies(newMoves, g.userColor);
       const brilliantChanged = g.brilliantCount !== brilliantCount;
 
@@ -516,7 +539,10 @@ export async function refreshOpeningMetadata(opts?: {
 }): Promise<number> {
   if (!opts?.force) {
     const settings = await getSettings();
-    if (settings.lastOpeningRefreshVersion === OPENING_REFRESH_VERSION) return 0;
+    // `>=` for the same rollback-safety reason as
+    // `recomputeClassificationsAndAccuracies`.
+    const stamped = settings.lastOpeningRefreshVersion;
+    if (stamped != null && stamped >= OPENING_REFRESH_VERSION) return 0;
   }
 
   const ids = (await db.games.toCollection().primaryKeys()) as string[];
@@ -632,9 +658,8 @@ export async function backfillUserTimeStats(opts?: {
 }): Promise<number> {
   if (!opts?.force) {
     const settings = await getSettings();
-    if (settings.lastUserTimeBackfillVersion === USER_TIME_BACKFILL_VERSION) {
-      return 0;
-    }
+    const stamped = settings.lastUserTimeBackfillVersion;
+    if (stamped != null && stamped >= USER_TIME_BACKFILL_VERSION) return 0;
   }
 
   // Lazy-imported to avoid a cycle: progress.ts → schema.ts → queries.ts.
@@ -689,5 +714,73 @@ export async function backfillUserTimeStats(opts?: {
       lastUserTimeBackfillVersion: USER_TIME_BACKFILL_VERSION,
     });
   }
+  return updated;
+}
+
+/**
+ * Stamp `Game.brilliantCount` onto games analyzed before that field
+ * existed.
+ *
+ * Deliberately its own pass rather than a `RECOMPUTE_VERSION` bump. The
+ * count is derivable from classifications *already stored* in `analyses`,
+ * so this reads them as-is — no `classifyMove`, no `detectMotifs`, no
+ * chess.js FEN parsing, and no writes to the `analyses` table at all.
+ * That's the difference between a pass measured in milliseconds and the
+ * full re-classification, which walks every move of every game and locks
+ * the main thread for seconds-to-minutes on a large library.
+ *
+ * (Shipping this as a RECOMPUTE_VERSION bump is exactly the mistake that
+ * froze the app on 2026-08-07: a cheap counting field dragged the whole
+ * re-classification along with it.)
+ *
+ * Skips games with no analysis row — an unanalyzed game has no
+ * classifications to count, and leaving `brilliantCount` undefined is the
+ * correct "not known yet" state. The queue stamps it at analysis time.
+ */
+export async function backfillBrilliantCounts(opts?: {
+  force?: boolean;
+}): Promise<number> {
+  if (!opts?.force) {
+    const settings = await getSettings();
+    const stamped = settings.lastBrilliantBackfillVersion;
+    if (stamped != null && stamped >= BRILLIANT_BACKFILL_VERSION) return 0;
+  }
+
+  const doneIds = (await db.games
+    .where('analysisStatus')
+    .equals('done')
+    .primaryKeys()) as string[];
+  let updated = 0;
+
+  for (let start = 0; start < doneIds.length; start += RECOMPUTE_CHUNK) {
+    const chunkIds = doneIds.slice(start, start + RECOMPUTE_CHUNK);
+    const games = await db.games.bulkGet(chunkIds);
+    const analyses = await db.analyses.bulkGet(chunkIds);
+
+    const merged: Game[] = [];
+    for (let i = 0; i < chunkIds.length; i++) {
+      const g = games[i];
+      const a = analyses[i];
+      if (!g || !a) continue;
+      const brilliantCount = countUserBrilliancies(a.moves, g.userColor);
+      // `undefined !== 0` on the first run, so a game with no
+      // brilliancies still gets stamped once and compares equal
+      // thereafter. That's what keeps this idempotent and what lets the
+      // badge distinguish "none found" from "never counted".
+      if (g.brilliantCount === brilliantCount) continue;
+      merged.push({ ...g, brilliantCount });
+      updated++;
+    }
+
+    if (merged.length > 0) {
+      await db.games.bulkPut(merged);
+    }
+
+    await yieldToBrowser();
+  }
+
+  await updateSettings({
+    lastBrilliantBackfillVersion: BRILLIANT_BACKFILL_VERSION,
+  });
   return updated;
 }

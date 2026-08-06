@@ -116,6 +116,34 @@ await runBrowserTest({
     console.log('Phase 4 (force):', phase4);
     expect(phase4.updated, 'phase 4: force=true must update').toBeAtLeast(1);
 
-    console.log('PASS: empty-boot does not stamp; real pass stamps; same-version boot skips; force bypasses');
+    // Phase 5: a DB stamped with a NEWER version than the code must skip.
+    //
+    // Regression guard for 2026-08-07: RECOMPUTE_VERSION was bumped 2→3
+    // purely to stamp a cheap counting field, which froze the app on
+    // reload, and was then reverted to 2. Under the original `===` check
+    // every DB that had briefly seen v3 would run the full
+    // re-classification one final time — re-freezing precisely the users
+    // the rollback was meant to rescue. A newer stamp means the DB has
+    // already been through at least as new a rule set, so skip.
+    const phase5 = await page.evaluate(async () => {
+      const { db } = await import('/src/db/schema.ts');
+      const { recomputeClassificationsAndAccuracies, RECOMPUTE_VERSION } =
+        await import('/src/db/queries.ts');
+      await db.settings.update('main', {
+        lastRecomputeVersion: RECOMPUTE_VERSION + 1,
+      });
+      await db.games.update('rs-001', { accuracy: { white: 2.0, black: 2.0 } });
+      const updated = await recomputeClassificationsAndAccuracies();
+      const g = await db.games.get('rs-001');
+      return { updated, accuracy: g?.accuracy };
+    });
+    console.log('Phase 5 (rolled-back version):', phase5);
+    expect(phase5.updated, 'phase 5: newer stamp must skip the pass').toBe(0);
+    expect(
+      phase5.accuracy.white,
+      'phase 5: sentinel survived (no rewrite)',
+    ).toBe(2.0);
+
+    console.log('PASS: empty-boot does not stamp; real pass stamps; same-version boot skips; force bypasses; newer stamp skips');
   },
 });

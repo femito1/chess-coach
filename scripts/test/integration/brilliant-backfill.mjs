@@ -21,12 +21,12 @@ import { runBrowserTest, expect, DEFAULT_URL, appendBypass } from '../harness.mj
  *  3. The pass is idempotent. A second run must report zero changes, or
  *     every boot re-writes the whole library and thrashes `useLiveQuery`.
  *
- * Fixture note: the recompute pass RE-DERIVES each classification via
- * `classifyMove` rather than trusting the stored value, so the FENs must
- * be a position where `brilliant` genuinely reproduces. Both FENs are
- * verified non-book — `classifyMove` short-circuits to `'book'` when both
- * sides of a move are in the openings library, which silently defeated an
- * earlier version of this test that used a real Italian Game position.
+ *  4. It is CHEAP. `backfillBrilliantCounts` reads the classifications
+ *     already stored in `analyses` — it must not re-derive them and must
+ *     not rewrite the `analyses` table. Shipping this as a
+ *     `RECOMPUTE_VERSION` bump instead (2026-08-07) dragged the full
+ *     re-classification along and froze the app on reload; the assertion
+ *     that `analyses` is untouched is what pins the distinction.
  */
 await runBrowserTest({
   name: 'brilliant-backfill',
@@ -114,9 +114,13 @@ await runBrowserTest({
         { gameId: 'g2', depth: 16, analyzedAt: Date.now(), engine: 'sf', moves },
       ]);
 
-      // Pretend this DB was last processed by the pre-brilliantCount
-      // recompute version, which is what a real upgrading user looks like.
-      await updateSettings({ lastRecomputeVersion: 2 });
+      // A real upgrading user: already at the current recompute version
+      // (so the expensive pass is skipped), brilliant backfill never run.
+      const { RECOMPUTE_VERSION } = await import('/src/db/queries.ts');
+      await updateSettings({
+        lastRecomputeVersion: RECOMPUTE_VERSION,
+        lastBrilliantBackfillVersion: undefined,
+      });
       const rows = await db.games.toArray();
       return rows.map((r) => ({ id: r.id, bc: r.brilliantCount ?? null }));
     });
@@ -126,16 +130,31 @@ await runBrowserTest({
       'fixture starts with no brilliantCount stamped',
     ).toBe(true);
 
-    const after = await page.evaluate(async () => {
+    // The expensive re-classification must NOT be what stamps this.
+    const expensive = await page.evaluate(async () => {
       const { recomputeClassificationsAndAccuracies } = await import(
         '/src/db/queries.ts'
       );
+      return recomputeClassificationsAndAccuracies();
+    });
+    expect(
+      expensive,
+      'full re-classification stays skipped for an up-to-date DB',
+    ).toBe(0);
+
+    const after = await page.evaluate(async () => {
+      const { backfillBrilliantCounts } = await import('/src/db/queries.ts');
       const { db } = await import('/src/db/schema.ts');
-      const updated = await recomputeClassificationsAndAccuracies();
+      const before = await db.analyses.toArray();
+      const updated = await backfillBrilliantCounts();
       const rows = await db.games.toArray();
+      const analysesAfter = await db.analyses.toArray();
       return {
         updated,
         rows: rows.map((r) => ({ id: r.id, bc: r.brilliantCount ?? null })),
+        // The cheap pass reads `analyses`; it must never write to it.
+        analysesUnchanged:
+          JSON.stringify(before) === JSON.stringify(analysesAfter),
       };
     });
 
@@ -143,12 +162,14 @@ await runBrowserTest({
     const g2 = after.rows.find((r) => r.id === 'g2');
     expect(g1.bc, 'white user is credited for their own brilliancy').toBe(1);
     expect(g2.bc, "black user is NOT credited for white's brilliancy").toBe(0);
+    expect(
+      after.analysesUnchanged,
+      'cheap pass does not rewrite the analyses table',
+    ).toBe(true);
 
     const second = await page.evaluate(async () => {
-      const { recomputeClassificationsAndAccuracies } = await import(
-        '/src/db/queries.ts'
-      );
-      return recomputeClassificationsAndAccuracies({ force: true });
+      const { backfillBrilliantCounts } = await import('/src/db/queries.ts');
+      return backfillBrilliantCounts();
     });
     expect(second, 'a second pass changes nothing (idempotent)').toBe(0);
   },
