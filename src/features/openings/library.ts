@@ -89,11 +89,140 @@ export function getFamilies(sort: FamilySort = 'popular'): FamilyGroup[] {
   return sortFamilies(FAMILIES_RAW, sort);
 }
 
-/** True when `family` is a real openings-library family (not a Chess.com
- *  oddity / "Unknown"). Used by dashboard deep-links so we don't offer
- *  a dead "Open" button for names the library can't resolve. */
+/**
+ * Fold a family name down to a comparison key that survives the round
+ * trip through Chess.com's ECO-URL slugs.
+ *
+ * `importer.parseOpeningFromEcoUrl` builds our stored opening names from
+ * a slug like `Caro-Kann-Defense-Advance-Variation` by replacing *every*
+ * hyphen with a space — so a game's family reads "Caro Kann Defense"
+ * while the library (from Lichess' dataset) calls it "Caro-Kann Defense".
+ * Chess.com slugs are also plain ASCII, so "Réti Opening" arrives as
+ * "Reti Opening" and "King's Gambit" as "Kings Gambit".
+ *
+ * All punctuation *and* whitespace is dropped, not just folded to
+ * spaces: chess.com renders an apostrophe as a hyphen, so
+ * `Van-t-Kruijs-Opening` → "Van t Kruijs Opening", which needs to match
+ * "Van't Kruijs Opening" across a word boundary the original had none of.
+ *
+ * Verified collision-free across the bundled dataset (148 families → 148
+ * distinct keys); `library.test.ts` pins that invariant so a future
+ * dataset refresh can't silently start merging two real families.
+ */
+function normalizeFamilyKey(family: string): string {
+  return family
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '');
+}
+
+/**
+ * Same fold, but punctuation collapses to a single space instead of
+ * vanishing. Used to check that a prefix match landed on a word
+ * boundary: `normalizeFamilyKey` drops spaces entirely (needed for the
+ * "Van t Kruijs" ↔ "Van't Kruijs" case), which on its own would let
+ * "Bird Opening" match a "Bird Openings…" family mid-word.
+ */
+function looseFamilyKey(family: string): string {
+  return family
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/['’]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, ' ')
+    .trim();
+}
+
+/** Canonical-name lookup, built once alongside `FAMILIES_RAW`. */
+const FAMILY_BY_KEY: Map<string, string> = new Map(
+  FAMILIES_RAW.map((g) => [normalizeFamilyKey(g.family), g.family]),
+);
+
+/**
+ * Resolve any spelling of a family name to the library's canonical one,
+ * or `null` when the library has no such family (Chess.com oddities,
+ * the dashboard's synthetic "Unknown" bucket, …).
+ *
+ * Dashboard deep-links go through this twice: once to decide whether to
+ * offer the link at all, and once to build the `?family=` value — the
+ * library only selects on its own canonical spelling, so linking with
+ * the raw game-derived name would land on an empty page.
+ *
+ * Three stages, because the two naming systems disagree in both
+ * directions.
+ *
+ * 1. Exact fold. Handles the common case.
+ *
+ * 2. Library-name is a prefix of the input → collapse to that family.
+ *    `openingFamily()` splits the stored name on the first colon, and
+ *    the importer only inserts one at the first `Variation|Defense|
+ *    Attack|Gambit|System|Opening` token — so `Sicilian-Defense-Najdorf`
+ *    splits cleanly at "Defense", but `Vienna-Game-Falkbeer-Variation`
+ *    has no such token before its tail and arrives as one blob. Same for
+ *    `Italian-Game-Giuoco-Piano` and `Ruy-Lopez-Berlin-Defense`, where
+ *    the marker word is the suffix rather than a separator. Longest-wins
+ *    so a QGD game files under "Queen's Gambit Declined", not the
+ *    shorter "Queen's Gambit" it also prefixes.
+ *
+ * 3. Input is a prefix of a library name → adopt that family. Lichess
+ *    sometimes has no bare family for an opening chess.com names plainly:
+ *    a "Vienna Gambit" game has 15 real library lines, but they all sit
+ *    under `Vienna Gambit, with Max Lange Defense`, so stages 1 and 2
+ *    both miss and the user got no link at all. Shortest-wins here (the
+ *    least-qualified family is the closest thing to the bare name), and
+ *    the match must fall on a word boundary in the *original* spelling —
+ *    the folded key drops spaces, so a raw `startsWith` would let
+ *    "Bird Opening" adopt a hypothetical "Bird Openings Cousin". We
+ *    re-check against a space-preserving fold to enforce that.
+ */
+export function resolveOpeningFamily(family: string): string | null {
+  const key = normalizeFamilyKey(family);
+  if (!key) return null;
+
+  const exact = FAMILY_BY_KEY.get(key);
+  if (exact) return exact;
+
+  // Stage 2 — longest library family that the input extends.
+  let ancestor: string | null = null;
+  let ancestorLen = 0;
+  for (const [candidateKey, canonical] of FAMILY_BY_KEY) {
+    if (candidateKey.length <= ancestorLen) continue;
+    if (!key.startsWith(candidateKey)) continue;
+    ancestor = canonical;
+    ancestorLen = candidateKey.length;
+  }
+  if (ancestor) return ancestor;
+
+  // Stage 3 — shortest library family that extends the input, requiring
+  // a word/punctuation boundary at the join so we only ever adopt a
+  // *qualified* version of the same opening.
+  const loose = looseFamilyKey(family);
+  let descendant: string | null = null;
+  let descendantLen = Infinity;
+  for (const g of FAMILIES_RAW) {
+    const candidate = normalizeFamilyKey(g.family);
+    if (candidate.length <= key.length) continue;
+    if (candidate.length >= descendantLen) continue;
+    if (!candidate.startsWith(key)) continue;
+    const candidateLoose = looseFamilyKey(g.family);
+    if (
+      candidateLoose !== loose &&
+      !candidateLoose.startsWith(`${loose} `)
+    ) {
+      continue;
+    }
+    descendant = g.family;
+    descendantLen = candidate.length;
+  }
+  return descendant;
+}
+
+/** True when `family` names a real openings-library family (not a
+ *  Chess.com oddity / "Unknown"). Spelling-tolerant — see
+ *  `resolveOpeningFamily`. */
 export function isKnownOpeningFamily(family: string): boolean {
-  return FAMILIES_RAW.some((g) => g.family === family);
+  return resolveOpeningFamily(family) !== null;
 }
 
 /** Pure sort, exported separately so the unit test can pin every mode

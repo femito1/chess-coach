@@ -15,9 +15,28 @@ function load() {
       enabled: true,
     },
     (items) => {
+      const coachOrigin = items.coachOrigin || DEFAULT_COACH_ORIGIN;
       $username.value = items.chesscomUsername || '';
-      $coach.value = items.coachOrigin || DEFAULT_COACH_ORIGIN;
+      $coach.value = coachOrigin;
       $enabled.checked = Boolean(items.enabled);
+
+      // Seed the origin into storage on first run instead of only
+      // showing it in the input.
+      //
+      // `build-extension.mjs --coach-origin=…` rewrites the constant
+      // above (and only above — content.js keeps the localhost dev
+      // default on purpose). But `storage.sync.get` defaults are
+      // read-only: nothing was persisted until the user pressed Save.
+      // A user who installed, saw this page auto-open, and closed it
+      // without saving left storage empty — so content.js fell back to
+      // its own `http://localhost:5173` and every "Review" click opened
+      // a dead tab with no hint as to why.
+      //
+      // Only writes when the key is genuinely absent, so it can never
+      // clobber a real user-chosen origin.
+      if (!items.coachOrigin) {
+        chrome.storage.sync.set({ coachOrigin });
+      }
     },
   );
 }

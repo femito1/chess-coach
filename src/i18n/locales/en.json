@@ -132,7 +132,9 @@
     "openingTooltip": "{{family}} — {{wins}}W {{draws}}D {{losses}}L over {{games}} games",
     "openingRow": "{{wins}}W · {{draws}}D · {{losses}}L · {{games}}g",
     "openInLibrary": "Open",
-    "openInLibraryTitle": "View {{family}} in the openings library"
+    "openInLibraryTitle": "View {{family}} in the openings library",
+    "openInRepertoire": "In your repertoire",
+    "openInRepertoireTitle": "Go to your {{family}} repertoire"
   },
   "settings": {
     "title": "Settings",

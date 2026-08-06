@@ -19,7 +19,9 @@ import {
   type GameForCharts,
 } from './progress';
 import { usePersistedState } from '@/lib/usePersistedState';
-import { isKnownOpeningFamily } from '@/features/openings/library';
+import { resolveOpeningFamily } from '@/features/openings/library';
+import { db } from '@/db/schema';
+import { useLiveQuery } from 'dexie-react-hooks';
 
 const AXIS_COLOR = '#9aa3b2';
 const GRID_COLOR = '#2a313d';
@@ -521,6 +523,23 @@ function OpeningWinRateList({
   openings: ReturnType<typeof winRateByOpening>;
 }) {
   const { t } = useTranslation();
+  // Family-bound repertoires the user already owns. When a chart row
+  // matches one, the link goes to `/repertoire` (flash-highlighting that
+  // card) instead of the library — the user's own prep is the more
+  // useful destination than the generic line list. Keyed by the
+  // library's *canonical* family name so lookups can go through
+  // `resolveOpeningFamily`.
+  const repIdByFamily = useLiveQuery(async () => {
+    const reps = await db.repertoires.toArray();
+    const map = new Map<string, string>();
+    for (const r of reps) {
+      if (r.kind !== 'family' || !r.family) continue;
+      const canonical = resolveOpeningFamily(r.family);
+      if (canonical && !map.has(canonical)) map.set(canonical, r.id);
+    }
+    return map;
+  }, []);
+
   return (
     <ul className="space-y-2">
       {openings.map((o) => {
@@ -531,7 +550,22 @@ function OpeningWinRateList({
             : o.winRate >= 0.45
               ? '#f0c36d'
               : '#e06c75';
-        const inLibrary = isKnownOpeningFamily(o.family);
+        // Chart rows carry the game-derived spelling ("Caro Kann
+        // Defense"); the library and repertoires use the canonical one
+        // ("Caro-Kann Defense"). Always link with the canonical name.
+        const canonical = resolveOpeningFamily(o.family);
+        const repId = canonical ? repIdByFamily?.get(canonical) : undefined;
+        const target = repId
+          ? `/repertoire?highlight=${encodeURIComponent(repId)}`
+          : canonical
+            ? `/openings?family=${encodeURIComponent(canonical)}`
+            : null;
+        const linkLabel = repId
+          ? t('charts.openInRepertoire')
+          : t('charts.openInLibrary');
+        const linkTitle = repId
+          ? t('charts.openInRepertoireTitle', { family: canonical })
+          : t('charts.openInLibraryTitle', { family: canonical });
         return (
           <li
             key={o.family}
@@ -546,14 +580,14 @@ function OpeningWinRateList({
           >
             <div className="min-w-0 flex items-center gap-2">
               <span className="text-sm truncate">{o.family}</span>
-              {inLibrary && (
+              {target && (
                 <Link
-                  to={`/openings?family=${encodeURIComponent(o.family)}`}
+                  to={target}
                   className="shrink-0 inline-flex items-center gap-1 rounded-md border border-border/80 bg-bg-raised/60 px-1.5 py-0.5 text-[11px] text-accent hover:border-accent/50 hover:bg-accent/10 transition-colors"
-                  title={t('charts.openInLibraryTitle', { family: o.family })}
-                  aria-label={t('charts.openInLibraryTitle', { family: o.family })}
+                  title={linkTitle}
+                  aria-label={linkTitle}
                 >
-                  {t('charts.openInLibrary')}
+                  {linkLabel}
                   <span aria-hidden className="opacity-70">
                     →
                   </span>

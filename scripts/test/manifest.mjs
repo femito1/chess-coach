@@ -66,6 +66,7 @@ export const BROWSER_TESTS = [
   { name: 'repertoire-line-auto-retry', file: 'scripts/test/e2e/repertoire-line-auto-retry.mjs',         category: 'e2e' },
   { name: 'practice-freeplay',          file: 'scripts/test/e2e/practice-freeplay.mjs',                  category: 'e2e' },
   { name: 'guided-opening-learning',    file: 'scripts/test/e2e/guided-opening-learning.mjs',            category: 'e2e' },
+  { name: 'dashboard-opening-deeplinks', file: 'scripts/test/e2e/dashboard-opening-deeplinks.mjs',       category: 'e2e' },
 ];
 
 export const CATEGORIES = ['unit', 'integration', 'e2e', 'live'];

@@ -286,3 +286,82 @@
 .move-cell.current {
   @apply bg-accent/20 rounded;
 }
+
+/* ---------------------------------------------------------------- *
+ *  Deep-link flash highlight.
+ * ---------------------------------------------------------------- *
+ *
+ *  Applied for ~2 s to whatever a deep link targeted — the repertoire
+ *  card reached from the dashboard's win-rate-by-opening list, or the
+ *  family row in the openings sidebar. Purely wayfinding: the page has
+ *  already scrolled the target into view, and the yellow pulse answers
+ *  "which one of these did I just click?" without making the user
+ *  re-read every title.
+ *
+ *  Yellow (#f0c36d, the `inaccuracy` token) rather than accent blue:
+ *  accent already means "interactive / selected" everywhere else, so a
+ *  blue flash would read as a selection change rather than a pointer.
+ *
+ *  The tint is painted by an ::after overlay rather than by animating
+ *  `background-color` / `border-color` on the element itself. Those
+ *  properties carry real styling here (`.card` is `bg-bg-soft` +
+ *  `border-border`), and a keyframe that ends at `transparent` pops the
+ *  card's own background off for a frame on the final keyframe. An
+ *  overlay composites on top and leaves the base styling untouched, so
+ *  the element is pixel-identical before and after.
+ *
+ *  Requires a positioned host; `.flash-highlight` sets `position:
+ *  relative` itself so callers don't have to remember.
+ */
+.flash-highlight {
+  position: relative;
+}
+
+.flash-highlight::after {
+  content: '';
+  position: absolute;
+  /* Slight bleed so the ring reads outside a bordered card. */
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+  background-color: rgb(240 195 109 / 0.18);
+  box-shadow:
+    inset 0 0 0 1px rgb(240 195 109 / 0.75),
+    0 0 0 3px rgb(240 195 109 / 0.15);
+  animation: deep-link-flash 2s ease-in-out 1 both;
+}
+
+/* Two pulses, then out. `both` fill-mode holds the final (opacity: 0)
+ * frame so the overlay stays invisible if the class outlives the
+ * animation by a frame or two. */
+@keyframes deep-link-flash {
+  0% {
+    opacity: 0;
+  }
+  12%,
+  42% {
+    opacity: 1;
+  }
+  27% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Reduced motion: no pulsing. Hold a steady tint, then fade once. */
+@media (prefers-reduced-motion: reduce) {
+  .flash-highlight::after {
+    animation: deep-link-flash-reduced 2s ease-out 1 both;
+  }
+  @keyframes deep-link-flash-reduced {
+    0%,
+    65% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+}

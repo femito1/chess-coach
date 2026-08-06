@@ -1,9 +1,14 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Repertoire } from '@/db/schema';
 import { deleteRepertoire, dueCards, enumerateLines } from './store';
+
+/** How long the deep-link flash stays on the card. Matches the
+ *  `deep-link-flash` keyframe duration in `styles/index.css` — the class
+ *  has to outlive the animation or it cuts off mid-pulse. */
+const FLASH_MS = 2000;
 
 /**
  * Repertoire list page. After the family-first refactor, repertoires
@@ -22,6 +27,7 @@ import { deleteRepertoire, dueCards, enumerateLines } from './store';
  */
 export function RepertoirePage() {
   const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const reps = useLiveQuery(
     () => db.repertoires.orderBy('updatedAt').reverse().toArray(),
     [],
@@ -30,6 +36,60 @@ export function RepertoirePage() {
   const [lineCounts, setLineCounts] = useState<
     Record<string, { active: number; total: number }>
   >({});
+
+  // `/repertoire?highlight=<repId>` — the dashboard's win-rate-by-opening
+  // list links here when the user already has a repertoire for that
+  // family. Scroll the card into view and flash it so it's obvious which
+  // one was meant; a long list would otherwise dump the user at the top
+  // with no idea where their Caro-Kann card is.
+  //
+  // The param is consumed on arrival (`replace: true`, no history entry)
+  // so a later reload / back-forward doesn't re-flash. `highlightId`
+  // holds the value in state, which is what keeps the flash alive after
+  // the URL is clean.
+  const highlightParam = searchParams.get('highlight');
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!highlightParam) return;
+    setHighlightId(highlightParam);
+    const next = new URLSearchParams(searchParams);
+    next.delete('highlight');
+    setSearchParams(next, { replace: true });
+  }, [highlightParam, searchParams, setSearchParams]);
+
+  // Clear the flash class once the animation has played out. Re-arming
+  // on every `highlightId` change means a second deep-link to the same
+  // page restarts the pulse instead of being swallowed.
+  useEffect(() => {
+    if (!highlightId) return;
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => {
+      flashTimerRef.current = null;
+      setHighlightId(null);
+    }, FLASH_MS);
+    return () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = null;
+    };
+  }, [highlightId]);
+
+  // Scroll the targeted card into view. Attached as a ref callback on
+  // the card itself rather than a `useEffect` + `getElementById`: the
+  // cards render from an async `useLiveQuery`, so on a cold navigation
+  // the node doesn't exist yet when an effect would first run. The ref
+  // fires exactly when the right node mounts.
+  const scrolledForRef = useRef<string | null>(null);
+  const attachHighlight = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node || !highlightId) return;
+      if (scrolledForRef.current === highlightId) return;
+      scrolledForRef.current = highlightId;
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    },
+    [highlightId],
+  );
 
   useLiveQuery(async () => {
     if (!reps) return;
@@ -90,6 +150,8 @@ export function RepertoirePage() {
               rep={r}
               dueCount={dueCounts[r.id] ?? 0}
               lineCount={lineCounts[r.id]}
+              highlighted={highlightId === r.id}
+              onMountHighlight={highlightId === r.id ? attachHighlight : undefined}
             />
           ))}
         </div>
@@ -102,15 +164,25 @@ function RepertoireCard({
   rep,
   dueCount,
   lineCount,
+  highlighted = false,
+  onMountHighlight,
 }: {
   rep: Repertoire;
   dueCount: number;
   lineCount?: { active: number; total: number };
+  /** Flash this card (deep-linked from the dashboard). */
+  highlighted?: boolean;
+  /** Ref callback used to scroll this card into view on mount. Only
+   *  passed for the highlighted card. */
+  onMountHighlight?: (node: HTMLDivElement | null) => void;
 }) {
   const { t } = useTranslation();
   const isFamily = rep.kind === 'family' || (rep.kind == null && Boolean(rep.family));
   return (
-    <div className="card p-4 flex flex-col gap-3">
+    <div
+      ref={onMountHighlight}
+      className={`card p-4 flex flex-col gap-3 ${highlighted ? 'flash-highlight' : ''}`}
+    >
       <div>
         <div className="flex items-start justify-between gap-3">
           <div className="font-medium truncate">{rep.name}</div>

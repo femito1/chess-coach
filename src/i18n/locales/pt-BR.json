@@ -132,7 +132,9 @@
     "openingTooltip": "{{family}} — {{wins}}V {{draws}}E {{losses}}D em {{games}} partidas",
     "openingRow": "{{wins}}V · {{draws}}E · {{losses}}D · {{games}}p",
     "openInLibrary": "Abrir",
-    "openInLibraryTitle": "Ver {{family}} na biblioteca de aberturas"
+    "openInLibraryTitle": "Ver {{family}} na biblioteca de aberturas",
+    "openInRepertoire": "No seu repertório",
+    "openInRepertoireTitle": "Ir para o seu repertório de {{family}}"
   },
   "settings": {
     "title": "Configurações",

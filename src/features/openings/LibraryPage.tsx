@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -16,8 +16,8 @@ import {
   getFamilies,
   getVariations,
   isFamilySort,
-  isKnownOpeningFamily,
   replayLine,
+  resolveOpeningFamily,
   searchOpenings,
   sortFamilies,
   type FamilyGroup,
@@ -38,6 +38,10 @@ type ColorFilter = 'all' | Color;
  *  applied per-render based on the user's persisted preference, not at
  *  the data layer. Cheap (~150-element sort) so we don't memoise it. */
 const FAMILIES_ALPHA: readonly FamilyGroup[] = getFamilies('alpha');
+
+/** Deep-link flash duration; matches the `deep-link-flash` keyframes in
+ *  `styles/index.css`. */
+const FLASH_MS = 2000;
 
 export function LibraryPage() {
   const { t } = useTranslation();
@@ -60,13 +64,18 @@ export function LibraryPage() {
     { isValid: isFamilySort },
   );
   // Dashboard (and any other deep link) can land on `/openings?family=…`.
-  // Keep `family` in the URL as source of truth — stripping it broke
-  // StrictMode remounts (state reset after the param was already gone).
-  // Manual family picks write the same param, so URL absence means
-  // "no family selected" (e.g. nav from `/openings?family=X` → `/openings`).
+  // The param is a one-shot *instruction*, not the source of truth: we
+  // apply it to state and then strip it. Keeping it in the URL and
+  // mirroring it into state both ways meant a manual family pick had to
+  // write the param, which turned every in-page click into a navigation
+  // and made "clear selection" impossible to express.
+  //
+  // `resolveOpeningFamily` (not a bare equality check) because a link
+  // may arrive with the game-derived spelling — "Caro Kann Defense" for
+  // the library's "Caro-Kann Defense".
   const familyParam = searchParams.get('family')?.trim() ?? '';
   const [selectedFamily, setSelectedFamily] = useState<string | null>(() =>
-    familyParam && isKnownOpeningFamily(familyParam) ? familyParam : null,
+    familyParam ? resolveOpeningFamily(familyParam) : null,
   );
   const [selectedLine, setSelectedLine] = useState<OpeningLine | null>(null);
   const [ply, setPly] = useState(0);
@@ -74,22 +83,57 @@ export function LibraryPage() {
     'recommended' | 'global' | 'personal' | 'shortest' | 'alpha'
   >('recommended');
   const games = useLiveQuery(() => db.games.toArray(), []);
+  // Flash + scroll the deep-linked family in the sidebar list. With 148
+  // families the list scrolls, so selecting one off-screen was silent.
+  const [flashFamily, setFlashFamily] = useState<string | null>(() =>
+    familyParam ? resolveOpeningFamily(familyParam) : null,
+  );
 
   useEffect(() => {
-    if (familyParam && isKnownOpeningFamily(familyParam)) {
-      setSelectedFamily(familyParam);
+    if (!familyParam) return;
+    const canonical = resolveOpeningFamily(familyParam);
+    if (canonical) {
+      setSelectedFamily(canonical);
       setSelectedLine(null);
       setPly(0);
       setQuery('');
-      return;
+      setFlashFamily(canonical);
     }
-    // No / unknown family in the URL — drop any ghost selection so the
-    // library isn't stuck after the query param disappears. Never touch
-    // the persisted color filter.
-    setSelectedFamily(null);
-    setSelectedLine(null);
-    setPly(0);
-  }, [familyParam]);
+    // Consume the param either way — an unresolvable family shouldn't
+    // stick around in the URL re-triggering this on every render. Note
+    // this deliberately does NOT clear `selectedFamily` on an unknown
+    // param: an earlier version did, which wiped the user's selection
+    // the moment the param was stripped.
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('family');
+        return next;
+      },
+      { replace: true },
+    );
+  }, [familyParam, setSearchParams]);
+
+  // Drop the flash class once the pulse has played out.
+  useEffect(() => {
+    if (!flashFamily) return;
+    const id = setTimeout(() => setFlashFamily(null), FLASH_MS);
+    return () => clearTimeout(id);
+  }, [flashFamily]);
+
+  // Scroll the flashed row into view. Ref callback rather than an
+  // effect + query: the row may not exist on the first commit (filters,
+  // async data), and this fires exactly when it mounts.
+  const scrolledForRef = useRef<string | null>(null);
+  const attachFlash = useCallback(
+    (node: HTMLLIElement | null) => {
+      if (!node || !flashFamily) return;
+      if (scrolledForRef.current === flashFamily) return;
+      scrolledForRef.current = flashFamily;
+      node.scrollIntoView({ block: 'center' });
+    },
+    [flashFamily],
+  );
   const personalByColor = useMemo(
     () => ({
       white: buildPersonalOpeningStats(games ?? [], 'white'),
@@ -245,18 +289,21 @@ export function LibraryPage() {
             </div>
             <ul className="max-h-[60vh] overflow-auto divide-y divide-border scrollable pr-2">
               {filteredFamilies.map((f) => (
-                <li key={f.family}>
+                <li
+                  key={f.family}
+                  ref={flashFamily === f.family ? attachFlash : undefined}
+                  className={
+                    flashFamily === f.family ? 'flash-highlight rounded-md' : undefined
+                  }
+                >
                   <button
                     type="button"
                     onClick={() => {
                       setSelectedFamily(f.family);
                       setSelectedLine(null);
                       setPly(0);
-                      const next = new URLSearchParams(searchParams);
-                      next.set('family', f.family);
-                      setSearchParams(next, { replace: true });
                     }}
-                    className={`w-full flex items-center gap-2 py-1 text-sm text-left hover:text-accent ${
+                    className={`w-full flex items-center gap-2 px-1 py-1 text-sm text-left hover:text-accent ${
                       selectedFamily === f.family ? 'text-accent' : ''
                     }`}
                   >

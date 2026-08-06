@@ -93,11 +93,19 @@ export function useLiveEval(fen: string, depth = 14): LiveEvalData | null {
   useEffect(() => {
     let cancelled = false;
     if (!fen) {
-      // Stop any in-flight search. Previously callers passed `''` into
-      // `analyze`, which cancelled via the "new job replaces old" path
-      // but also kicked off a useless empty-FEN search. Cancel-only is
-      // the correct idle behaviour.
-      engine.cancelAnalysis();
+      // Idle. Passing `''` used to reach `analyze`, which cancelled the
+      // prior job via "new job replaces old" but then kicked off a
+      // useless empty-FEN search; returning early avoids that.
+      //
+      // Also stop the in-flight search so the worker goes un-busy and
+      // `terminateEngineIfIdle` can free the WASM heap instead of
+      // no-op'ing for the remaining depth. Guarded on being the only
+      // consumer: `cancelAnalysis` on a shared singleton kills whatever
+      // job is running regardless of who started it, and a second
+      // mounted consumer (e.g. mid route-transition, where the outgoing
+      // page has gone idle while the incoming one is already analyzing)
+      // must not have its search killed out from under it.
+      if (liveEvalConsumers <= 1) engine.cancelAnalysis();
       setData(null);
       return () => {
         cancelled = true;
