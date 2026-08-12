@@ -50,6 +50,32 @@ export function guidedLineIndices(
   return [...selected].sort((a, b) => a - b);
 }
 
+/**
+ * `guidedLineIndices`, but never empty when the repertoire has lines.
+ *
+ * Active keys come from the *library* recommendations, and a key only
+ * matches a repertoire line that equals or **extends** it. So a sparse
+ * repertoire whose lines are SHALLOWER than the recommendations matches
+ * nothing: seed just the 5-ply Italian mainline and the top-5 recommended
+ * lines are all 6+ ply continuations of it, leaving the drill page with an
+ * empty session and no board — nothing to practise, on a page whose whole
+ * job is practising. (Which lines rank top-5 shifts with every opening-data
+ * refresh, so this is latent rather than rare.)
+ *
+ * When nothing matches, fall back to the lines the repertoire actually
+ * has, capped at the guided starter size so "guided" still means a small
+ * focused set.
+ */
+export function drillableGuidedIndices(
+  lines: readonly RepertoireLine[],
+  activeLineKeys: readonly string[],
+  limit = GUIDED_STARTER_SIZE,
+): number[] {
+  const matched = guidedLineIndices(lines, activeLineKeys);
+  if (matched.length > 0) return matched;
+  return lines.slice(0, Math.max(0, limit)).map((_, index) => index);
+}
+
 export function areGuidedLinesMastered(
   lines: readonly RepertoireLine[],
   selectedIndices: readonly number[],

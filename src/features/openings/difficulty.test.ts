@@ -67,6 +67,23 @@ describe('scoreLine', () => {
     expect(deepForced.forcedness).toBe('forced');
   });
 
+  it('treats zero recorded games as no rarity signal, not maximal rarity', () => {
+    // globalGames === 0 is an absence of data (nothing recorded at that
+    // position), so it must not score as "the rarest possible line". Two
+    // zero-game lines of the same depth score identically regardless of
+    // their nominal share, and neither gets a rare/forced chip.
+    const zeroA: OpeningLine = { ...line('F', 12, 0), globalGames: 0, globalShare: 0 };
+    const zeroB: OpeningLine = { ...line('F', 12, 0.5), globalGames: 0, globalShare: 0.5 };
+    const a = scoreLine(zeroA, NO_STATS, MEASURED);
+    const b = scoreLine(zeroB, NO_STATS, MEASURED);
+    expect(a.score).toBe(b.score);
+    expect(a.forcedness).toBeNull();
+    // And a zero-game line must not outrank a genuinely measured rare one
+    // purely for lacking data.
+    const measuredRare = scoreLine(line('F', 12, 0.02), NO_STATS, MEASURED);
+    expect(a.score).toBeLessThan(measuredRare.score);
+  });
+
   it('ignores share entirely for an ESTIMATED line — no rarity, no label', () => {
     // Beyond the snapshot's measured depth, share is a depth-decayed
     // estimate, so it must not move the score or produce a forced/rare

@@ -137,6 +137,19 @@ own webhook, not through Actions, so bad data would ship the instant it
 landed. It gates on unit (not e2e) so a pre-existing e2e failure can't
 freeze data refreshes.
 
+**The guided set must never resolve to nothing drillable.** Active line
+keys are *library* lines, and `guidedLineIndices` matches a key only
+against a repertoire line that equals or **extends** it. A sparse
+repertoire whose lines are shallower than the recommendations therefore
+matches nothing — seed just the 5-ply Italian mainline and every top-5
+recommendation is a 6+ ply continuation of it — leaving the drill page with
+an empty session and no board. Which lines rank top-5 shifts with every
+opening-data refresh, so this is latent, not rare: it went from dormant to
+reproducible the moment the frequency data was corrected. `PracticePage`
+therefore calls `drillableGuidedIndices`, which falls back to the
+repertoire's own lines (capped at the guided starter size). Pinned in
+`curriculum.test.ts`.
+
 **The drill picker merges repertoire and library, keyed by
 `openingLineKey`.** `buildPickerModel` (`repertoire/pickerModel.ts`) unions
 `enumerateLines` (what you can drill) with `getVariations` (what you could

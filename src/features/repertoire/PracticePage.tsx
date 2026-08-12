@@ -52,7 +52,7 @@ import { LineMoveTokens } from '@/components/LineMoveTokens';
 import { buildSolutionSteps } from '@/components/SolutionPlayer';
 import { Chess } from 'chess.js';
 import {
-  guidedLineIndices,
+  drillableGuidedIndices,
   initialActiveLineKeys,
   nextRecommendedLines,
 } from './curriculum';
@@ -439,7 +439,7 @@ function ActivePractice({
       ? rep.activeLineKeys
       : fallbackActiveKeys;
   const guidedIndices = useMemo(
-    () => guidedLineIndices(decoratedRawLines, activeLineKeys),
+    () => drillableGuidedIndices(decoratedRawLines, activeLineKeys),
     [activeLineKeys, decoratedRawLines],
   );
   const initialGuided = rep.learningMode !== 'all';

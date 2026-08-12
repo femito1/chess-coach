@@ -100,13 +100,21 @@ export function scoreLine(
   const depthScore = clamp01(plies / DEPTH_REF_PLIES);
 
   // Rarity: rarer (lower share) is harder — but ONLY when the share is a
-  // real measurement. Beyond the snapshot's measured depth, `globalShare`
-  // is the nearest measured ancestor decayed by 0.82 per ply, so it falls
-  // monotonically with length. Feeding that in as "rarity" would count
-  // depth twice and quietly rebuild the ply-sorted ordering this tiering
-  // exists to replace. For an estimated line we drop the term and score on
-  // what we actually know, rather than inventing a rarity for it.
-  const measured = isMeasured(line);
+  // real measurement. Two ways it isn't:
+  //
+  //   * Beyond the snapshot's measured depth, `globalShare` is the nearest
+  //     measured ancestor decayed by 0.82 per ply, so it falls
+  //     monotonically with length. Feeding that in as "rarity" would count
+  //     depth twice and quietly rebuild the ply-sorted ordering this
+  //     tiering exists to replace.
+  //   * `globalGames === 0` is an absence of data, not evidence of
+  //     rarity — it means the explorer recorded no games at that exact
+  //     position (or none at its parent). Scoring it as maximally rare
+  //     would invent a fact from a blank, and at full measured depth a few
+  //     hundred deep lines legitimately sit at zero.
+  //
+  // Either way we drop the term and score on what we actually know.
+  const measured = isMeasured(line) && line.globalGames > 0;
   const share = clamp01(line.globalShare);
   const rarityScore = 1 - share;
 

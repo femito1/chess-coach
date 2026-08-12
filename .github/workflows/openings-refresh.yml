@@ -214,11 +214,31 @@ jobs:
             echo "::error::Row count moved from $old_rows to $new_rows (>1%). The line list should be stable; inspect the inputs before landing this."
             exit 1
           fi
-          if ! awk -v old="$old_nonzero" -v new="$new_nonzero" 'BEGIN {
+          # How far the non-zero count may legitimately fall depends on
+          # whether the MEASURED DEPTH changed. At a fixed depth the count
+          # should barely move, and a real collapse means a broken upstream
+          # answering empty 200s — so hold that case to 5%. But deepening
+          # the snapshot legitimately re-zeroes lines: a depth-capped run
+          # estimates deep lines as `ancestor × 0.82^n`, which is always
+          # non-zero, while measuring their real parent finds that a few
+          # hundred deep positions genuinely have no recorded games. Going
+          # from depth 4 to full measured 257 of 3690 lines (7%) down to a
+          # true zero — correct data that a 5% floor would have rejected.
+          depth_of() { sed -n 's/^#.*measuredParentDepth=\([^;]*\).*/\1/p' "$1" | head -1; }
+          old_depth="$(depth_of /tmp/old-line-popularity.tsv)"
+          new_depth="$(depth_of data/openings/line-popularity.tsv)"
+          echo "measured depth: '${old_depth:-?}' -> '${new_depth:-?}'"
+          if [ "$old_depth" = "$new_depth" ]; then
+            max_drop=0.05
+          else
+            max_drop=0.25
+            echo "Measured depth changed; allowing a wider non-zero drop (${max_drop})."
+          fi
+          if ! awk -v old="$old_nonzero" -v new="$new_nonzero" -v lim="$max_drop" 'BEGIN {
                  if (old == 0) exit 0
-                 exit ((old - new) / old > 0.05) ? 1 : 0
+                 exit ((old - new) / old > lim) ? 1 : 0
                }'; then
-            echo "::error::Rows with games > 0 fell from $old_nonzero to $new_nonzero (>5%). Likely a broken upstream returning empty 200s — refusing to publish a snapshot of zeros."
+            echo "::error::Rows with games > 0 fell from $old_nonzero to $new_nonzero (>$(awk -v l=$max_drop 'BEGIN{printf "%d%%", l*100}')). Likely a broken upstream returning empty 200s — refusing to publish a snapshot of zeros."
             exit 1
           fi
           echo "Plausibility checks passed."
