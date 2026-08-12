@@ -26,6 +26,7 @@ export const BROWSER_TESTS = [
   { name: 'analyze',                    file: 'scripts/test/integration/analyze.mjs',                    category: 'integration' },
   { name: 'full-queue',                 file: 'scripts/test/integration/full-queue.mjs',                 category: 'integration' },
   { name: 'heal',                       file: 'scripts/test/integration/heal.mjs',                       category: 'integration' },
+  { name: 'pool-shrink-desync',         file: 'scripts/test/integration/pool-shrink-desync.mjs',         category: 'integration' },
   { name: 'pool-idle-teardown',         file: 'scripts/test/integration/pool-idle-teardown.mjs',         category: 'integration' },
   { name: 'eval-cache',                 file: 'scripts/test/integration/eval-cache.mjs',                 category: 'integration' },
   { name: 'queue-newest-first',         file: 'scripts/test/integration/queue-newest-first.mjs',         category: 'integration' },

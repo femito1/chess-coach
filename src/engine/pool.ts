@@ -207,6 +207,29 @@ export class EnginePool {
     return Promise.all(requests.map((r) => this.analyze(r.fen, r.depth)));
   }
 
+  /**
+   * Mark the slot currently held by `worker` as free.
+   *
+   * Looked up by identity rather than by an index captured at dispatch
+   * time, because `setMaxWorkers` *splices* `workers`/`busy` and so
+   * renumbers every worker above a removed slot. A task dispatched to
+   * index 2 that finishes after the pool shrank to 2 workers used to
+   * clear `busy[2]` — writing past the end of the array, leaving its own
+   * slot stuck `true` forever. That worker then never returned to
+   * rotation, `isIdle()` could never become true (so idle teardown never
+   * freed the ~30 MB WASM heap), and once enough slots leaked
+   * `busy.indexOf(false)` returned an index past `workers`, making
+   * `pump()` call `.analyze()` on `undefined` — which surfaced to the
+   * user as a spuriously errored game.
+   *
+   * A worker that was terminated while busy is simply absent here, so
+   * there's nothing to release and no stale write.
+   */
+  private release(worker: EngineWorker): void {
+    const idx = this.workers.indexOf(worker);
+    if (idx !== -1) this.busy[idx] = false;
+  }
+
   /** Try to dispatch as many queued tasks as there are free workers.
    *  Called whenever a task is enqueued or finishes. Lazily grows the
    *  pool up to `maxWorkers` so torn-down pools (post-idle teardown)
@@ -232,17 +255,16 @@ export class EnginePool {
       const worker = this.workers[idx];
       worker.analyze(task.fen, task.depth).then(
         (res) => {
-          // Flip `busy` before resolving so that any awaiter checking
-          // `pool.isIdle()` immediately after `await pool.analyze()`
-          // sees the post-completion state. (Resolving the task first
-          // would let the awaiter's microtask run before the finally
-          // hook had a chance to clear the slot.)
-          this.busy[idx] = false;
+          // Release by worker *identity*, not by the captured index —
+          // see `release`. Flipped before resolving so an awaiter
+          // checking `pool.isIdle()` immediately after
+          // `await pool.analyze()` sees the post-completion state.
+          this.release(worker);
           task.resolve(res);
           this.pump();
         },
         (err) => {
-          this.busy[idx] = false;
+          this.release(worker);
           task.reject(err);
           this.pump();
         },
