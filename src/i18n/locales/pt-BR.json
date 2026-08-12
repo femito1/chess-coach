@@ -554,14 +554,57 @@
       "plyTag_one": "{{count}} ply",
       "plyTag_other": "{{count}} ply",
       "play": "Jogar",
-      "playTitle": "Pular para esta linha agora"
+      "playTitle": "Pular para esta linha agora",
+      "repertoireCount": "{{inRepertoire}} no repertório · {{available}} na biblioteca",
+      "tierAll": "Todas",
+      "tier": {
+        "easy": "Fácil",
+        "medium": "Média",
+        "hard": "Difícil"
+      },
+      "addSelected": "Adicionar {{count}} selecionadas",
+      "addingProgress": "Adicionando {{done}}/{{total}}…",
+      "showMore": "Mostrar mais {{count}}",
+      "rare": "rara",
+      "forced": "forçada",
+      "notAdded": "não adicionada",
+      "learn": "Aprender",
+      "learnHint": "Percorra esta linha antes de treiná-la",
+      "addAndDrill": "Adicionar e treinar",
+      "drillToggleHint": "Incluir nesta sessão de treino",
+      "addToggleHint": "Marque para adicionar ao seu repertório",
+      "record": "{{wins}}V {{draws}}E {{losses}}D",
+      "recordHint": "Seu retrospecto nesta linha exata",
+      "recordInheritedHint": "Seu retrospecto nesta variante (mais ampla que esta linha)"
     },
     "statusbar": {
       "ply": "{{ply}}/{{total}} ply · {{wrong}} errados · jogada #{{play}}"
     },
     "drillProgress": "Treinando {{active}} de {{total}} linhas",
     "includeAllLines": "Incluir todas as linhas",
-    "useRecommendedSet": "Usar conjunto recomendado"
+    "useRecommendedSet": "Usar conjunto recomendado",
+    "learn": {
+      "title": "Aprenda esta linha",
+      "close": "Fechar",
+      "complete": "Você percorreu a linha inteira — treine para fixá-la.",
+      "notQuite": "Não é esse lance — tente de novo ou revele.",
+      "yourMovePrompt": "Sua vez — jogue no tabuleiro ou revele o lance.",
+      "opponentReplies": "O oponente responde…",
+      "revealMove": "Revelar lance",
+      "restart": "Recomeçar",
+      "addToSet": "Adicionar ao conjunto",
+      "addToRepertoire": "Adicionar ao repertório",
+      "adding": "Adicionando…",
+      "drillThisLine": "Treinar esta linha",
+      "shareForced": "{{san}} é jogado em {{pct}}% das vezes — quase forçado.",
+      "shareRare": "Só {{pct}}% jogam {{san}} aqui — uma escolha incomum para lembrar.",
+      "shareChoice": "{{san}} é jogado em {{pct}}% das vezes aqui.",
+      "noUserMoves": "Esta linha não tem lances seus — nada para recordar aqui."
+    },
+    "focus": {
+      "drillingOneLine": "Treinando uma linha: {{name}}",
+      "backToSet": "Voltar ao conjunto"
+    }
   },
   "openings": {
     "title": "Biblioteca de Aberturas",

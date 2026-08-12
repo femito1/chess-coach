@@ -554,14 +554,57 @@
       "plyTag_one": "{{count}} ply",
       "plyTag_other": "{{count}} ply",
       "play": "Gioca",
-      "playTitle": "Salta a questa linea ora"
+      "playTitle": "Salta a questa linea ora",
+      "repertoireCount": "{{inRepertoire}} nel repertorio · {{available}} in libreria",
+      "tierAll": "Tutte",
+      "tier": {
+        "easy": "Facile",
+        "medium": "Media",
+        "hard": "Difficile"
+      },
+      "addSelected": "Aggiungi {{count}} selezionate",
+      "addingProgress": "Aggiunta {{done}}/{{total}}…",
+      "showMore": "Mostra altre {{count}}",
+      "rare": "rara",
+      "forced": "forzata",
+      "notAdded": "non aggiunta",
+      "learn": "Impara",
+      "learnHint": "Ripassa questa linea prima di allenarla",
+      "addAndDrill": "Aggiungi e allena",
+      "drillToggleHint": "Includi in questa sessione di allenamento",
+      "addToggleHint": "Seleziona per aggiungere al repertorio",
+      "record": "{{wins}}V {{draws}}P {{losses}}S",
+      "recordHint": "Il tuo record in questa linea esatta",
+      "recordInheritedHint": "Il tuo record in questa variante (più ampia di questa linea)"
     },
     "statusbar": {
       "ply": "{{ply}}/{{total}} ply · {{wrong}} sbagliate · partita #{{play}}"
     },
     "drillProgress": "Allenando {{active}} di {{total}} linee",
     "includeAllLines": "Includi tutte le linee",
-    "useRecommendedSet": "Usa il set consigliato"
+    "useRecommendedSet": "Usa il set consigliato",
+    "learn": {
+      "title": "Impara questa linea",
+      "close": "Chiudi",
+      "complete": "Hai ripassato tutta la linea — allenala per fissarla.",
+      "notQuite": "Non è quella mossa — riprova o rivelala.",
+      "yourMovePrompt": "Tocca a te — gioca sulla scacchiera o rivela la mossa.",
+      "opponentReplies": "L'avversario risponde…",
+      "revealMove": "Rivela mossa",
+      "restart": "Ricomincia",
+      "addToSet": "Aggiungi al set",
+      "addToRepertoire": "Aggiungi al repertorio",
+      "adding": "Aggiunta…",
+      "drillThisLine": "Allena questa linea",
+      "shareForced": "{{san}} si gioca nel {{pct}}% dei casi — quasi forzata.",
+      "shareRare": "Solo il {{pct}}% gioca {{san}} qui — una scelta insolita da ricordare.",
+      "shareChoice": "{{san}} si gioca nel {{pct}}% dei casi qui.",
+      "noUserMoves": "Questa linea non contiene tue mosse — nulla da ricordare."
+    },
+    "focus": {
+      "drillingOneLine": "Allenamento di una linea: {{name}}",
+      "backToSet": "Torna al set"
+    }
   },
   "openings": {
     "title": "Libreria aperture",

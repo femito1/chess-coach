@@ -114,6 +114,79 @@ prefix stages above exist.
 **Personal opening stats are expensive.** `buildPersonalOpeningStats`
 re-parses every game's PGN through chess.js (~1.3 s at 2 500 games).
 Compute one colour, and only once it is actually needed — not on mount.
+It now also accumulates per-prefix win/draw/loss (from `Game.result`,
+already stored from the user's perspective) in that same single walk, so
+the difficulty tiers get a winrate signal for free — no second parse. The
+practice page computes it once in `PracticeRunner` and threads it down;
+never build it twice on one page.
+
+**The generated bundle must stay coherent with its TSV inputs.** The bug
+that motivated this: `openings.generated.ts` once shipped built from an
+*older* `data/openings/line-popularity.tsv` than the one committed beside
+it — 3 406 of 3 690 lines disagreed, so every frequency-derived number
+(suggestions, difficulty tiers) was silently wrong. Because
+`scripts/build-openings.mjs` is offline over committed inputs, a unit test
+(`src/data/openings.generated.test.ts`) rebuilds the bundle in memory and
+fails if it differs from the committed file (ignoring only the timestamped
+banner line). `buildBundle()` is the pure seam it calls. If it fails, run
+`npm run openings:build` and commit. A scheduled refresh
+(`.github/workflows/openings-refresh.yml`) re-snapshots monthly and pushes
+to `main` **only after** `typecheck` + `test:unit` pass — verify-before-
+push is load-bearing because Cloudflare Pages deploys from `main` on its
+own webhook, not through Actions, so bad data would ship the instant it
+landed. It gates on unit (not e2e) so a pre-existing e2e failure can't
+freeze data refreshes.
+
+**The drill picker merges repertoire and library, keyed by
+`openingLineKey`.** `buildPickerModel` (`repertoire/pickerModel.ts`) unions
+`enumerateLines` (what you can drill) with `getVariations` (what you could
+add), per family. A library variation counts as in-repertoire when a
+repertoire leaf *extends* it — not just on exact match — because
+bulk-imported trees store full leaves; and when drilling one, it points at
+the *shortest* matching leaf, the same reasoning as
+`curriculum.guidedLineIndices`. Difficulty tiers (`openings/difficulty.ts`)
+are pure and family-relative: scores are absolute, but the Easy/Medium/Hard
+cut is by terciles of each family's own distribution (fixed thresholds for
+families with < 3 lines), so "Hard" means hard *for that opening*.
+
+**A frequency is only trusted within `MEASURED_PARENT_DEPTH`.** The
+snapshot (`scripts/snapshot-opening-popularity.mjs`) queries the explorer
+down to a parent depth recorded in the TSV header
+(`measuredParentDepth=`); beyond it, a line's `globalGames`/`globalShare`
+is the nearest measured ancestor scaled by a `0.82^n` decay. That estimate
+falls monotonically with ply, so it is *not* a rarity measurement —
+treating it as one would count depth twice and rebuild the very
+ply-sorted ordering the difficulty tiers exist to replace. The build
+propagates that depth into the bundle as `MEASURED_PARENT_DEPTH` +
+`isMeasuredLine(line)`; `difficulty.ts` drops the rarity term (and the
+forced/rare chip) for an estimated line, and the Learn panel refuses to
+quote a frequency for one (`trustworthyShare`). Running the snapshot at
+full depth (the default now — `--depth=N` caps it) makes the header read
+`full`, `isMeasuredLine` true for every line, and rarity a real signal: a
+28-ply *forced* line then has a high share (not rare) while a short
+offbeat line has a low one. Because `MEASURED_PARENT_DEPTH` changes with
+each data refresh, code that branches on it takes an injectable predicate
+in tests (`scoreLine(line, stats, isMeasured)`) rather than hard-coding
+the current depth.
+
+## Openings data refresh
+
+`.github/workflows/openings-refresh.yml` re-snapshots monthly (and on
+manual dispatch) and pushes regenerated data to `main`, but only after a
+gauntlet: snapshot → `openings:build` → a plausibility gate (row count and
+non-zero-row count vs the committed TSV, to catch a proxy answering junk
+with HTTP 200) → `typecheck` → `test:unit`. It commits only if the
+data-bearing lines actually changed (both artifacts carry generated
+timestamps, so a byte diff would churn every run). Verify-before-push is
+load-bearing: Cloudflare Pages deploys from `main` on its own webhook, not
+through Actions, so anything that lands ships. The snapshot script and the
+loop share an **exit-code contract** — `0` wrote the TSV, `3` means the
+cache is still incomplete (resume), anything else is a hard failure — so
+"incomplete" is never mistaken for "complete but unchanged". The explorer
+cache is persisted across runs with `actions/cache/save@v4` under
+`if: always()` (the default `@v4` post-step only saves on success, which
+would discard every rate-limited run's progress). Gates on unit not e2e,
+so the pre-existing `touch-longpress-arrow` failure can't freeze refreshes.
 
 ## UI conventions
 

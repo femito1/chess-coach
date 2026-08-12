@@ -85,28 +85,41 @@ Phase 3 (this version):
 
 Also shipped:
 - **Repertoire drilling** — family-bound repertoires, a guided starter set of five lines, SM-2 review, and "play it out vs Stockfish" from the end of any line.
+- **Learn-then-drill with difficulty tiers** — the drill page now shows every library line for the openings you play in one list, marks the ones already in your repertoire, and tiers each **Easy / Medium / Hard** (family-relative, blending line depth, master-level frequency, and your own win/draw/loss record in that variation). Add any lines in place, filter by tier, and **Learn** a line first — step through it with the next move hidden, guess it on the board (no score kept), then hand straight off into drilling. Frequency data is measured at full depth and a unit test keeps the generated bundle from ever drifting out of sync with its source, refreshed monthly by a self-verifying job.
 - **Chrome extension** (`extension/`) — detects the end of a Chess.com game and offers a one-click deep link into your review. Build with `npm run extension:build -- --coach-origin=<url>`.
 - **Dashboard deep links** — win-rate-by-opening rows link into the openings library, or into your own repertoire when you already have one for that family.
 - **Brilliant-move tags** in the Games table.
 
 Planned (Phase 4+): endgame trainer (Lichess Syzygy), pre-game prep (opponent scouting), position annotations / "memory palace" across games.
 
-### Next up: opening discovery + learning (designed, not built)
+### Next up: opening prep-gap detection (designed, not built)
 
-The drill page can only grow its line set five-at-a-time behind a mastery
-gate, or all-at-once from the library, and nothing ever *shows* you a line
-before testing you on it — so drilling an unfamiliar line is repeated
-failure rather than learning. Planned: a unified line picker that can pull
-any number of library lines in place, easy/medium/hard tiers blending
-depth, rarity and your own exposure, and a learn-then-drill handoff.
+With discovery and learning in place, the highest-value next step is
+surfacing the openings you *lose* to but haven't prepped — e.g. "you've
+lost 8 of 11 in the Advance Variation and it isn't in your repertoire" —
+turning your own game history into a prioritized study list.
 
 ### Refreshing the openings database
 
-The library is generated from the Lichess chess-openings TSVs committed under `data/openings/`. To pull in upstream updates:
+The library is generated from the Lichess chess-openings TSVs committed
+under `data/openings/`, plus a line-popularity snapshot from the Lichess
+opening explorer. A scheduled job
+(`.github/workflows/openings-refresh.yml`) re-snapshots monthly and pushes
+the regenerated data to `main` only after typecheck + unit tests pass, so
+you normally don't touch this. To refresh by hand:
 
 ```bash
-# Download the latest TSVs, overwriting data/openings/*.tsv, then:
+# 1. (optional) re-measure line popularity at full depth. Slow and
+#    rate-limited; resumes from .cache if interrupted. Set LICHESS_TOKEN
+#    to hit Lichess directly and skip the proxy's limits.
+node scripts/snapshot-opening-popularity.mjs
+
+# 2. (optional) pull upstream chess-openings updates: download the latest
+#    a.tsv..e.tsv into data/openings/, then rebuild.
 node scripts/build-openings.mjs
 ```
 
-This regenerates `src/data/openings.generated.ts`. Commit the result.
+`build-openings.mjs` regenerates `src/data/openings.generated.ts` from the
+committed TSVs; commit the result. A unit test
+(`openings.generated.test.ts`) fails if the committed bundle ever drifts
+out of sync with its inputs — if it's red, run `npm run openings:build`.

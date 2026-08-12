@@ -51,6 +51,7 @@ const FLASH_MS = 2000;
 const EMPTY_PERSONAL_STATS: PersonalOpeningStats = {
   relevantGames: 0,
   prefixCounts: new Map(),
+  prefixRecords: new Map(),
 };
 
 export function LibraryPage() {

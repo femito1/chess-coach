@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Board } from '@/components/Board';
 import { BoardFrame } from '@/components/BoardFrame';
 import { EVAL_BAR_WIDTH_PX } from '@/components/EvalBar';
@@ -116,23 +116,30 @@ export function LineRunner({
     wrong: 0,
     hintsUsed: 0,
   });
-  // Persisted-stats bookkeeping — same idempotency contract as the
-  // pre-extraction version: `recordLineAttempt` runs once per mount,
-  // `recordLineCompletion` runs once per actual reach-the-end (resets
-  // when the user clicks Restart so a second completion is logged
-  // correctly).
+  // Persisted-stats bookkeeping: `recordLineAttempt` runs once per line
+  // *engagement*, `recordLineCompletion` runs once per actual
+  // reach-the-end (resets when the user clicks Restart so a second
+  // completion is logged correctly).
+  //
+  // This used to fire on mount, which counted merely *seeing* a line as
+  // an attempt. That became wrong once the Learn panel shipped: Learn
+  // occupies the same slot as the runner, so opening and closing it
+  // unmounted and remounted this component and logged a fresh attempt
+  // against a line the user never played — five peeks inflated the count
+  // by five and dragged that line's completion rate down. Logging on the
+  // first real engagement (a move attempt, or asking for a hint /
+  // answer) is both immune to remounts and a truer reading of "attempts".
   const attemptLogged = useRef(false);
   const completionLogged = useRef(false);
   const opponentTimer = useRef<number | null>(null);
 
-  useEffect(() => {
+  const logAttemptOnce = useCallback(() => {
     if (attemptLogged.current) return;
     attemptLogged.current = true;
     void recordLineAttempt(repertoireId, line).then(() => {
       onStatsChanged?.();
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [repertoireId, line, onStatsChanged]);
 
   const isUserTurn = useMemo(() => {
     if (ply >= line.uci.length) return false;
@@ -176,6 +183,7 @@ export function LineRunner({
 
   function tryMove(m: { from: string; to: string; promotion?: string }): boolean {
     if (!isUserTurn || status !== 'thinking') return false;
+    logAttemptOnce();
     const played = m.from + m.to + (m.promotion ?? '');
     setSessionStats((s) => ({ ...s, total: s.total + 1 }));
     if (played.slice(0, 4) === expectedUci.slice(0, 4)) {
@@ -225,12 +233,14 @@ export function LineRunner({
   }
 
   function showHint() {
+    logAttemptOnce();
     setHintShown(true);
     setWrongUci(null);
     setSessionStats((s) => ({ ...s, hintsUsed: s.hintsUsed + 1 }));
   }
 
   function reveal() {
+    logAttemptOnce();
     setRevealShown(true);
     setWrongUci(null);
   }

@@ -10,19 +10,27 @@ import {
   type RepertoireLine,
 } from './store';
 import type { RepertoireLineStats } from '@/db/schema';
+import { isMeasuredLine } from '@/data/openings.generated';
 import {
   addGuidedLinesToRepertoire,
   familyColor,
+  familyDescription,
   getVariations,
   identifyOpening,
   setRepertoireLearningMode,
+  type OpeningLine,
 } from '@/features/openings/library';
 import {
   buildPersonalOpeningStats,
   openingLineKey,
   rankOpeningLines,
+  type PersonalLineRecord,
+  type PersonalOpeningStats,
   type RankedOpeningLine,
 } from '@/features/openings/recommendations';
+import { buildPickerModel, type PickerEntry, type PickerFamily } from './pickerModel';
+import type { Tier } from '@/features/openings/difficulty';
+import { LearnPanel } from './LearnPanel';
 import { LineRunner, type LineRunnerControlState } from './LineRunner';
 import { FreePlayRunner } from './FreePlayRunner';
 import {
@@ -41,8 +49,9 @@ import {
 } from './practiceMode';
 import { tPracticeMode, tPracticeModeDescription } from '@/i18n/chess';
 import { LineMoveTokens } from '@/components/LineMoveTokens';
+import { buildSolutionSteps } from '@/components/SolutionPlayer';
+import { Chess } from 'chess.js';
 import {
-  areGuidedLinesMastered,
   guidedLineIndices,
   initialActiveLineKeys,
   nextRecommendedLines,
@@ -71,6 +80,61 @@ function decorate(lines: RepertoireLine[]): DecoratedLine[] {
       .toLowerCase();
     return { line, family, variation, eco, searchHaystack };
   });
+}
+
+/**
+ * The frequency number we're willing to show a user for a single move.
+ *
+ * `globalShare` is only a true branch share when the snapshot actually
+ * queried that line's own parent position. Two ways it isn't:
+ *   - Beyond `MEASURED_PARENT_DEPTH` the value is the nearest measured
+ *     ancestor scaled by a 0.82-per-ply decay. That number shrinks purely
+ *     with depth, so quoting it as "only 5% play this" would report a
+ *     property of the line's length as if it were a property of players'
+ *     choices. (The committed snapshot is depth-capped today, so this is
+ *     the common case, not a corner one.)
+ *   - `globalGames === 0` means the branch was never measured at all, NOT
+ *     "nobody plays this".
+ *
+ * Either way we return null and the Learn panel says nothing about that
+ * move. Silence beats a confident wrong number.
+ */
+function trustworthyShare(line: OpeningLine | undefined): number | null {
+  if (!line) return null;
+  if (!isMeasuredLine(line)) return null;
+  if (!(line.globalGames > 0)) return null;
+  if (!(line.globalShare > 0)) return null;
+  return line.globalShare;
+}
+
+/**
+ * Build a drillable `DecoratedLine` from a picker entry's own moves, by
+ * replaying them from the start position. Used for a *focused* drill —
+ * drilling exactly the line the user was shown, rather than whichever
+ * repertoire leaf happens to extend it. `buildSolutionSteps` stops at the
+ * first illegal move, so a malformed line yields a shorter (still
+ * coherent) line rather than throwing.
+ */
+function decorateEntry(entry: PickerEntry): DecoratedLine {
+  const steps = buildSolutionSteps(new Chess().fen(), [...entry.uci]);
+  const played = steps.slice(1);
+  const line: RepertoireLine = {
+    uci: played.map((s) => s.uci),
+    san: played.map((s) => s.san),
+    fens: steps.map((s) => s.fen),
+    name:
+      played
+        .slice(0, 6)
+        .map((s) => s.san)
+        .join(' ') + (played.length > 6 ? '…' : ''),
+  };
+  return {
+    line,
+    family: entry.family,
+    variation: entry.variation,
+    eco: entry.eco,
+    searchHaystack: '',
+  };
 }
 
 interface FamilyAggregate {
@@ -200,14 +264,22 @@ function PracticeRunner({
   const [lines, setLines] = useState<RepertoireLine[] | null>(null);
   const [statsBucket, setStatsBucket] = useState<number>(0);
   const games = useLiveQuery(() => db.games.toArray(), []);
+  // Personal opening stats (prefix counts + per-prefix W/D/L) are the
+  // single most expensive computation on this page — one chess.js reparse
+  // of every game (~1.3 s at 2 500 games; see ARCHITECTURE.md). Compute
+  // once here and thread it down; both the recommendation ranking and the
+  // difficulty tiers read from it, so it must never be built twice.
+  const personal = useMemo(
+    () =>
+      rep.family
+        ? buildPersonalOpeningStats(games ?? [], familyColor(rep.family))
+        : buildPersonalOpeningStats(games ?? [], rep.color),
+    [games, rep.family, rep.color],
+  );
   const rankedRecommendations = useMemo<RankedOpeningLine[]>(() => {
     if (!rep.family) return [];
-    const personal = buildPersonalOpeningStats(
-      games ?? [],
-      familyColor(rep.family),
-    );
     return rankOpeningLines(getVariations(rep.family), personal);
-  }, [games, rep.family]);
+  }, [personal, rep.family]);
 
   useEffect(() => {
     if (
@@ -227,9 +299,24 @@ function PracticeRunner({
   }, [games, rankedRecommendations, rep.family, rep.id, rep.learningMode]);
   // Re-fetch lines when the repertoire id changes *or* when an
   // outside hand (e.g. import) bumps the rep's updatedAt.
+  //
+  // Blank the list ONLY when switching repertoires. On an in-place update
+  // — which is what adding a line from the picker does, since
+  // `addGuidedLinesToRepertoire` bumps `updatedAt` — keep the current
+  // list mounted and swap it when the new one arrives. Setting it to null
+  // here would trip the `if (!lines)` guard below, unmounting
+  // `ActivePractice` and destroying the whole drill session: the pending
+  // "drill this line" handoff, the current line, `sessionPlays`, and
+  // `perfectThisSession`. That made "Drill this line" on a not-yet-added
+  // line silently impossible — it imported the line, then threw the user
+  // back to a freshly-seeded session.
+  const shownRepIdRef = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    setLines(null);
+    if (shownRepIdRef.current !== rep.id) {
+      shownRepIdRef.current = rep.id;
+      setLines(null);
+    }
     void enumerateLines(rep.id).then((res) => {
       if (!cancelled) setLines(res);
     });
@@ -275,6 +362,7 @@ function PracticeRunner({
       decoratedLines={decorated}
       stats={stats}
       rankedRecommendations={rankedRecommendations}
+      personal={personal}
       onStatsChanged={() => setStatsBucket((n) => n + 1)}
     />
   );
@@ -285,18 +373,59 @@ function ActivePractice({
   decoratedLines,
   stats,
   rankedRecommendations,
+  personal,
   onStatsChanged,
 }: {
   rep: Repertoire;
   decoratedLines: DecoratedLine[];
   stats: Awaited<ReturnType<typeof getLineStatsMap>> | null | undefined;
   rankedRecommendations: RankedOpeningLine[];
+  personal: PersonalOpeningStats;
   onStatsChanged: () => void;
 }) {
   const { t } = useTranslation();
   const decoratedRawLines = useMemo(
     () => decoratedLines.map((entry) => entry.line),
     [decoratedLines],
+  );
+
+  // The unified picker model: every library line for the families this
+  // repertoire touches, merged with what's already in the repertoire and
+  // tiered Easy/Medium/Hard. Built from the shared `personal` stats so it
+  // costs no extra PGN parse. `libraryByFamily` is memoized on the set of
+  // families present, not on the lines, so it only rebuilds when the
+  // repertoire spans a new family.
+  const familyKeys = useMemo(() => {
+    const set = new Set<string>();
+    if (rep.family) set.add(rep.family);
+    for (const d of decoratedLines) {
+      if (d.family && d.family !== 'Unidentified') set.add(d.family);
+    }
+    return [...set];
+  }, [rep.family, decoratedLines]);
+  const libraryByFamily = useMemo(() => {
+    const map = new Map<string, OpeningLine[]>();
+    for (const family of familyKeys) map.set(family, getVariations(family));
+    return map;
+  }, [familyKeys]);
+  const libraryLineByKey = useMemo(() => {
+    const map = new Map<string, OpeningLine>();
+    for (const lines of libraryByFamily.values()) {
+      for (const line of lines) map.set(openingLineKey(line.uci), line);
+    }
+    return map;
+  }, [libraryByFamily]);
+  const pickerFamilies = useMemo(
+    () =>
+      buildPickerModel({
+        repertoireLeaves: decoratedLines.map((d) => ({
+          uci: d.line.uci,
+          family: d.family,
+        })),
+        libraryByFamily,
+        personal,
+      }),
+    [decoratedLines, libraryByFamily, personal],
   );
   const fallbackActiveKeys = useMemo(
     () =>
@@ -326,7 +455,14 @@ function ActivePractice({
       ),
   );
   const activeKeySignature = activeLineKeys.join('|');
+  // Re-seed scope + selection when the repertoire's plan changes. Skipped
+  // while a "drill this line" handoff is in flight: adding a line bumps
+  // `activeLineKeys`, which fires this effect, which would otherwise
+  // immediately overwrite the selection the handoff just made and leave
+  // the user on a different line than the one they asked to drill.
+  const drillHandoffPendingRef = useRef(false);
   useEffect(() => {
+    if (drillHandoffPendingRef.current) return;
     const nextScope = rep.learningMode === 'all' ? 'all' : 'guided';
     setScope(nextScope);
     setSelected(
@@ -342,18 +478,9 @@ function ActivePractice({
     });
   }, [activeKeySignature, decoratedLines, guidedIndices, rep.id, rep.learningMode]);
 
-  // Search query for the line picker. Lowercased once for matching.
+  // Search query for the line picker. Filtering now happens in
+  // `visibleFamilies` over the unified picker model.
   const [query, setQuery] = useState('');
-  const queryLower = query.trim().toLowerCase();
-  const filteredIndices = useMemo(() => {
-    if (queryLower.length === 0) {
-      return decoratedLines.map((_, i) => i);
-    }
-    return decoratedLines
-      .map((d, i) => ({ d, i }))
-      .filter(({ d }) => d.searchHaystack.includes(queryLower))
-      .map(({ i }) => i);
-  }, [decoratedLines, queryLower]);
 
   // Practice session reducer. We re-init when the selection or mode
   // changes via dispatch, NOT by reseeding (that would lose
@@ -401,11 +528,10 @@ function ActivePractice({
 
   const usingRecommendedSet = scope !== 'all';
 
-  const guidedMastered = areGuidedLinesMastered(
-    decoratedRawLines,
-    guidedIndices,
-    stats ?? new Map(),
-  );
+  // Growth is no longer gated on mastering the current set — the unified
+  // picker lets you add any line at any time, and forcing perfection first
+  // was exactly the "repeated failure with no acquisition step" trap. The
+  // recommended-next card is now just a convenience shortcut.
   const nextLines = nextRecommendedLines(
     rankedRecommendations,
     activeLineKeys,
@@ -424,6 +550,89 @@ function ActivePractice({
     }
   }
 
+  // ── Discovery: tier filter + "add these library lines" selection ─────
+  const [tierFilter, setTierFilter] = useState<Tier | 'all'>('all');
+  // Library lines the user has ticked to add (keyed by openingLineKey).
+  // Kept SEPARATE from the drill `selected` set: one is "what to import",
+  // the other "what to drill this session". Conflating them is exactly
+  // what made adding lines confusing before.
+  const [toAdd, setToAdd] = useState<Set<string>>(new Set());
+  const [addingLibrary, setAddingLibrary] = useState(false);
+  const [addProgress, setAddProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const toggleToAdd = useCallback((key: string) => {
+    setToAdd((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  /** Add the ticked library lines to the repertoire in one action. Uses
+   *  the shared guided-add path so SRS cards + activeLineKeys are written
+   *  consistently, and is idempotent (adding an already-present line is a
+   *  no-op at the node level). */
+  const addLibraryLines = useCallback(
+    async (keys: string[]): Promise<void> => {
+      const lines = keys
+        .map((key) => libraryLineByKey.get(key))
+        .filter((l): l is OpeningLine => Boolean(l));
+      if (addingLibrary || lines.length === 0) return;
+      setAddingLibrary(true);
+      setAddProgress({ done: 0, total: lines.length });
+      try {
+        // Sequential so shared prefixes collapse into the same nodes and
+        // progress is meaningful (mirrors addFamilyToRepertoire).
+        for (let i = 0; i < lines.length; i++) {
+          await addGuidedLinesToRepertoire(rep.id, [lines[i]]);
+          setAddProgress({ done: i + 1, total: lines.length });
+        }
+        setToAdd((prev) => {
+          const next = new Set(prev);
+          for (const key of keys) next.delete(key);
+          return next;
+        });
+      } finally {
+        setAddingLibrary(false);
+        setAddProgress(null);
+      }
+    },
+    [addingLibrary, libraryLineByKey, rep.id],
+  );
+
+  // ── Learn: step through a line before being tested on it ─────────────
+  // Held by KEY, not by value: importing a line rebuilds the picker model,
+  // and a snapshotted entry would keep reporting the stale
+  // `inRepertoire` / `repertoireIndex` it had when the panel opened (so
+  // the button would still say "Add to repertoire" after a successful
+  // add, and a later drill would re-import).
+  const [learnKey, setLearnKey] = useState<string | null>(null);
+  const learnEntry = useMemo(() => {
+    if (learnKey == null) return null;
+    for (const fam of pickerFamilies) {
+      const found = fam.entries.find((e) => e.key === learnKey);
+      if (found) return found;
+    }
+    return null;
+  }, [learnKey, pickerFamilies]);
+  const openLearn = useCallback((entry: PickerEntry) => setLearnKey(entry.key), []);
+  const closeLearn = useCallback(() => setLearnKey(null), []);
+
+  /** "Add to set": include a line in the session without jumping to it.
+   *  In-repertoire → tick its drill index; library-only → import it. */
+  const addToSet = useCallback(
+    (entry: PickerEntry) => {
+      if (entry.repertoireIndex != null) {
+        const index = entry.repertoireIndex;
+        setSelected((prev) => (prev.has(index) ? prev : new Set(prev).add(index)));
+      } else {
+        void addLibraryLines([entry.key]);
+      }
+    },
+    [addLibraryLines],
+  );
+
   function toggleLine(i: number) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -431,16 +640,6 @@ function ActivePractice({
       else next.add(i);
       return next;
     });
-  }
-
-  function selectAll() {
-    setSelected(new Set(decoratedLines.map((_, i) => i)));
-  }
-  function selectNone() {
-    setSelected(new Set());
-  }
-  function selectFiltered() {
-    setSelected(new Set(filteredIndices));
   }
 
   const currentLine =
@@ -490,6 +689,10 @@ function ActivePractice({
   // while the right-hand picker / family stats / session summary stay
   // visible. "Back to practice" flips phase back and re-fires the
   // pending finished dispatch so the practice session resumes.
+  // A single line the user asked to drill on its own — see `drillEntry`
+  // below for why this exists rather than always jumping into the session.
+  // Declared here so `startFreePlay` can prefer it over `currentLine`.
+  const [focusLine, setFocusLine] = useState<DecoratedLine | null>(null);
   const [phase, setPhase] = useState<'practicing' | 'freeplay'>('practicing');
   const [freePlayStart, setFreePlayStart] = useState<{
     fen: string;
@@ -514,8 +717,11 @@ function ActivePractice({
   }, []);
 
   const startFreePlay = useCallback(() => {
-    if (!currentLine) return;
-    const fens = currentLine.line.fens;
+    // In focused mode the runner is showing `focusLine`, not the session's
+    // current line — play out the position the user actually just drilled.
+    const source = focusLine ?? currentLine;
+    if (!source) return;
+    const fens = source.line.fens;
     const lastFen = fens[fens.length - 1];
     startTransition(() => {
       setFreePlayStart({
@@ -525,7 +731,7 @@ function ActivePractice({
       });
       setPhase('freeplay');
     });
-  }, [currentLine, rep.color, defaultStrength]);
+  }, [focusLine, currentLine, rep.color, defaultStrength]);
 
   const exitFreePlay = useCallback(() => {
     setPhase('practicing');
@@ -537,6 +743,89 @@ function ActivePractice({
     // shouldn't happen in practice but cheap to guard).
     flushPendingFinish();
   }, [flushPendingFinish]);
+
+  // ── Drill a specific line (from the picker's Play or Learn's "Drill
+  //    this line") ──────────────────────────────────────────────────
+  //
+  // Two routes, and which one we take matters for whether the user is
+  // tested on what they were actually shown:
+  //
+  //   * The entry IS a repertoire leaf (`leafIsExact`) → drill it through
+  //     the normal session, so session progress / summary / repeat modes
+  //     all behave as before.
+  //   * Otherwise → drill it as a *focused line*, standalone. This covers
+  //     a line not yet in the repertoire, and — just as importantly — a
+  //     shallow library variation whose only match is a much deeper leaf
+  //     that extends it (the norm for bulk-imported trees). Jumping to
+  //     that leaf would test 6–10 moves past the end of what Learn
+  //     taught, which is exactly the "tested on a line you've never seen"
+  //     failure this feature exists to remove. `LineRunner` is driven
+  //     purely by the line's own uci/san/fens, so a focused line needs no
+  //     repertoire nodes and renders immediately.
+  //
+  // (`focusLine` itself is declared above, next to the free-play state, so
+  // `startFreePlay` can prefer it over the session's current line.)
+  const selectAndJump = useCallback((index: number) => {
+    setSelected((prev) => (prev.has(index) ? prev : new Set(prev).add(index)));
+    setPendingJumpIndex(index);
+  }, []);
+  const [pendingJumpIndex, setPendingJumpIndex] = useState<number | null>(null);
+
+  const drillEntry = useCallback(
+    (entry: PickerEntry) => {
+      setLearnKey(null);
+      if (entry.repertoireIndex != null && entry.leafIsExact) {
+        drillHandoffPendingRef.current = true;
+        selectAndJump(entry.repertoireIndex);
+        return;
+      }
+      // Focused drill of exactly this line. Import in the background when
+      // it isn't in the repertoire yet so SRS cards and the picker's
+      // "added" state catch up, but don't make the drill wait on it.
+      setFocusLine(decorateEntry(entry));
+      if (!entry.inRepertoire) void addLibraryLines([entry.key]);
+    },
+    [addLibraryLines, selectAndJump],
+  );
+
+  const exitFocusLine = useCallback(() => setFocusLine(null), []);
+
+  // Fire the deferred jump once the reducer has the index in its
+  // selection (the `selected` → changeSelection sync runs in its own
+  // effect, so this waits a render for it to land).
+  useEffect(() => {
+    if (pendingJumpIndex == null) return;
+    if (!session.selectedIndices.includes(pendingJumpIndex)) return;
+    flushPendingFinish();
+    dispatch({ type: 'jumpTo', index: pendingJumpIndex });
+    setPendingJumpIndex(null);
+    drillHandoffPendingRef.current = false;
+  }, [pendingJumpIndex, session.selectedIndices, flushPendingFinish]);
+
+  // Filter the unified list by search query and tier for display.
+  const visibleFamilies = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return pickerFamilies
+      .map((fam) => ({
+        family: fam.family,
+        entries: fam.entries.filter((e) => {
+          if (tierFilter !== 'all' && e.tier !== tierFilter) return false;
+          if (q.length === 0) return true;
+          return (
+            e.family.toLowerCase().includes(q) ||
+            e.variation.toLowerCase().includes(q) ||
+            e.eco.toLowerCase().includes(q)
+          );
+        }),
+      }))
+      .filter((fam) => fam.entries.length > 0);
+  }, [pickerFamilies, query, tierFilter]);
+
+  const addableSelectedKeys = useMemo(
+    () => [...toAdd],
+    [toAdd],
+  );
+
   return (
     <div className="space-y-4">
       <header className="flex items-baseline justify-between flex-wrap gap-2">
@@ -582,7 +871,7 @@ function ActivePractice({
 
       <ModePicker mode={session.mode} onChange={setMode} />
 
-      {usingRecommendedSet && guidedMastered && nextLines.length > 0 && (
+      {usingRecommendedSet && nextLines.length > 0 && (
         <div className="card p-4 border-good/40 bg-good/5 flex flex-col sm:flex-row gap-3 sm:items-center">
           <div className="flex-1">
             <div className="font-medium text-good">{t('practice.nextLinesReady')}</div>
@@ -614,7 +903,62 @@ function ActivePractice({
           to navigate away and back. */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-4 items-start">
         <div className="space-y-3">
-          {selected.size === 0 ? (
+          {learnEntry ? (
+            <LearnPanel
+              key={learnEntry.key}
+              uci={learnEntry.uci}
+              variation={learnEntry.variation}
+              family={learnEntry.family}
+              eco={learnEntry.eco}
+              tier={learnEntry.tier}
+              plies={learnEntry.plies}
+              record={learnEntry.record}
+              inRepertoire={learnEntry.inRepertoire}
+              familyBlurb={familyDescription(learnEntry.family)}
+              moveShares={learnEntry.uci.map((_, i) =>
+                trustworthyShare(libraryLineByKey.get(
+                  openingLineKey(learnEntry.uci.slice(0, i + 1)),
+                )),
+              )}
+              userColor={rep.color}
+              adding={addingLibrary}
+              onDrill={() => drillEntry(learnEntry)}
+              onAddToSet={() => addToSet(learnEntry)}
+              onClose={closeLearn}
+            />
+          ) : focusLine ? (
+            /* Focused drill: exactly the line the user chose/learned,
+               independent of the session queue. */
+            <div className="space-y-2">
+              <div className="flex items-baseline justify-between gap-2 px-1">
+                <div className="text-xs text-text-muted">
+                  {t('practice.focus.drillingOneLine', {
+                    name: focusLine.variation || focusLine.family,
+                  })}
+                </div>
+                <button type="button" className="btn text-xs" onClick={exitFocusLine}>
+                  {t('practice.focus.backToSet')}
+                </button>
+              </div>
+              <LineRunner
+                key={`focus-${rep.id}-${lineKey(focusLine.line.uci)}`}
+                repertoireId={rep.id}
+                line={focusLine.line}
+                userColor={rep.color}
+                onStatsChanged={onStatsChanged}
+                renderControls={(c) => (
+                  <PracticeStatusBar
+                    control={c}
+                    decorated={focusLine}
+                    userColor={rep.color}
+                    sessionPlays={0}
+                    onSkip={exitFocusLine}
+                    onPlayItOut={startFreePlay}
+                  />
+                )}
+              />
+            </div>
+          ) : selected.size === 0 ? (
             <div className="card p-6 text-center text-text-muted space-y-2">
               <div>{t('practice.noLinesSelected')}</div>
               <p className="text-xs">{t('practice.noLinesSelectedHelp')}</p>
@@ -692,25 +1036,26 @@ function ActivePractice({
             onSelectFamily={(indices) => setSelected(new Set(indices))}
           />
           <LinePicker
-            decoratedLines={decoratedLines}
-            filteredIndices={filteredIndices}
-            selected={selected}
-            userColor={rep.color}
+            families={visibleFamilies}
+            totalEntries={pickerFamilies.reduce((n, f) => n + f.entries.length, 0)}
+            drillSelected={selected}
+            toAdd={toAdd}
             currentIndex={session.currentIndex}
             perfectThisSession={session.perfectThisSession}
+            decoratedLines={decoratedLines}
             stats={stats ?? null}
             query={query}
             onQuery={setQuery}
-            onToggle={toggleLine}
-            onSelectAll={selectAll}
-            onSelectNone={selectNone}
-            onSelectFiltered={selectFiltered}
-            onJumpTo={(i) => {
-              // Jumping mid-completion should still register the
-              // completion before moving to the requested line.
-              flushPendingFinish();
-              dispatch({ type: 'jumpTo', index: i });
-            }}
+            tierFilter={tierFilter}
+            onTierFilter={setTierFilter}
+            adding={addingLibrary}
+            addProgress={addProgress}
+            addableSelectedKeys={addableSelectedKeys}
+            onToggleDrill={toggleLine}
+            onToggleAdd={toggleToAdd}
+            onAddSelected={() => void addLibraryLines(addableSelectedKeys)}
+            onLearn={openLearn}
+            onDrillEntry={drillEntry}
           />
         </aside>
       </div>
@@ -1110,55 +1455,103 @@ function FamilyStats({
   );
 }
 
+/** Tailwind classes for a tier badge. Reuses the move-classification
+ *  palette (green / amber / red) so difficulty reads at a glance without
+ *  a new colour token. */
+const TIER_BADGE: Record<Tier, string> = {
+  easy: 'bg-good/15 text-good',
+  medium: 'bg-inaccuracy/15 text-inaccuracy',
+  hard: 'bg-blunder/15 text-blunder',
+};
+
+/** How many rows to render per family before a "show more" — matches the
+ *  `PAGE_SIZE` cap the games table uses, so a 380-line family (Sicilian)
+ *  doesn't mount hundreds of rows at once. */
+const PICKER_GROUP_PAGE = 100;
+
+function TierChip({ tier }: { tier: Tier }) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className={`text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 ${TIER_BADGE[tier]}`}
+    >
+      {t(`practice.linePicker.tier.${tier}` as const)}
+    </span>
+  );
+}
+
+/** Compact "your record here" chip. `inherited` marks a record borrowed
+ *  from a broader variation the user has actually played. */
+function RecordChip({ record }: { record: PersonalLineRecord }) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className="text-[10px] text-text-muted shrink-0"
+      title={
+        record.inherited
+          ? t('practice.linePicker.recordInheritedHint')
+          : t('practice.linePicker.recordHint')
+      }
+    >
+      {record.inherited ? '≈ ' : ''}
+      {t('practice.linePicker.record', {
+        wins: record.wins,
+        draws: record.draws,
+        losses: record.losses,
+      })}
+    </span>
+  );
+}
+
 function LinePicker({
-  decoratedLines,
-  filteredIndices,
-  selected,
-  userColor,
+  families,
+  totalEntries,
+  drillSelected,
+  toAdd,
   currentIndex,
   perfectThisSession,
+  decoratedLines,
   stats,
   query,
   onQuery,
-  onToggle,
-  onSelectAll,
-  onSelectNone,
-  onSelectFiltered,
-  onJumpTo,
+  tierFilter,
+  onTierFilter,
+  adding,
+  addProgress,
+  addableSelectedKeys,
+  onToggleDrill,
+  onToggleAdd,
+  onAddSelected,
+  onLearn,
+  onDrillEntry,
 }: {
-  decoratedLines: DecoratedLine[];
-  filteredIndices: number[];
-  selected: Set<number>;
-  /** Which side the user is preparing — feeds into per-token colour
-   *  coding so the picker can show "your" moves in accent and the
-   *  opponent's in muted text. */
-  userColor: 'white' | 'black';
+  families: PickerFamily[];
+  totalEntries: number;
+  drillSelected: Set<number>;
+  toAdd: Set<string>;
   currentIndex: number | null;
   perfectThisSession: number[];
+  decoratedLines: DecoratedLine[];
   stats: Awaited<ReturnType<typeof getLineStatsMap>> | null;
   query: string;
   onQuery: (q: string) => void;
-  onToggle: (i: number) => void;
-  onSelectAll: () => void;
-  onSelectNone: () => void;
-  onSelectFiltered: () => void;
-  onJumpTo: (i: number) => void;
+  tierFilter: Tier | 'all';
+  onTierFilter: (t: Tier | 'all') => void;
+  adding: boolean;
+  addProgress: { done: number; total: number } | null;
+  addableSelectedKeys: string[];
+  onToggleDrill: (repertoireIndex: number) => void;
+  onToggleAdd: (key: string) => void;
+  onAddSelected: () => void;
+  onLearn: (entry: PickerEntry) => void;
+  onDrillEntry: (entry: PickerEntry) => void;
 }) {
   const { t } = useTranslation();
-  // Group filtered indices by family for the picker layout. Group
-  // order follows the family's first appearance in the underlying
-  // line list (which is already family-sorted by enumerateLines), so
-  // the section order is stable across renders.
-  const groups = useMemo(() => {
-    const map = new Map<string, number[]>();
-    for (const i of filteredIndices) {
-      const fam = decoratedLines[i].family;
-      const arr = map.get(fam) ?? [];
-      arr.push(i);
-      map.set(fam, arr);
-    }
-    return Array.from(map.entries());
-  }, [decoratedLines, filteredIndices]);
+  const inRepertoireCount = decoratedLines.length;
+  // Per-family "show more" cursors, keyed by family name.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const tierOptions: Array<Tier | 'all'> = ['all', 'easy', 'medium', 'hard'];
 
   return (
     <div className="card p-3 space-y-2">
@@ -1167,7 +1560,10 @@ function LinePicker({
           {t('practice.linePicker.lines')}
         </div>
         <div className="text-[11px] text-text-muted">
-          {t('practice.linePicker.selectedCount', { selected: selected.size, total: decoratedLines.length })}
+          {t('practice.linePicker.repertoireCount', {
+            inRepertoire: inRepertoireCount,
+            available: totalEntries,
+          })}
         </div>
       </div>
       <input
@@ -1177,107 +1573,229 @@ function LinePicker({
         value={query}
         onChange={(e) => onQuery(e.target.value)}
       />
-      <div className="flex flex-wrap gap-2 text-xs">
-        <button type="button" className="btn text-xs" onClick={onSelectAll}>
-          {t('practice.linePicker.selectAll')}
-        </button>
-        <button type="button" className="btn text-xs" onClick={onSelectNone}>
-          {t('practice.linePicker.selectNone')}
-        </button>
-        {query.trim().length > 0 && (
-          <button type="button" className="btn text-xs" onClick={onSelectFiltered}>
-            {t('practice.linePicker.selectFiltered', { count: filteredIndices.length })}
+      <div className="flex flex-wrap gap-1 text-xs">
+        {tierOptions.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            className={`text-[11px] px-2 py-0.5 rounded border ${
+              tierFilter === opt
+                ? 'border-accent text-accent'
+                : 'border-border text-text-muted hover:text-text'
+            }`}
+            onClick={() => onTierFilter(opt)}
+          >
+            {opt === 'all'
+              ? t('practice.linePicker.tierAll')
+              : t(`practice.linePicker.tier.${opt}` as const)}
           </button>
-        )}
+        ))}
       </div>
+      {addableSelectedKeys.length > 0 && (
+        <button
+          type="button"
+          className="btn-primary text-xs w-full"
+          disabled={adding}
+          onClick={onAddSelected}
+        >
+          {adding && addProgress
+            ? t('practice.linePicker.addingProgress', {
+                done: addProgress.done,
+                total: addProgress.total,
+              })
+            : t('practice.linePicker.addSelected', {
+                count: addableSelectedKeys.length,
+              })}
+        </button>
+      )}
       <div className="max-h-[60vh] overflow-y-auto -mx-1 pr-1 divide-y divide-border">
-        {groups.length === 0 ? (
+        {families.length === 0 ? (
           <div className="py-6 text-center text-xs text-text-muted">
             {t('practice.linePicker.noMatches', { query })}
           </div>
         ) : (
-          groups.map(([family, indices]) => (
-            <div key={family} className="py-2 first:pt-0 last:pb-0">
-              <div className="text-[11px] uppercase tracking-wide text-text-muted px-1 py-0.5">
-                {family}
+          families.map(({ family, entries }) => {
+            const expanded = expandedGroups.has(family);
+            const shown = expanded ? entries : entries.slice(0, PICKER_GROUP_PAGE);
+            const hidden = entries.length - shown.length;
+            return (
+              <div key={family} className="py-2 first:pt-0 last:pb-0">
+                <div className="text-[11px] uppercase tracking-wide text-text-muted px-1 py-0.5">
+                  {family}
+                </div>
+                <ul className="space-y-1">
+                  {shown.map((entry) => (
+                    <PickerRow
+                      key={entry.key}
+                      entry={entry}
+                      isDrillSelected={
+                        entry.repertoireIndex != null &&
+                        drillSelected.has(entry.repertoireIndex)
+                      }
+                      isToAdd={toAdd.has(entry.key)}
+                      isCurrent={
+                        entry.repertoireIndex != null &&
+                        entry.repertoireIndex === currentIndex
+                      }
+                      isPerfectSession={
+                        entry.repertoireIndex != null &&
+                        perfectThisSession.includes(entry.repertoireIndex)
+                      }
+                      srs={
+                        stats && entry.repertoireIndex != null
+                          ? stats.get(entry.key) ?? null
+                          : null
+                      }
+                      onToggleDrill={onToggleDrill}
+                      onToggleAdd={onToggleAdd}
+                      onLearn={onLearn}
+                      onDrillEntry={onDrillEntry}
+                    />
+                  ))}
+                </ul>
+                {hidden > 0 && (
+                  <button
+                    type="button"
+                    className="text-[11px] text-accent hover:underline mt-1 px-1"
+                    onClick={() =>
+                      setExpandedGroups((prev) => new Set(prev).add(family))
+                    }
+                  >
+                    {t('practice.linePicker.showMore', { count: hidden })}
+                  </button>
+                )}
               </div>
-              <ul className="space-y-1">
-                {indices.map((i) => {
-                  const d = decoratedLines[i];
-                  const id = `line-${i}`;
-                  const isSelected = selected.has(i);
-                  const isCurrent = i === currentIndex;
-                  const isPerfectSession = perfectThisSession.includes(i);
-                  const persisted = stats ? stats.get(lineKey(d.line.uci)) : null;
-                  return (
-                    <li
-                      key={id}
-                      className={`flex items-start gap-2 px-1 py-1 rounded ${
-                        isCurrent ? 'bg-accent/15' : ''
-                      }`}
-                    >
-                      <input
-                        id={id}
-                        type="checkbox"
-                        className="mt-1 cursor-pointer"
-                        checked={isSelected}
-                        onChange={() => onToggle(i)}
-                      />
-                      <label htmlFor={id} className="flex-1 min-w-0 cursor-pointer">
-                        <div className="flex items-baseline gap-2">
-                          {d.eco && (
-                            <span className="font-mono text-[11px] text-text-muted shrink-0">
-                              {d.eco}
-                            </span>
-                          )}
-                          <span className="text-sm truncate flex-1">
-                            {d.variation || t('practice.linePicker.mainline')}
-                          </span>
-                          <span className="text-[10px] text-text-muted shrink-0 tabular-nums">
-                            {t('practice.linePicker.plyTag', { count: d.line.uci.length })}
-                          </span>
-                          {isPerfectSession && (
-                            <span className="text-good shrink-0" title={t('practice.linePicker.donePerfectThisSession')}>
-                              ✓
-                            </span>
-                          )}
-                        </div>
-                        <div className="mt-0.5">
-                          <LineMoveTokens
-                            sans={d.line.san}
-                            fens={d.line.fens}
-                            userColor={userColor}
-                            size="sm"
-                          />
-                        </div>
-                        {persisted && persisted.attempts > 0 && (
-                          <div className="text-[10px] text-text-muted mt-0.5">
-                            {t('practice.linePicker.doneCount', { count: persisted.completions })}
-                            {persisted.perfectCompletions > 0 && (
-                              <span className="text-good">
-                                {' \u00b7 '}
-                                {t('practice.linePicker.donePerfect', { count: persisted.perfectCompletions })}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </label>
-                      <button
-                        type="button"
-                        className="text-[11px] text-accent hover:underline shrink-0"
-                        onClick={() => onJumpTo(i)}
-                        title={t('practice.linePicker.playTitle')}
-                      >
-                        {t('practice.linePicker.play')}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
+  );
+}
+
+function PickerRow({
+  entry,
+  isDrillSelected,
+  isToAdd,
+  isCurrent,
+  isPerfectSession,
+  srs,
+  onToggleDrill,
+  onToggleAdd,
+  onLearn,
+  onDrillEntry,
+}: {
+  entry: PickerEntry;
+  isDrillSelected: boolean;
+  isToAdd: boolean;
+  isCurrent: boolean;
+  isPerfectSession: boolean;
+  srs: RepertoireLineStats | null;
+  onToggleDrill: (repertoireIndex: number) => void;
+  onToggleAdd: (key: string) => void;
+  onLearn: (entry: PickerEntry) => void;
+  onDrillEntry: (entry: PickerEntry) => void;
+}) {
+  const { t } = useTranslation();
+  const id = `pick-${entry.key.replace(/\s+/g, '_')}`;
+  return (
+    <li
+      className={`flex items-start gap-2 px-1 py-1 rounded ${
+        isCurrent ? 'bg-accent/15' : ''
+      }`}
+    >
+      {entry.inRepertoire && entry.repertoireIndex != null ? (
+        <input
+          id={id}
+          type="checkbox"
+          className="mt-1 cursor-pointer"
+          checked={isDrillSelected}
+          title={t('practice.linePicker.drillToggleHint')}
+          onChange={() => onToggleDrill(entry.repertoireIndex!)}
+        />
+      ) : (
+        <input
+          id={id}
+          type="checkbox"
+          className="mt-1 cursor-pointer accent-good"
+          checked={isToAdd}
+          title={t('practice.linePicker.addToggleHint')}
+          onChange={() => onToggleAdd(entry.key)}
+        />
+      )}
+      <label htmlFor={id} className="flex-1 min-w-0 cursor-pointer">
+        <div className="flex items-baseline gap-2 flex-wrap">
+          {entry.eco && (
+            <span className="font-mono text-[11px] text-text-muted shrink-0">
+              {entry.eco}
+            </span>
+          )}
+          <span className="text-sm truncate">
+            {entry.variation || t('practice.linePicker.mainline')}
+          </span>
+          <TierChip tier={entry.tier} />
+          <span className="text-[10px] text-text-muted shrink-0 tabular-nums">
+            {t('practice.linePicker.plyTag', { count: entry.plies })}
+          </span>
+          {entry.forcedness === 'rare' && (
+            <span className="text-[10px] text-miss shrink-0">
+              {t('practice.linePicker.rare')}
+            </span>
+          )}
+          {entry.forcedness === 'forced' && (
+            <span className="text-[10px] text-text-muted shrink-0">
+              {t('practice.linePicker.forced')}
+            </span>
+          )}
+          {entry.record && <RecordChip record={entry.record} />}
+          {isPerfectSession && (
+            <span
+              className="text-good shrink-0"
+              title={t('practice.linePicker.donePerfectThisSession')}
+            >
+              {'✓'}
+            </span>
+          )}
+          {!entry.inRepertoire && (
+            <span className="text-[10px] text-accent/80 shrink-0">
+              {t('practice.linePicker.notAdded')}
+            </span>
+          )}
+        </div>
+        {srs && srs.attempts > 0 && (
+          <div className="text-[10px] text-text-muted mt-0.5">
+            {t('practice.linePicker.doneCount', { count: srs.completions })}
+            {srs.perfectCompletions > 0 && (
+              <span className="text-good">
+                {' · '}
+                {t('practice.linePicker.donePerfect', {
+                  count: srs.perfectCompletions,
+                })}
+              </span>
+            )}
+          </div>
+        )}
+      </label>
+      <div className="flex flex-col items-end gap-0.5 shrink-0">
+        <button
+          type="button"
+          className="text-[11px] text-accent hover:underline"
+          onClick={() => onLearn(entry)}
+          title={t('practice.linePicker.learnHint')}
+        >
+          {t('practice.linePicker.learn')}
+        </button>
+        <button
+          type="button"
+          className="text-[11px] text-text-muted hover:text-text"
+          onClick={() => onDrillEntry(entry)}
+          title={t('practice.linePicker.playTitle')}
+        >
+          {entry.inRepertoire
+            ? t('practice.linePicker.play')
+            : t('practice.linePicker.addAndDrill')}
+        </button>
+      </div>
+    </li>
   );
 }

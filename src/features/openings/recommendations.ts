@@ -1,11 +1,43 @@
 import { Chess } from 'chess.js';
-import type { Color, Game } from '@/db/schema';
+import type { Color, Game, GameResult } from '@/db/schema';
 import type { OpeningLine } from './library';
+
+/** Win/draw/loss tally from the user's own games, always from the user's
+ *  perspective (`Game.result` is already stored that way — see
+ *  `db/schema.ts` and `import/importer.ts`). */
+export interface WinDrawLoss {
+  wins: number;
+  draws: number;
+  losses: number;
+}
 
 export interface PersonalOpeningStats {
   relevantGames: number;
   prefixCounts: ReadonlyMap<string, number>;
+  /** Per-prefix W/D/L, same keys as `prefixCounts`. A prefix's count is
+   *  `wins + draws + losses` plus any games with an `'unknown'` result, so
+   *  `prefixCounts` can exceed the W/D/L sum when results are missing. */
+  prefixRecords: ReadonlyMap<string, WinDrawLoss>;
 }
+
+/** The user's record on a line, resolved by walking up to the deepest
+ *  prefix they have actually reached often enough to be informative. */
+export interface PersonalLineRecord extends WinDrawLoss {
+  /** Games contributing (`wins + draws + losses`). */
+  games: number;
+  /** Ply depth of the prefix this record was measured at. Equals the
+   *  line's own length when the exact line was played; shorter when the
+   *  record was inherited from an ancestor variation. */
+  depth: number;
+  /** True when `depth < line.uci.length`, i.e. the record describes a
+   *  broader variation the line belongs to rather than the line itself. */
+  inherited: boolean;
+}
+
+/** Minimum games at a prefix before its record is trusted to inform a
+ *  difficulty tier. Below this the sample is too noisy to move a line up
+ *  or down a tier. One knob, named, so it is cheap to retune. */
+export const MIN_GAMES_FOR_RECORD = 4;
 
 export interface RankedOpeningLine {
   line: OpeningLine;
@@ -20,10 +52,14 @@ export function openingLineKey(uci: readonly string[]): string {
 }
 
 export function buildPersonalOpeningStats(
-  games: ReadonlyArray<Pick<Game, 'pgn' | 'userColor'>>,
+  // `result` is optional so callers with partial game shapes (and games
+  // whose result was never recorded) still work; a missing result simply
+  // contributes to prefixCounts but not to W/D/L.
+  games: ReadonlyArray<Pick<Game, 'pgn' | 'userColor'> & { result?: GameResult }>,
   color: Color,
 ): PersonalOpeningStats {
   const prefixCounts = new Map<string, number>();
+  const prefixRecords = new Map<string, WinDrawLoss>();
   let relevantGames = 0;
 
   for (const game of games) {
@@ -36,16 +72,69 @@ export function buildPersonalOpeningStats(
       );
       if (uci.length === 0) continue;
       relevantGames++;
+      // `result` is already stored from the user's perspective, so we can
+      // fold it straight in without re-checking colour. `'unknown'`
+      // contributes to prefixCounts (via the loop) but not to W/D/L.
+      const outcome =
+        game.result === 'win'
+          ? 'wins'
+          : game.result === 'loss'
+            ? 'losses'
+            : game.result === 'draw'
+              ? 'draws'
+              : null;
       for (let length = 1; length <= uci.length; length++) {
         const key = openingLineKey(uci.slice(0, length));
         prefixCounts.set(key, (prefixCounts.get(key) ?? 0) + 1);
+        if (outcome) {
+          const rec = prefixRecords.get(key);
+          if (rec) rec[outcome]++;
+          else {
+            const fresh: WinDrawLoss = { wins: 0, draws: 0, losses: 0 };
+            fresh[outcome] = 1;
+            prefixRecords.set(key, fresh);
+          }
+        }
       }
     } catch {
       // A malformed historical PGN should not break opening suggestions.
     }
   }
 
-  return { relevantGames, prefixCounts };
+  return { relevantGames, prefixCounts, prefixRecords };
+}
+
+/**
+ * The user's record on a line, resolved by walking up its UCI prefixes
+ * from the exact line toward the root and returning the FIRST (deepest)
+ * prefix with at least `minGames` games. Returns null when no prefix
+ * clears the bar — the common case for a library line the user has never
+ * played, and the signal difficulty scoring uses to skip the familiarity
+ * input rather than invent a record.
+ *
+ * Why deepest-first: a 16-ply sideline the user has never reached still
+ * belongs to a variation they may know well; inheriting the Advance
+ * Variation's record is a truer familiarity signal than "no data", while
+ * still preferring the most specific evidence available.
+ */
+export function personalRecordForLine(
+  stats: PersonalOpeningStats,
+  uci: readonly string[],
+  minGames = MIN_GAMES_FOR_RECORD,
+): PersonalLineRecord | null {
+  for (let depth = uci.length; depth >= 1; depth--) {
+    const rec = stats.prefixRecords.get(openingLineKey(uci.slice(0, depth)));
+    if (!rec) continue;
+    const games = rec.wins + rec.draws + rec.losses;
+    if (games < minGames) continue;
+    return {
+      ...rec,
+      games,
+      depth,
+      inherited: depth < uci.length,
+    };
+  }
+  return null;
 }
 
 function commonPrefixLength(a: readonly string[], b: readonly string[]): number {

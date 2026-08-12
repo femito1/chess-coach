@@ -554,14 +554,57 @@
       "plyTag_one": "{{count}} ply",
       "plyTag_other": "{{count}} ply",
       "play": "Play",
-      "playTitle": "Jump to this line now"
+      "playTitle": "Jump to this line now",
+      "repertoireCount": "{{inRepertoire}} in repertoire · {{available}} in library",
+      "tierAll": "All",
+      "tier": {
+        "easy": "Easy",
+        "medium": "Medium",
+        "hard": "Hard"
+      },
+      "addSelected": "Add {{count}} selected",
+      "addingProgress": "Adding {{done}}/{{total}}…",
+      "showMore": "Show {{count}} more",
+      "rare": "rare",
+      "forced": "forced",
+      "notAdded": "not added",
+      "learn": "Learn",
+      "learnHint": "Step through this line before drilling it",
+      "addAndDrill": "Add & drill",
+      "drillToggleHint": "Include in this drill session",
+      "addToggleHint": "Tick to add to your repertoire",
+      "record": "{{wins}}W {{draws}}D {{losses}}L",
+      "recordHint": "Your record in this exact line",
+      "recordInheritedHint": "Your record in this variation (broader than this exact line)"
     },
     "statusbar": {
       "ply": "{{ply}}/{{total}} ply · {{wrong}} wrong · play #{{play}}"
     },
     "drillProgress": "Drilling {{active}} of {{total}} lines",
     "includeAllLines": "Include all lines",
-    "useRecommendedSet": "Use recommended set"
+    "useRecommendedSet": "Use recommended set",
+    "learn": {
+      "title": "Learn this line",
+      "close": "Close",
+      "complete": "You've stepped through the whole line — drill it to lock it in.",
+      "notQuite": "Not that move — try again, or reveal it.",
+      "yourMovePrompt": "Your move — play it on the board, or reveal it.",
+      "opponentReplies": "Opponent replies…",
+      "revealMove": "Reveal move",
+      "restart": "Restart",
+      "addToSet": "Add to drill set",
+      "addToRepertoire": "Add to repertoire",
+      "adding": "Adding…",
+      "drillThisLine": "Drill this line",
+      "shareForced": "{{san}} is played {{pct}}% of the time here — all but forced.",
+      "shareRare": "Only {{pct}}% play {{san}} here — an offbeat choice to remember.",
+      "shareChoice": "{{san}} is played {{pct}}% of the time here.",
+      "noUserMoves": "This line has none of your moves — nothing to recall here."
+    },
+    "focus": {
+      "drillingOneLine": "Drilling one line: {{name}}",
+      "backToSet": "Back to drill set"
+    }
   },
   "openings": {
     "title": "Openings Library",

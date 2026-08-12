@@ -1,0 +1,297 @@
+name: Refresh opening data
+
+# Keeps the bundled opening frequency data from going stale, and — more
+# importantly — keeps `src/data/openings.generated.ts` COHERENT with the
+# TSV snapshot it is built from. The bug this prevents was not staleness
+# but incoherence: the committed bundle was once built from an older TSV
+# than the one committed beside it, so every frequency-derived number
+# (opening suggestions, difficulty tiers) was quietly wrong. A unit test
+# (`openings.generated.test.ts`) now fails on any such drift; this job
+# refreshes the data and only lands it if that test — and typecheck —
+# still pass.
+#
+# Design decisions (see ARCHITECTURE.md → "Openings data refresh"):
+#   * The job verifies THEN pushes to main. Cloudflare Pages deploys from
+#     main on its own webhook (not via Actions), so unverified data would
+#     ship the moment it landed. Verify-before-push is load-bearing.
+#   * No PR: repo auto-merge is off, main is unprotected, and a PR opened
+#     with GITHUB_TOKEN wouldn't trigger CI anyway. A self-verifying push
+#     is the hands-off path.
+#   * Gates on typecheck + unit only, NOT e2e — a pre-existing unrelated
+#     e2e failure must not block data refreshes forever.
+#   * The unit gate can only prove the bundle matches the TSV, never that
+#     the TSV is any good (it compares a fresh build to a fresh build), so
+#     a separate plausibility gate below compares the new TSV against the
+#     committed one before anything is pushed.
+#   * The upstream explorer proxy rate-limits bursts, so the snapshot runs
+#     under a bounded resume loop and the .cache is persisted across runs
+#     whether the job succeeds or not.
+#     Set the optional LICHESS_TOKEN secret to hit Lichess directly and
+#     skip the proxy's limits entirely.
+
+on:
+  schedule:
+    # 04:41 UTC on the 3rd of each month. Off-the-hour and off-the-1st to
+    # dodge the scheduler thundering herd.
+    - cron: '41 4 3 * *'
+  workflow_dispatch:
+
+# Only this job needs to write; grant the minimum. A workflow may request
+# write even when the repo's default token is read-only.
+permissions:
+  contents: write
+
+concurrency:
+  group: openings-refresh
+  cancel-in-progress: false
+
+# Real Clerk + Supabase config from repo secrets — the same block CI uses,
+# for the same non-negotiable reason: `npm run test:unit` (our verification
+# gate) loads `src/features/auth/useProfileSync.test.ts`, which imports
+# `src/lib/env.ts`, which THROWS at module load when any of these three is
+# unset. Without them this job's gate doesn't fail meaningfully — it fails
+# on missing config before it ever looks at the data, and no refresh can
+# ever land. These values are public-by-design (they already ship in every
+# user's browser bundle); the secrets are operational hygiene so rotating
+# them doesn't need a workflow edit. See ci.yml for the longer note.
+env:
+  VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+  VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+  VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+jobs:
+  refresh:
+    name: Snapshot, rebuild, verify, push
+    runs-on: ubuntu-latest
+    # Generous: the proxy is slow and rate-limited, so a cold run can take
+    # an hour-plus of mostly-waiting. Still bounded so it can't run away.
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the push step may have to rebase onto a main that
+          # moved during this multi-hour run, and rebasing in a depth-1
+          # shallow clone can't find a merge base. The repo packs to ~1.5 MB,
+          # so a full clone costs nothing measurable.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Persist the explorer response cache across runs so an interrupted
+      # or partial refresh resumes instead of restarting from cold.
+      #
+      # Restore and save are SPLIT deliberately. `actions/cache@v4` saves in
+      # a post-step guarded by `success()`, so a job that failed or hit the
+      # timeout — the single most likely outcome of a long rate-limited
+      # fetch, and the exact case the cache exists for — threw away every
+      # response it had paid for. An explicit `cache/save` with
+      # `if: always()` banks that progress instead.
+      - name: Restore opening-explorer cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache
+          key: openings-explorer-${{ github.run_id }}
+          restore-keys: |
+            openings-explorer-
+
+      - name: Refresh snapshot (full depth, resume until complete)
+        # Bounded well under the job's 340 so a snapshot that never
+        # converges can't eat the whole budget and starve verify + push —
+        # the steps that turn fetched data into something users see.
+        timeout-minutes: 280
+        env:
+          # Optional: if set, the snapshot hits Lichess directly and skips
+          # the third-party proxy's rate limits. Empty → proxy path.
+          LICHESS_TOKEN: ${{ secrets.LICHESS_TOKEN }}
+        run: |
+          set -u
+          # Resume loop: each attempt persists .cache every 10 responses and
+          # only fetches what's missing, so attempts compound.
+          #
+          # Completion comes from the script's EXIT CODE, not from `git
+          # diff` on the output file: 0 = TSV written, 3 = cache still
+          # incomplete (nothing written, re-run me), anything else = hard
+          # failure. `git diff` conflated "still incomplete" with "complete
+          # but byte-identical to what's committed", and would have looped
+          # 40 times over an already-finished snapshot.
+          attempts=20
+          complete=0
+          for attempt in $(seq 1 $attempts); do
+            echo "::group::snapshot attempt $attempt/$attempts"
+            set +e
+            node scripts/snapshot-opening-popularity.mjs --concurrency=2 --delay=600
+            status=$?
+            set -e
+            echo "::endgroup::"
+            case "$status" in
+              0)
+                echo "Snapshot complete — line-popularity.tsv written."
+                complete=1
+                break
+                ;;
+              3)
+                echo "Cache still incomplete; progress banked, resuming."
+                ;;
+              *)
+                echo "Snapshot attempt failed with exit $status; progress banked, retrying."
+                ;;
+            esac
+            sleep 30
+          done
+          # Fail loudly if we never completed: better a red job than a green
+          # no-op that reads as success on the Actions dashboard for months.
+          # The cache is saved by the next step regardless, so the following
+          # run resumes from here.
+          if [ "$complete" -ne 1 ]; then
+            echo "::error::Snapshot did not complete within $attempts attempts. Cache saved; re-run to resume."
+            exit 1
+          fi
+
+      # Immediately after the snapshot and unconditionally: see the note on
+      # the restore step. The run_attempt in the key means a re-run of this
+      # job saves its own progress instead of colliding with the attempt
+      # that already wrote this run_id.
+      - name: Save opening-explorer cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache
+          key: openings-explorer-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Rebuild the bundle from the refreshed snapshot
+        run: npm run openings:build
+
+      # Is the new data PLAUSIBLE? Nothing else asks. The coherence unit
+      # test proves the bundle matches the TSV beside it, but it builds
+      # both sides from the same fresh inputs, so a TSV of zeros passes it
+      # perfectly. The realistic failure is the upstream: a hobby proxy
+      # answering HTTP 200 with junk, or a filter/param change upstream,
+      # yields a well-formed snapshot of zeros that would sail through
+      # typecheck, tests, and the push straight into production ranking.
+      #
+      # Two coarse checks against the committed TSV, both counting only
+      # data rows ('#' comments and the column header excluded):
+      #   * row count within 1% — the line list comes from committed
+      #     Lichess TSVs and only moves when someone edits them, so a real
+      #     swing means a parser or input change, not new chess.
+      #   * rows with globalGames > 0 down by no more than 5% — this is the
+      #     zeros detector; measured lines don't stop being played.
+      # Deliberately loose: this is a floor against catastrophe, not a
+      # regression test on chess popularity.
+      - name: Verify — new snapshot is plausible vs the committed one
+        run: |
+          set -u
+          count_rows() {
+            awk -F'\t' '
+              /^#/ { next }             # generator comments
+              $1 == "uci" { next }      # column header
+              NF >= 2 { rows++; if ($2 + 0 > 0) nonzero++ }
+              END { printf "%d %d\n", rows, nonzero }
+            ' "$1"
+          }
+          git show HEAD:data/openings/line-popularity.tsv > /tmp/old-line-popularity.tsv
+          read -r old_rows old_nonzero <<< "$(count_rows /tmp/old-line-popularity.tsv)"
+          read -r new_rows new_nonzero <<< "$(count_rows data/openings/line-popularity.tsv)"
+          echo "committed: $old_rows rows, $old_nonzero with games > 0"
+          echo "new:       $new_rows rows, $new_nonzero with games > 0"
+
+          if [ "$new_rows" -eq 0 ]; then
+            echo "::error::New snapshot has no data rows at all."
+            exit 1
+          fi
+          if ! awk -v old="$old_rows" -v new="$new_rows" 'BEGIN {
+                 if (old == 0) exit 0
+                 delta = (new - old) / old
+                 if (delta < 0) delta = -delta
+                 exit (delta > 0.01) ? 1 : 0
+               }'; then
+            echo "::error::Row count moved from $old_rows to $new_rows (>1%). The line list should be stable; inspect the inputs before landing this."
+            exit 1
+          fi
+          if ! awk -v old="$old_nonzero" -v new="$new_nonzero" 'BEGIN {
+                 if (old == 0) exit 0
+                 exit ((old - new) / old > 0.05) ? 1 : 0
+               }'; then
+            echo "::error::Rows with games > 0 fell from $old_nonzero to $new_nonzero (>5%). Likely a broken upstream returning empty 200s — refusing to publish a snapshot of zeros."
+            exit 1
+          fi
+          echo "Plausibility checks passed."
+
+      - name: Verify — typecheck
+        run: npm run typecheck
+
+      - name: Verify — unit tests (includes coherence + resolution invariants)
+        run: npm run test:unit
+
+      - name: Commit and push if data changed
+        run: |
+          set -u
+          TSV=data/openings/line-popularity.tsv
+          BUNDLE=src/data/openings.generated.ts
+          # `git diff --quiet` can NEVER be quiet here: the TSV carries a
+          # `# snapshot=<ISO>` line and the bundle a `// Generated <ISO>`
+          # line, both stamped on every build. Every run therefore committed
+          # a timestamp-only churn commit — and each of those triggers a
+          # Cloudflare Pages deploy of identical data. Compare only the
+          # data-bearing lines. (The bundle's banner line is stripped by
+          # exactly the same rule the coherence test uses.)
+          data_only() {
+            case "$1" in
+              *.tsv) grep -v '^#' || true ;;
+              *)     grep -v '^// Generated ' || true ;;
+            esac
+          }
+          changed=0
+          for path in "$TSV" "$BUNDLE"; do
+            git show "HEAD:$path" | data_only "$path" > /tmp/committed-data
+            data_only "$path" < "$path" > /tmp/new-data
+            if ! cmp -s /tmp/committed-data /tmp/new-data; then
+              echo "$path changed."
+              changed=1
+            fi
+          done
+          if [ "$changed" -eq 0 ]; then
+            echo "Data identical to what's committed (only generation timestamps differ) — nothing to commit."
+            exit 0
+          fi
+
+          git config user.name "openings-refresh[bot]"
+          git config user.email "openings-refresh@users.noreply.github.com"
+          # `--only` commits exactly these two paths regardless of whatever
+          # else the verify steps may have left in the tree (a stray dist/,
+          # a tool's lockfile touch). A bare `git commit -m` commits the
+          # whole index and would quietly ship them.
+          #
+          # No `[skip ci]` marker: a push made with GITHUB_TOKEN doesn't
+          # trigger Actions anyway, so it buys nothing here — and Cloudflare
+          # Pages honours `[Skip CI]`-style markers, so it risks suppressing
+          # the very deploy this job exists to produce.
+          git commit --only "$TSV" "$BUNDLE" -m "chore(openings): refresh frequency snapshot"
+
+          if git push origin HEAD:main; then
+            echo "Pushed."
+            exit 0
+          fi
+          # Rejected as non-fast-forward: main moved while we spent hours
+          # fetching. Our commit touches two generated files, so rebasing it
+          # onto the new main is almost always trivial — and if it isn't,
+          # say so plainly instead of leaving a bare "! [rejected]" in the
+          # log for someone to decode.
+          echo "Push rejected; fetching main and rebasing our data commit onto it."
+          git fetch origin main
+          if ! git rebase FETCH_HEAD; then
+            git rebase --abort || true
+            echo "::error::Could not rebase onto origin/main — someone else changed the opening data. Re-run this workflow; the cache is saved, so the snapshot resumes cheaply."
+            exit 1
+          fi
+          if ! git push origin HEAD:main; then
+            echo "::error::Push rejected again after rebasing; main is moving faster than this job. Re-run the workflow."
+            exit 1
+          fi
+          echo "Pushed after rebase."

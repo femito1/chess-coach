@@ -22,7 +22,11 @@ const __dirname = dirname(__filename);
 const DATA_DIR = join(__dirname, '..', 'data', 'openings');
 const POPULARITY_FILE = join(DATA_DIR, 'popularity.tsv');
 const LINE_POPULARITY_FILE = join(DATA_DIR, 'line-popularity.tsv');
-const OUT_FILE = join(__dirname, '..', 'src', 'data', 'openings.generated.ts');
+export const OUT_FILE = join(__dirname, '..', 'src', 'data', 'openings.generated.ts');
+
+// Family ordering is part of the emitted bytes, so it must not depend on
+// the machine doing the emitting. See the sort in buildBundle().
+const FAMILY_COLLATOR = new Intl.Collator('en');
 
 function parseTsv(text) {
   const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
@@ -66,6 +70,28 @@ function parsePopularityTsv(text) {
     out.set(family.trim(), { popularity, description });
   }
   return out;
+}
+
+/**
+ * Read `measuredParentDepth` out of a line-popularity TSV's header.
+ *
+ * This matters to the app, not just to this script. The snapshot only
+ * queries the explorer down to that depth; beyond it, a line's
+ * `globalGames` / `globalShare` are the parent branch's numbers scaled by
+ * a documented 0.82-per-ply decay. Those are estimates, and an estimate
+ * that shrinks with depth is *not* a rarity measurement — presenting one
+ * to the user as "only 5% play this" would state a fact we don't have.
+ * So the depth travels into the bundle and the UI checks each line
+ * against it before quoting a frequency.
+ *
+ * Returns `Infinity` for a full-depth snapshot (header says `full`), a
+ * finite number for a capped one, and `0` when the header is missing —
+ * the safest reading, since it makes the UI trust nothing.
+ */
+export function parseMeasuredParentDepth(text) {
+  const match = /^#\s*measuredParentDepth=(full|\d+)/m.exec(text);
+  if (!match) return 0;
+  return match[1] === 'full' ? Infinity : Number(match[1]);
 }
 
 export function parseLinePopularityTsv(text) {
@@ -123,18 +149,30 @@ function splitName(name) {
   };
 }
 
-function main() {
+/**
+ * Read every committed input and produce the exact text of
+ * `openings.generated.ts`, split into a timestamped `banner` and a
+ * deterministic `body`. Pure over the filesystem inputs and free of any
+ * `Date.now()` outside the banner, so a test can rebuild the body in
+ * memory and compare it to the committed file byte-for-byte (ignoring the
+ * one timestamped banner line). This is the seam the coherence guard
+ * relies on: the bundle can never silently drift from the TSVs it is
+ * built from without failing `npm run test:unit`.
+ *
+ * Returns `{ banner, body, records, families, skipped, unranked }`.
+ */
+export function buildBundle() {
   if (!existsSync(DATA_DIR)) {
-    console.error(`Missing ${DATA_DIR}. Download the TSVs from`);
-    console.error('https://github.com/lichess-org/chess-openings first.');
-    process.exit(1);
+    throw new Error(
+      `Missing ${DATA_DIR}. Download the TSVs from ` +
+        'https://github.com/lichess-org/chess-openings first.',
+    );
   }
   const files = readdirSync(DATA_DIR)
     .filter((f) => /^[a-e]\.tsv$/i.test(f))
     .sort();
   if (files.length === 0) {
-    console.error(`No a.tsv..e.tsv files under ${DATA_DIR}.`);
-    process.exit(1);
+    throw new Error(`No a.tsv..e.tsv files under ${DATA_DIR}.`);
   }
 
   // Hand-authored popularity + descriptions, keyed by family name.
@@ -150,9 +188,13 @@ function main() {
       `No ${POPULARITY_FILE} found — emitting bundle without descriptions.`,
     );
   }
-  const linePopularity = existsSync(LINE_POPULARITY_FILE)
-    ? parseLinePopularityTsv(readFileSync(LINE_POPULARITY_FILE, 'utf8'))
+  const linePopularityRaw = existsSync(LINE_POPULARITY_FILE)
+    ? readFileSync(LINE_POPULARITY_FILE, 'utf8')
+    : '';
+  const linePopularity = linePopularityRaw
+    ? parseLinePopularityTsv(linePopularityRaw)
     : new Map();
+  const measuredParentDepth = parseMeasuredParentDepth(linePopularityRaw);
   if (linePopularity.size === 0) {
     console.warn(
       `No ${LINE_POPULARITY_FILE} found — emitting lines without frequency data.`,
@@ -216,7 +258,15 @@ function main() {
     });
     if (!meta) unranked++;
   }
-  families.sort((a, b) => a.family.localeCompare(b.family));
+  // Pin the collation locale. Bare `localeCompare()` sorts in the HOST's
+  // default locale, so the emitted byte order was a property of whichever
+  // machine ran the generator — and the coherence test compares the
+  // committed bundle to a fresh rebuild byte-for-byte. A CI runner (or a
+  // contributor) with a different ICU default would fail that test with a
+  // diff nobody could reproduce locally. 'en' reproduces the committed
+  // order exactly (verified against the committed OPENING_FAMILIES); it
+  // only removes the environmental dependency.
+  families.sort((a, b) => FAMILY_COLLATOR.compare(a.family, b.family));
 
   // Emit as a single compact TS module. Using JSON.stringify for the body
   // keeps it deterministic and easy to diff.
@@ -232,9 +282,13 @@ function main() {
     '  variation: string;',
     '  uci: string[];',
     '  pgn: string;',
-    '  /** Games reaching the final move in the bundled Lichess snapshot. */',
+    '  /** Games reaching the final move in the bundled Lichess snapshot.',
+    '   *  Only a real measurement when `uci.length - 1 <=',
+    '   *  MEASURED_PARENT_DEPTH`; deeper rows are the parent branch scaled',
+    '   *  by a 0.82-per-ply decay. See `isMeasuredLine`. */',
     '  globalGames: number;',
-    '  /** Final move share among games reaching its parent position. */',
+    '  /** Final move share among games reaching its parent position. Same',
+    '   *  measured-vs-estimated caveat as `globalGames`. */',
     '  globalShare: number;',
     '}',
     '',
@@ -257,10 +311,42 @@ function main() {
     '',
   ].join('\n');
 
+  // `Infinity` has no JSON form, so a full-depth snapshot is emitted as
+  // `Number.POSITIVE_INFINITY` in source.
+  const depthLiteral =
+    measuredParentDepth === Infinity
+      ? 'Number.POSITIVE_INFINITY'
+      : String(measuredParentDepth);
+
   const body =
     `export const OPENING_LINES: readonly OpeningLine[] = ${JSON.stringify(records, null, 0)} as const;\n\n` +
-    `export const OPENING_FAMILIES: readonly OpeningFamilyMeta[] = ${JSON.stringify(families, null, 0)} as const;\n`;
+    `export const OPENING_FAMILIES: readonly OpeningFamilyMeta[] = ${JSON.stringify(families, null, 0)} as const;\n\n` +
+    '/**\n' +
+    ' * How deep the bundled snapshot actually queried the opening explorer,\n' +
+    " * read from the TSV header's `measuredParentDepth`. A line's frequency\n" +
+    ' * is a real measurement only when its parent sits within this depth;\n' +
+    ' * beyond it the numbers are a documented 0.82-per-ply decay of the\n' +
+    ' * nearest measured ancestor, which shrinks with depth and therefore\n' +
+    " * says nothing about how often the move is actually chosen. Don't quote\n" +
+    ' * an estimated number to the user as a frequency — use `isMeasuredLine`.\n' +
+    ' */\n' +
+    `export const MEASURED_PARENT_DEPTH: number = ${depthLiteral};\n\n` +
+    '/** True when this line\'s own branch was measured rather than estimated. */\n' +
+    'export function isMeasuredLine(line: Pick<OpeningLine, \'uci\'>): boolean {\n' +
+    '  return line.uci.length - 1 <= MEASURED_PARENT_DEPTH;\n' +
+    '}\n';
 
+  return { banner, body, records, families, skipped, unranked };
+}
+
+/** The banner's third line carries `new Date().toISOString()`, so it
+ *  differs on every build. The coherence test strips exactly this line
+ *  from both sides before comparing. Kept next to the emitter so the two
+ *  never drift apart. */
+export const GENERATED_TIMESTAMP_PREFIX = '// Generated ';
+
+function main() {
+  const { banner, body, records, families, skipped, unranked } = buildBundle();
   const outDir = dirname(OUT_FILE);
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
   writeFileSync(OUT_FILE, banner + body);

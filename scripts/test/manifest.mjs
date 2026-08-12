@@ -51,6 +51,7 @@ export const BROWSER_TESTS = [
   { name: 'phase2',                     file: 'scripts/test/integration/phase2.mjs',                     category: 'integration' },
   { name: 'auto-import',                file: 'scripts/test/integration/auto-import.mjs',                category: 'integration' },
   { name: 'opening-popularity-build',   file: 'scripts/test/integration/opening-popularity-build.mjs',   category: 'integration' },
+  { name: 'drill-add-lines',            file: 'scripts/test/integration/drill-add-lines.mjs',            category: 'integration' },
   { name: 'live-chesscom',              file: 'scripts/test/live/live-chesscom.mjs',                     category: 'live' },
 
   // --- UI / review page -------------------------------------------
@@ -68,6 +69,8 @@ export const BROWSER_TESTS = [
   { name: 'repertoire-line-auto-retry', file: 'scripts/test/e2e/repertoire-line-auto-retry.mjs',         category: 'e2e' },
   { name: 'practice-freeplay',          file: 'scripts/test/e2e/practice-freeplay.mjs',                  category: 'e2e' },
   { name: 'guided-opening-learning',    file: 'scripts/test/e2e/guided-opening-learning.mjs',            category: 'e2e' },
+  { name: 'learn-then-drill',           file: 'scripts/test/e2e/learn-then-drill.mjs',                   category: 'e2e' },
+  { name: 'learn-black-recall',         file: 'scripts/test/e2e/learn-black-recall.mjs',                 category: 'e2e' },
   { name: 'dashboard-opening-deeplinks', file: 'scripts/test/e2e/dashboard-opening-deeplinks.mjs',       category: 'e2e' },
 ];
 
