@@ -32,6 +32,33 @@ On first launch:
 - `←` / `→` — step through moves
 - `Home` / `End` — jump to start / end
 
+## Contributing
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — data model, boot-time version
+  stamps, engine pool, the two opening-naming systems, UI conventions.
+  Read this before touching the analysis queue, a boot pass, or anything
+  that maps a game to an opening; each entry is something that has already
+  broken once.
+- [`DEPLOY.md`](DEPLOY.md) — Cloudflare Pages + GitHub Actions setup.
+- [`SETUP_AUTH.md`](SETUP_AUTH.md) — Clerk + Supabase env vars.
+
+### Tests
+
+```bash
+npm run typecheck && npm test    # the gate before pushing
+
+npm run test:unit         # vitest — pure logic, no browser
+npm run test:integration  # browser + Stockfish + IndexedDB, synthetic data
+npm run test:e2e          # browser, drives the real UI
+npm run test:live         # hits the live Chess.com API — on demand only
+```
+
+The browser tiers need `npm run dev` running in another terminal.
+`scripts/test/manifest.mjs` is the catalog of every browser test; add new
+ones there and use `runBrowserTest()` from `scripts/test/harness.mjs`.
+Unit tests must not import Dexie, Web Workers, chessground or Stockfish —
+see the conventions comment in `vitest.config.ts`.
+
 ## Self-hosting
 
 `npm run build` produces a static `dist/` folder. Serve it with any static file server (nginx, Caddy, `python -m http.server`, GitHub Pages, etc.).
@@ -56,7 +83,22 @@ Phase 3 (this version):
 - **Progress charts** on the dashboard: rating trend per time class, accuracy over time (per-game + 20-game rolling avg), and win-rate by opening family.
 - **Board polish**: Chess.com-style right-click drag arrows (with L-shaped paths for knight moves), right-click red square highlights, and faster piece movement (animation trimmed and suppressed on user-initiated moves).
 
-Planned (Phase 4+): endgame trainer (Lichess Syzygy), pre-game prep (opponent scouting), Chrome extension to deep-link games from chess.com, position annotations / "memory palace" across games.
+Also shipped:
+- **Repertoire drilling** — family-bound repertoires, a guided starter set of five lines, SM-2 review, and "play it out vs Stockfish" from the end of any line.
+- **Chrome extension** (`extension/`) — detects the end of a Chess.com game and offers a one-click deep link into your review. Build with `npm run extension:build -- --coach-origin=<url>`.
+- **Dashboard deep links** — win-rate-by-opening rows link into the openings library, or into your own repertoire when you already have one for that family.
+- **Brilliant-move tags** in the Games table.
+
+Planned (Phase 4+): endgame trainer (Lichess Syzygy), pre-game prep (opponent scouting), position annotations / "memory palace" across games.
+
+### Next up: opening discovery + learning (designed, not built)
+
+The drill page can only grow its line set five-at-a-time behind a mastery
+gate, or all-at-once from the library, and nothing ever *shows* you a line
+before testing you on it — so drilling an unfamiliar line is repeated
+failure rather than learning. Planned: a unified line picker that can pull
+any number of library lines in place, easy/medium/hard tiers blending
+depth, rarity and your own exposure, and a learn-then-drill handoff.
 
 ### Refreshing the openings database
 
