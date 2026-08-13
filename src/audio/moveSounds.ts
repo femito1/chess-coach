@@ -195,7 +195,7 @@ function noiseBuffer(c: AudioContext): AudioBuffer {
 /** Attack ramp. Long enough to avoid the digital "spit" of starting a sample
  *  at full amplitude, short enough that the hit still lands on the frame the
  *  piece does. */
-const ATTACK = 0.0015;
+const ATTACK = 0.0008;
 
 /**
  * The contact transient: a filtered noise burst, there to mark the instant of
@@ -268,6 +268,17 @@ interface KnockSpec {
   /** Contact noise. `cut` is the lowpass above the band — the lower it is,
    *  the less air the cue has. */
   hit: { gain: number; freq: number; q: number; decay: number; cut?: number };
+  /**
+   * A very short, very bright burst at the same onset — the *snap* that makes
+   * a cue read as crisp.
+   *
+   * Crispness and airiness are both high-frequency energy; what separates
+   * them is how long it lasts. A few milliseconds of treble is the click of
+   * contact. The same treble held for 50 ms is breath. So this is deliberately
+   * the shortest thing in the file (~6 ms), which buys definition without
+   * putting the hiss back.
+   */
+  snap?: { gain: number; freq: number; decay: number };
   /** Pitched body: fundamental, plus an inharmonic upper partial at
    *  `partial` × the fundamental. Inharmonic and fast-decaying is what reads
    *  as "wood"; harmonic and slow would read as a chime. */
@@ -284,6 +295,16 @@ interface KnockSpec {
  */
 function knock(c: AudioContext, out: AudioNode, at: number, spec: KnockSpec): void {
   transient(c, out, at, spec.hit);
+  if (spec.snap) {
+    transient(c, out, at, {
+      gain: spec.snap.gain,
+      freq: spec.snap.freq,
+      q: 0.8,
+      decay: spec.snap.decay,
+      // No lowpass: the snap IS the top end.
+      cut: 16000,
+    });
+  }
   body(c, out, at, spec.low);
   if (spec.partial) {
     body(c, out, at, {
@@ -320,14 +341,16 @@ function fanfare(c: AudioContext, out: AudioNode, at: number): void {
  */
 const KNOCKS: Record<Exclude<MoveSoundKind, 'brilliant'>, KnockSpec> = {
   move: {
-    hit: { gain: 0.3, freq: 1500, q: 1.4, decay: 0.02, cut: 2800 },
-    low: { gain: 0.8, freq: 200, decay: 0.075, drop: 0.82 },
-    partial: { ratio: 2.6, gain: 0.13, decay: 0.03 },
+    hit: { gain: 0.42, freq: 2600, q: 1.2, decay: 0.014, cut: 6000 },
+    snap: { gain: 0.16, freq: 6000, decay: 0.006 },
+    low: { gain: 0.7, freq: 200, decay: 0.07, drop: 0.82 },
+    partial: { ratio: 2.6, gain: 0.13, decay: 0.028 },
   },
   capture: {
-    hit: { gain: 0.4, freq: 1200, q: 1.2, decay: 0.028, cut: 2600 },
-    low: { gain: 1, freq: 145, decay: 0.115, drop: 0.78 },
-    partial: { ratio: 2.4, gain: 0.17, decay: 0.045 },
+    hit: { gain: 0.52, freq: 2100, q: 1.1, decay: 0.018, cut: 5200 },
+    snap: { gain: 0.18, freq: 5200, decay: 0.007 },
+    low: { gain: 0.95, freq: 145, decay: 0.11, drop: 0.78 },
+    partial: { ratio: 2.4, gain: 0.17, decay: 0.042 },
   },
   // Same knock family as `move` — a piece still lands — but pitched a fifth
   // or so higher with a harder, tighter top, so it reads as "that was a
@@ -335,12 +358,14 @@ const KNOCKS: Record<Exclude<MoveSoundKind, 'brilliant'>, KnockSpec> = {
   // with a ringing 3× partial and a bright 3.4 kHz top, which is a chime, and
   // chimes were ruled out.
   check: {
-    hit: { gain: 0.42, freq: 2100, q: 3, decay: 0.022, cut: 3400 },
-    low: { gain: 0.78, freq: 300, decay: 0.065, drop: 0.8 },
-    partial: { ratio: 2.6, gain: 0.14, decay: 0.028 },
+    hit: { gain: 0.5, freq: 3200, q: 2.2, decay: 0.016, cut: 7000 },
+    snap: { gain: 0.22, freq: 7000, decay: 0.007 },
+    low: { gain: 0.72, freq: 300, decay: 0.06, drop: 0.8 },
+    partial: { ratio: 2.6, gain: 0.14, decay: 0.026 },
   },
   mate: {
-    hit: { gain: 0.32, freq: 900, q: 1.2, decay: 0.032, cut: 2200 },
+    hit: { gain: 0.4, freq: 1400, q: 1.2, decay: 0.022, cut: 4000 },
+    snap: { gain: 0.12, freq: 4500, decay: 0.006 },
     low: { gain: 1, freq: 90, decay: 0.5, drop: 0.72 },
     partial: { ratio: 2.2, gain: 0.2, decay: 0.18 },
   },
