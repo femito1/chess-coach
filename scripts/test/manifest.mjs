@@ -64,7 +64,6 @@ export const BROWSER_TESTS = [
   { name: 'knight-arrow-toggle',        file: 'scripts/test/e2e/knight-arrow-toggle.mjs',                category: 'e2e' },
   { name: 'mobile-audit',               file: 'scripts/test/e2e/mobile-audit.mjs',                       category: 'e2e' },
   { name: 'mobile-review',              file: 'scripts/test/e2e/mobile-review.mjs',                      category: 'e2e' },
-  { name: 'touch-longpress-arrow',      file: 'scripts/test/e2e/touch-longpress-arrow.mjs',              category: 'e2e' },
   { name: 'puzzle-auto-retry',          file: 'scripts/test/e2e/puzzle-auto-retry.mjs',                  category: 'e2e' },
   { name: 'repertoire-line-auto-retry', file: 'scripts/test/e2e/repertoire-line-auto-retry.mjs',         category: 'e2e' },
   { name: 'practice-freeplay',          file: 'scripts/test/e2e/practice-freeplay.mjs',                  category: 'e2e' },

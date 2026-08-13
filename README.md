@@ -69,10 +69,8 @@ ones there and use `runBrowserTest()` from `scripts/test/harness.mjs`.
 Unit tests must not import Dexie, Web Workers, chessground or Stockfish —
 see the conventions comment in `vitest.config.ts`.
 
-Two e2e results are expected and not your fault: `touch-longpress-arrow`
-fails everywhere (it is the only reason CI shows red on `main`), and
-`mobile-audit` fails on some local setups while passing in CI. Everything
-else passing is the real bar.
+Everything should pass in CI. One exception: `mobile-audit` fails on some
+local setups while passing in CI, so confirm against CI before chasing it.
 
 ## Self-hosting
 

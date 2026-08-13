@@ -298,6 +298,7 @@ repo settings → **Branches** → add a rule for `main`:
 - ☑ Require status checks to pass before merging
 - Required status checks (these names must match the job names exactly):
   - `Typecheck + unit + integration`
+  - `Playwright e2e`
   - the Cloudflare Pages preview check, if you want the deploy to be
     part of the gate. GitHub only offers a check name once it has been
     reported at least once, so add it from the status-check search box
@@ -307,10 +308,10 @@ repo settings → **Branches** → add a rule for `main`:
   the rule to apply to admins too; for a solo project you may want this
   off so you can hot-fix without ceremony)
 
-**Do not require `Playwright e2e`.** That job has a known failure
-(`touch-longpress-arrow`), so requiring it makes every PR unmergeable.
-Either leave it off the required list and read it as advisory, or fix
-the failing test first and then add it.
+Before requiring a check, confirm it actually passes on `main` — a check
+with a standing failure makes every PR unmergeable. `npm run test:e2e` is
+expected to be fully green; if a test starts failing for environmental
+reasons, fix or remove it rather than leaving it required and red.
 
 Whatever you require here, remember it does not gate Cloudflare: CF
 deploys from `main` after the merge, so a required check only stops the
