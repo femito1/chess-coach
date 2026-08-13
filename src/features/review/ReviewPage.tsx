@@ -284,6 +284,7 @@ export function ReviewPage() {
             }
             board={
               <Board
+                sounds
                 fen={rs.currentFen}
                 orientation={game.userColor}
                 lastMoveUci={rs.lastUci}

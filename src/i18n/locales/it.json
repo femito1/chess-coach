@@ -156,6 +156,11 @@
       "title": "Lingua",
       "description": "Scegli la lingua usata in tutta l'app. Le traduzioni coprono l'interfaccia utente; la notazione delle mosse (SAN) e i codici ECO seguono sempre la convenzione internazionale."
     },
+    "sounds": {
+      "title": "Suoni",
+      "moveSounds": "Riproduci un suono quando un pezzo si muove",
+      "description": "Segnali per mosse, catture, scacco, arrocco e fine partita su ogni scacchiera che giochi o esplori. Salvato per dispositivo."
+    },
     "freePlayStrength": {
       "title": "Gioca contro il motore — forza predefinita",
       "description": "Usato quando clicchi su \"Gioca contro il motore\" dopo aver completato una linea di pratica. Massimo è Stockfish a piena forza. I livelli inferiori limitano il motore tramite UCI_LimitStrength + Skill Level per testare la linea a un livello più umano. Puoi sovrascrivere questo valore per sessione direttamente nella pagina di pratica.",

@@ -195,6 +195,7 @@ export function LearnPanel({
         <BoardFrame
           board={
             <Board
+              sounds
               fen={current.fen}
               orientation={userColor}
               lastMoveUci={current.uci || undefined}

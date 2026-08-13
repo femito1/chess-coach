@@ -231,6 +231,16 @@ limits entirely.
 - Tables over user data render a bounded page (see `PAGE_SIZE` in
   `GamesPage`). Filters and counts still run over the whole library; only
   the mounted row count is capped.
+- Move sounds (`audio/moveSounds.ts`) are **synthesized** with Web Audio,
+  not sampled: chess.com's audio files are their copyright, and generating
+  the cues costs no bundle weight and no first-move network request. Swap in
+  samples by changing `playMoveSound` alone — callers only ever name a
+  `MoveSoundKind`. `Board` drives them off `(fen, lastMoveUci)` rather than
+  the user's drag, so one hook covers user moves, engine replies, autoplay
+  and history stepping; it's opt-in per board (`sounds`) because the same
+  component draws silent preview thumbnails. The on/off preference lives in
+  localStorage, not the synced `Settings` row, because it's read
+  synchronously inside a move handler and is a per-device question.
 
 ## Deployment
 

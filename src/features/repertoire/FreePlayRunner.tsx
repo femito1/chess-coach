@@ -553,6 +553,7 @@ export function FreePlayRunner({
         }
         board={
           <Board
+            sounds
             fen={currentFen}
             orientation={userColor}
             lastMoveUci={lastUci}

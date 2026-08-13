@@ -156,6 +156,11 @@
       "title": "Idioma",
       "description": "Escolha o idioma usado em todo o aplicativo. As traduções cobrem a interface; a notação de lances (SAN) e códigos ECO sempre usam a convenção internacional."
     },
+    "sounds": {
+      "title": "Sons",
+      "moveSounds": "Tocar um som quando uma peça se move",
+      "description": "Sinais de lance, captura, xeque, roque e fim de jogo em todos os tabuleiros que você joga ou navega. Salvo por dispositivo."
+    },
     "freePlayStrength": {
       "title": "Jogo contra a engine — força padrão",
       "description": "Usado quando você clica em \"Jogar contra a engine\" após terminar uma linha de prática. Máximo é o Stockfish em força total. Os níveis menores limitam a engine via UCI_LimitStrength + Skill Level para você testar a linha em um nível mais humano. Você pode trocar a força por sessão na própria página de prática.",

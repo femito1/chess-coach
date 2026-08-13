@@ -156,6 +156,11 @@
       "title": "Language",
       "description": "Pick the language used across the app. Translations cover the user-facing UI; chess move notation (SAN) and ECO codes always use the international convention."
     },
+    "sounds": {
+      "title": "Sounds",
+      "moveSounds": "Play a sound when a piece moves",
+      "description": "Move, capture, check, castling and game-end cues on every board you play or step through. Stored per device."
+    },
     "freePlayStrength": {
       "title": "Play vs engine — default strength",
       "description": "Used when you click \"Play it out vs engine\" after finishing a practice line. Maximum is full-strength Stockfish. The lower levels handicap the engine via UCI_LimitStrength + Skill Level so you can pressure-test a line at a more human level. You can override this per-session on the practice page itself.",

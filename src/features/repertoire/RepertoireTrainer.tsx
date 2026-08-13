@@ -268,6 +268,7 @@ export function RepertoireTrainer() {
           <BoardFrame
             board={
               <Board
+                sounds
                 fen={shown ? solutionSteps[playbackIdx]?.fen ?? current.fen : current.fen}
                 orientation={orientation}
                 lastMoveUci={

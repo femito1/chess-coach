@@ -418,6 +418,7 @@ function PuzzleSolver({
           }
           board={
             <Board
+              sounds
               fen={boardFen}
               orientation={solverColor}
               lastMoveUci={boardLastUci}

@@ -350,6 +350,7 @@ export function LineRunner({
         }
         board={
           <Board
+            sounds
             fen={fen}
             orientation={userColor}
             lastMoveUci={lastUci}

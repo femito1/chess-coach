@@ -5,6 +5,7 @@ import type { Config as CgConfig } from 'chessground/config';
 import type { Color as CgColor, Key } from 'chessground/types';
 import type { DrawShape } from 'chessground/draw';
 import { Chess, type Square } from 'chess.js';
+import { playMove, playMoveSound } from '@/audio/moveSounds';
 import { useTranslation } from 'react-i18next';
 import type { Classification } from '@/db/schema';
 import { PRIMARY_BOARD_MAX_PX } from './BoardFrame';
@@ -55,6 +56,16 @@ export interface BoardProps {
   /** Optional list of squares to highlight (e.g. hint = the from-square of the
    *  expected move). Rendered as a colored ring. */
   highlightSquares?: { square: string; color?: 'hint' | 'wrong' | 'right' }[];
+  /**
+   * Play a sound when a piece lands (and a buzz when a move is rejected).
+   *
+   * Opt-in rather than default-on: this component also draws preview
+   * thumbnails and auto-playing solution boards, and those firing clicks
+   * unbidden would be noise, not feedback. Turn it on for boards a human is
+   * actually playing or stepping through. Honours the user's global
+   * sound preference either way.
+   */
+  sounds?: boolean;
 }
 
 /** chess.com's right-click red. Used both for the chessground `green` brush
@@ -144,6 +155,7 @@ export function Board({
   viewOnly = true,
   onMove,
   highlightSquares = [],
+  sounds = false,
 }: BoardProps) {
   const { t } = useTranslation();
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -175,6 +187,8 @@ export function Board({
    *  us to call `api.set()` (which clobbers user-drawn shapes). */
   const onMoveRef = useRef(onMove);
   onMoveRef.current = onMove;
+  const soundsRef = useRef(sounds);
+  soundsRef.current = sounds;
   const fenRef = useRef(fen);
   fenRef.current = fen;
   /** Last FEN string we pushed into chessground. Tracked here (rather than
@@ -260,6 +274,10 @@ export function Board({
             // `[viewOnly, dests]` won't help because the prop reference
             // hasn't changed (fen + viewOnly are identical to before).
             if (result === false) {
+              // Rejected: the piece is about to snap back, so say so. Read
+              // through the ref because this handler is installed once at
+              // init and would otherwise close over the initial prop.
+              if (soundsRef.current) playMoveSound('illegal');
               const expected = fenRef.current;
               api.current?.set({
                 fen: expected,
@@ -451,6 +469,26 @@ export function Board({
         : undefined,
     });
   }, [lastMoveUci]);
+
+  // ── move sounds ─────────────────────────────────────────────────────────
+  //
+  // Driven by `(fen, lastMoveUci)` rather than by the user's own drag, so one
+  // hook covers every way a piece lands: the user playing, the opponent
+  // auto-playing, an engine reply, stepping through a game. `soundedFenRef`
+  // both suppresses the cue on first paint (arriving at a position is not a
+  // move being played) and stops a re-render from replaying the same move.
+  const soundedFenRef = useRef<string | null>(null);
+  const fenBeforeSoundRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = soundedFenRef.current;
+    soundedFenRef.current = fen;
+    const fenBefore = fenBeforeSoundRef.current;
+    fenBeforeSoundRef.current = fen;
+    if (!sounds) return;
+    // First position we ever see, or a position reached without a move.
+    if (previous === null || previous === fen || !lastMoveUci) return;
+    playMove({ fenBefore: fenBefore ?? undefined, fenAfter: fen, uci: lastMoveUci });
+  }, [fen, lastMoveUci, sounds]);
 
   useEffect(() => {
     if (!api.current) return;

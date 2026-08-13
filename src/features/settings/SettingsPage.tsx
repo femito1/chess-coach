@@ -24,6 +24,8 @@ import {
   FREE_PLAY_STRENGTHS,
   type FreePlayStrength,
 } from '@/engine/freePlayEngine';
+import { usePersistedState } from '@/lib/usePersistedState';
+import { MOVE_SOUNDS_PREF_KEY } from '@/audio/moveSounds';
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
@@ -33,6 +35,12 @@ export function SettingsPage() {
   const [savedDepth, setSavedDepth] = useState(16);
   const [timeClassFilter, setTimeClassFilter] = useState<TimeClassSelection>(['rapid']);
   const [saved, setSaved] = useState(false);
+  // Same key + version the board reads through `moveSoundsEnabled()`.
+  const [moveSounds, setMoveSounds] = usePersistedState<boolean>(
+    MOVE_SOUNDS_PREF_KEY,
+    true,
+    { isValid: (v): v is boolean => typeof v === 'boolean' },
+  );
   const [requeueStatus, setRequeueStatus] = useState<string | null>(null);
   const [extensionDismissedAt, setExtensionDismissedAt] = useState<number | undefined>(
     undefined,
@@ -294,6 +302,25 @@ export function SettingsPage() {
             );
           })}
         </div>
+      </section>
+
+      {/* Move sounds. Kept in localStorage rather than the synced `Settings`
+       *  row because the board reads it synchronously inside a move handler,
+       *  and because "is this device allowed to make noise" is a per-device
+       *  question — the same account on a shared laptop shouldn't inherit it. */}
+      <section className="card p-4 space-y-3">
+        <h2 className="font-medium">{t('settings.sounds.title')}</h2>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={moveSounds}
+            onChange={(e) => setMoveSounds(e.target.checked)}
+          />
+          <span>{t('settings.sounds.moveSounds')}</span>
+        </label>
+        <p className="text-xs text-text-muted">
+          {t('settings.sounds.description')}
+        </p>
       </section>
 
       {/* Browser-extension promo. Lives in Settings (not as a noisy
