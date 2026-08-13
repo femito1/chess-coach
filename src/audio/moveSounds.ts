@@ -1,21 +1,29 @@
 /**
- * Move sounds: five cues, one impact each.
+ * Move sounds: one knock per move, plus a flourish for brilliance.
  *
- * **Shape of the design, and why.** The first version layered a click over a
- * ringing tone, played castling as two clicks 85 ms apart, and used little
- * melodic runs for promotion and game end. The verdict was blunt and right:
- * doubled sounds, chimes, and no clear moment of impact. So every cue here is
- * a *single* burst of filtered noise with an instant attack — one audible
- * event, landing exactly when the piece does. There are no oscillators in
- * this file at all, which makes a chime structurally impossible.
+ * **Shape of the design, and why it's on its third pass.** The first version
+ * sequenced sounds — two castle clicks 85 ms apart, tones ringing on after
+ * the click had ended, melodic runs for promotion and game end — and read as
+ * doubled cues and chimes with no clear moment of impact. The second went to
+ * the other extreme: a lone burst of filtered noise per cue. Unambiguous, but
+ * thin and cheap-sounding, because noise alone has no pitched body; it's the
+ * *top* of a sound, not a whole one.
+ *
+ * So each cue is now a struck knock: a contact transient (noise) plus a
+ * damped pitched body and one inharmonic upper partial, all beginning on the
+ * same frame and dying together. Stacking is what gives an impact weight;
+ * *sequencing* is what sounded doubled. Bodies bend their pitch down as they
+ * decay and are gone inside ~130 ms (mate excepted), which is what separates
+ * struck wood from a tone.
  *
  * The cue set:
  *
- *   move       — a short mid-high tock
- *   capture    — the same tock, louder and a little lower
- *   check      — bright, resonant, cutting; unmistakably not a move
- *   mate       — low and long; the only cue that rings
- *   brilliant  — bright with a fast upward sweep, still one hit
+ *   move       — mid tock with a short low body
+ *   capture    — the same knock, louder and heavier
+ *   check      — brighter and more resonant; unmistakably not a move
+ *   mate       — low, heavy, the only cue that rings on
+ *   brilliant  — an ascending three-note "achievement" flourish, by request:
+ *                a brilliant move shouldn't sound like a louder move
  *   illegal    — dull low thud, for a move the board refused
  *
  * Castling and promotion deliberately have no cue of their own: they're
@@ -153,72 +161,171 @@ function audio(): AudioContext | null {
   return ctx;
 }
 
-/** ~600 ms of white noise, reused by every cue (`mate` is the longest). */
+/**
+ * ~300 ms of noise for the contact transients.
+ *
+ * Generated with xorshift32 taking the *high* bits. The first version used a
+ * textbook LCG and read its low bits, which are famously non-random — the
+ * short-period patterning in them is audible as a cheap buzz, and was part of
+ * why these cues sounded low-quality.
+ */
 function noiseBuffer(c: AudioContext): AudioBuffer {
   if (noise && noise.sampleRate === c.sampleRate) return noise;
-  const frames = Math.floor(c.sampleRate * 0.6);
+  const frames = Math.floor(c.sampleRate * 0.3);
   const buf = c.createBuffer(1, frames, c.sampleRate);
   const data = buf.getChannelData(0);
-  // Deterministic pseudo-noise: a plain LCG rather than Math.random, so a
-  // given cue sounds identical every time.
-  let seed = 0x2f6e2b1;
+  let s = 0x9e3779b9;
   for (let i = 0; i < frames; i++) {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    data[i] = seed / 0x3fffffff - 1;
+    s ^= s << 13;
+    s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    s >>>= 0;
+    data[i] = s / 0x80000000 - 1;
   }
   noise = buf;
   return buf;
 }
 
-interface Impact {
-  /** Peak level, 0..1, before the master gain. */
-  gain: number;
-  /** Centre of the resonant band — the cue's apparent pitch. */
-  freq: number;
-  /** Resonance. Higher is more pitched and bell-like, lower is more of a
-   *  dry click. */
-  q: number;
-  /** Seconds to silence. */
-  decay: number;
-  /** Optional band sweep, giving a rising "shine" within the one hit. */
-  sweepTo?: number;
-}
+/** Attack ramp. Long enough to avoid the digital "spit" of starting a sample
+ *  at full amplitude, short enough that the hit still lands on the frame the
+ *  piece does. */
+const ATTACK = 0.0015;
 
-/**
- * The whole synthesizer: one noise burst, one filter, one envelope that
- * starts at full level. Instant attack is what makes the moment of impact
- * legible; every cue differs only in the four numbers above.
- */
-function impact(c: AudioContext, out: AudioNode, at: number, spec: Impact): void {
+/** The contact transient: a filtered noise burst. On its own this is the
+ *  thin, hissy click the first version shipped; it's the *top* of a sound,
+ *  not the whole of one. */
+function transient(
+  c: AudioContext,
+  out: AudioNode,
+  at: number,
+  spec: { gain: number; freq: number; q: number; decay: number },
+): void {
   const src = c.createBufferSource();
   src.buffer = noiseBuffer(c);
   const band = c.createBiquadFilter();
   band.type = 'bandpass';
-  band.frequency.setValueAtTime(spec.freq, at);
+  band.frequency.value = spec.freq;
   band.Q.value = spec.q;
-  if (spec.sweepTo != null) {
-    band.frequency.exponentialRampToValueAtTime(
-      spec.sweepTo,
-      at + spec.decay * 0.7,
-    );
-  }
   const env = c.createGain();
-  env.gain.setValueAtTime(spec.gain, at);
+  env.gain.setValueAtTime(0.0001, at);
+  env.gain.linearRampToValueAtTime(spec.gain, at + ATTACK);
   env.gain.exponentialRampToValueAtTime(0.0001, at + spec.decay);
   src.connect(band).connect(env).connect(out);
   src.start(at);
   src.stop(at + spec.decay + 0.02);
 }
 
-/** One spec per cue. Capture is deliberately the move spec with more level
- *  and slightly less brightness — "the same sound, a bit louder", as asked. */
-const CUES: Record<MoveSoundKind, Impact> = {
-  move: { gain: 0.6, freq: 1900, q: 1.6, decay: 0.045 },
-  capture: { gain: 0.95, freq: 1500, q: 1.4, decay: 0.055 },
-  check: { gain: 0.75, freq: 3000, q: 6, decay: 0.09 },
-  mate: { gain: 0.95, freq: 320, q: 3.5, decay: 0.5 },
-  brilliant: { gain: 0.8, freq: 1300, q: 5, decay: 0.18, sweepTo: 3600 },
-  illegal: { gain: 0.5, freq: 220, q: 2, decay: 0.12 },
+/**
+ * A damped pitched partial — the *body* that gives an impact its weight.
+ *
+ * Starts on the same frame as the transient and dies with it, so the pair is
+ * heard as one solid knock rather than two events. `drop` bends the pitch
+ * down over the decay, which is what real struck wood does and what stops a
+ * steady sine from sounding like a tone.
+ */
+function body(
+  c: AudioContext,
+  out: AudioNode,
+  at: number,
+  spec: { gain: number; freq: number; decay: number; drop?: number },
+): void {
+  const osc = c.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(spec.freq, at);
+  if (spec.drop != null) {
+    osc.frequency.exponentialRampToValueAtTime(
+      Math.max(30, spec.freq * spec.drop),
+      at + spec.decay,
+    );
+  }
+  const env = c.createGain();
+  env.gain.setValueAtTime(0.0001, at);
+  env.gain.linearRampToValueAtTime(spec.gain, at + ATTACK);
+  env.gain.exponentialRampToValueAtTime(0.0001, at + spec.decay);
+  osc.connect(env).connect(out);
+  osc.start(at);
+  osc.stop(at + spec.decay + 0.02);
+}
+
+interface KnockSpec {
+  /** Contact noise. */
+  hit: { gain: number; freq: number; q: number; decay: number };
+  /** Pitched body: fundamental, plus an inharmonic upper partial at
+   *  `partial` × the fundamental. Inharmonic and fast-decaying is what reads
+   *  as "wood"; harmonic and slow would read as a chime. */
+  low: { gain: number; freq: number; decay: number; drop?: number };
+  partial?: { ratio: number; gain: number; decay: number };
+}
+
+/**
+ * One knock per cue: transient + body + one upper partial, all struck on the
+ * same frame. Three oscillator/noise nodes, but a single audible event —
+ * which is the distinction the earlier version got wrong by *sequencing*
+ * sounds (two castle clicks 85 ms apart, tones ringing after the click had
+ * finished) rather than stacking them.
+ */
+function knock(c: AudioContext, out: AudioNode, at: number, spec: KnockSpec): void {
+  transient(c, out, at, spec.hit);
+  body(c, out, at, spec.low);
+  if (spec.partial) {
+    body(c, out, at, {
+      gain: spec.partial.gain,
+      freq: spec.low.freq * spec.partial.ratio,
+      decay: spec.partial.decay,
+      drop: 0.95,
+    });
+  }
+}
+
+/**
+ * The one cue that is deliberately a little flourish rather than a knock: an
+ * ascending three-note arpeggio, the "achievement unlocked" shape. Asked for
+ * explicitly — a brilliant move should not sound like a louder move.
+ */
+function fanfare(c: AudioContext, out: AudioNode, at: number): void {
+  const notes = [784, 1046.5, 1568]; // G5, C6, G6
+  notes.forEach((freq, i) => {
+    const t = at + i * 0.075;
+    const last = i === notes.length - 1;
+    const decay = last ? 0.42 : 0.18;
+    // Bell-ish: fundamental plus a quiet octave-and-a-half partial.
+    body(c, out, t, { gain: last ? 0.5 : 0.36, freq, decay });
+    body(c, out, t, { gain: last ? 0.12 : 0.08, freq: freq * 2.5, decay: decay * 0.5 });
+  });
+  // A touch of contact noise on the first note so it still feels struck.
+  transient(c, out, at, { gain: 0.25, freq: 3200, q: 2, decay: 0.03 });
+}
+
+/**
+ * Per-cue voicing. `capture` is `move` with more level and a lower, heavier
+ * body — "the same sound, a bit louder", as asked.
+ */
+const KNOCKS: Record<Exclude<MoveSoundKind, 'brilliant'>, KnockSpec> = {
+  move: {
+    hit: { gain: 0.5, freq: 2200, q: 1.1, decay: 0.03 },
+    low: { gain: 0.6, freq: 210, decay: 0.085, drop: 0.85 },
+    partial: { ratio: 2.6, gain: 0.22, decay: 0.055 },
+  },
+  capture: {
+    hit: { gain: 0.7, freq: 1700, q: 0.9, decay: 0.045 },
+    low: { gain: 0.9, freq: 150, decay: 0.13, drop: 0.8 },
+    partial: { ratio: 2.4, gain: 0.3, decay: 0.08 },
+  },
+  check: {
+    hit: { gain: 0.7, freq: 3400, q: 2.5, decay: 0.05 },
+    low: { gain: 0.5, freq: 520, decay: 0.12, drop: 0.9 },
+    partial: { ratio: 3, gain: 0.34, decay: 0.09 },
+  },
+  mate: {
+    hit: { gain: 0.55, freq: 1200, q: 1, decay: 0.05 },
+    low: { gain: 1, freq: 95, decay: 0.55, drop: 0.75 },
+    partial: { ratio: 2.2, gain: 0.34, decay: 0.3 },
+  },
+  illegal: {
+    hit: { gain: 0.28, freq: 400, q: 1, decay: 0.04 },
+    low: { gain: 0.6, freq: 110, decay: 0.16, drop: 0.8 },
+  },
 };
 
 /** Master level. Loud enough that the cue is unmistakable, low enough that a
@@ -238,7 +345,9 @@ export function playMoveSound(kind: MoveSoundKind): void {
     const master = c.createGain();
     master.gain.value = MASTER_GAIN;
     master.connect(c.destination);
-    impact(c, master, c.currentTime + 0.001, CUES[kind]);
+    const at = c.currentTime + 0.001;
+    if (kind === 'brilliant') fanfare(c, master, at);
+    else knock(c, master, at, KNOCKS[kind]);
   } catch {
     // Audio is a nicety; never let it break the board.
   }

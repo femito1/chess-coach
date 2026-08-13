@@ -235,11 +235,12 @@ limits entirely.
   not sampled: chess.com's audio files are their copyright, and generating
   the cues costs no bundle weight and no first-move network request. Swap in
   samples by changing `playMoveSound` alone — callers only ever name a
-  `MoveSoundKind`. Every cue is **one** noise burst with an instant attack,
-  differing only in level, filter band, resonance and decay; there are no
-  oscillators and no sequenced notes, because layered tones and a
-  two-click castle read as doubled sounds and chimes. Castling and
-  promotion are plain moves; `brilliant` comes from
+  `MoveSoundKind`. Each cue is a struck knock — contact noise plus a damped
+  pitched body and one inharmonic partial, all starting on the same frame.
+  *Stacking* simultaneous components is what gives weight; *sequencing* them
+  is what read as doubled sounds, so nothing is scheduled late except the
+  `brilliant` flourish, which is deliberately a three-note arpeggio.
+  Castling and promotion are plain moves; `brilliant` comes from
   `lastMoveClassification`, and precedence runs mate > brilliant > check >
   capture > move. `Board` drives them off `(fen, lastMoveUci)` rather than
   the user's drag, so one hook covers user moves, engine replies, autoplay
