@@ -61,6 +61,7 @@ import {
   guidedLineIndices,
   initialActiveLineKeys,
   nextRecommendedLines,
+  parseExpansionCount,
   selectionIndices,
 } from './curriculum';
 
@@ -728,12 +729,21 @@ function ActivePractice({
       ),
     [rankedRecommendations, activeLineKeys],
   );
-  const [expandCount, setExpandCount] = useState<number>(GUIDED_EXPANSION_SIZE);
-  const expandLimit = Math.min(
-    Math.max(1, expandCount),
-    Math.max(1, availableNextLines.length),
+  // The typed text, NOT a number, so the field can be empty while the user
+  // retypes it. Holding a number and clamping it into the input meant
+  // clearing the field snapped it to "1", and the next keystroke landed
+  // after that 1 — you tried to type 6 and got 16. Nothing is forced back
+  // into the field while it has focus; `onBlur` normalizes instead.
+  const [expandText, setExpandText] = useState<string>(
+    String(GUIDED_EXPANSION_SIZE),
   );
-  const nextLines = availableNextLines.slice(0, expandLimit);
+  /** The count that will actually be added: the typed number capped at what
+   *  exists, or null while the field holds nothing usable (empty, or 0). */
+  const expandLimit = useMemo(
+    () => parseExpansionCount(expandText, availableNextLines.length),
+    [expandText, availableNextLines.length],
+  );
+  const nextLines = availableNextLines.slice(0, expandLimit ?? 0);
   /** Closed-state label for the preset menu: the first few steps it holds,
    *  so it reads as a picker without duplicating the chosen number. Built
    *  from the real presets, so a pool smaller than one step says so. */
@@ -1142,8 +1152,8 @@ function ActivePractice({
           <div className="flex items-center gap-2 shrink-0">
             {/* Type a number or pick one off the stepped menu — one bordered
                 group so it reads as a single "how many" control. Both write
-                the same state; the menu also carries the current value so a
-                typed number stays visible in it. */}
+                the same text state; the menu is a picker only, so the number
+                lives in exactly one place. */}
             <label className="flex items-center gap-1.5 rounded-md bg-bg-soft border border-border pl-2.5 pr-1 text-xs focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/30">
               <span className="text-text-muted whitespace-nowrap">
                 {t('practice.expandCountLabel')}
@@ -1153,9 +1163,23 @@ function ActivePractice({
                 className="w-14 border-0 bg-bg-soft py-1.5 text-sm text-text focus:outline-none focus:ring-0"
                 min={1}
                 max={availableNextLines.length}
-                value={expandLimit}
+                value={expandText}
                 disabled={expanding}
-                onChange={(e) => setExpandCount(Number(e.target.value))}
+                // Free typing: whatever is in the field stays there, so
+                // clearing it to type a new number works. The value is only
+                // interpreted (and capped) for the button.
+                onChange={(e) => setExpandText(e.target.value)}
+                // Normalize when the user leaves the field: an empty or
+                // out-of-range entry becomes the count that will actually be
+                // used, so the field never disagrees with the button.
+                onBlur={() =>
+                  setExpandText(
+                    String(
+                      expandLimit ??
+                        Math.min(GUIDED_EXPANSION_SIZE, availableNextLines.length),
+                    ),
+                  )
+                }
               />
               <select
                 className="border-0 bg-bg-soft py-1.5 pr-1 text-xs text-text-muted focus:outline-none focus:ring-0"
@@ -1166,7 +1190,7 @@ function ActivePractice({
                 // steps on offer, which needs no translating.
                 value=""
                 disabled={expanding}
-                onChange={(e) => setExpandCount(Number(e.target.value))}
+                onChange={(e) => setExpandText(e.target.value)}
               >
                 <option value="" disabled>
                   {presetHint}
@@ -1184,12 +1208,19 @@ function ActivePractice({
               data-next-line-keys={nextLines
                 .map((entry) => openingLineKey(entry.line.uci))
                 .join('|')}
-              disabled={expanding}
+              // Nothing usable typed (mid-retype, or a 0) → nothing to add.
+              disabled={expanding || expandLimit == null}
               onClick={() => void expandGuidedPlan(nextLines)}
             >
               {expanding
                 ? t('practice.addingNextLines')
-                : t('practice.addNextLines', { count: nextLines.length })}
+                : t('practice.addNextLines', {
+                    // Keep the label on the last usable count while the field
+                    // is momentarily empty, rather than flashing "0 lines".
+                    count:
+                      expandLimit ??
+                      Math.min(GUIDED_EXPANSION_SIZE, availableNextLines.length),
+                  })}
             </button>
           </div>
         </div>

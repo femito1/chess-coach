@@ -139,6 +139,26 @@ export function expansionPresets(available: number, step = 5): number[] {
   return out;
 }
 
+/**
+ * Interpret the "how many lines to add" field: the typed digits capped at
+ * what's actually available, or **null** when the text holds nothing usable.
+ *
+ * Null rather than a fallback of 1 is the whole point. The field used to hold
+ * a clamped number, so clearing it to retype snapped the display back to "1"
+ * and the next keystroke landed after that digit — you typed 6 and got 16.
+ * An empty field has to stay empty, which means "no count yet" needs to be
+ * representable.
+ */
+export function parseExpansionCount(
+  text: string,
+  available: number,
+): number | null {
+  if (!/^\d+$/.test(text.trim())) return null;
+  const typed = Number.parseInt(text, 10);
+  if (typed < 1) return null;
+  return Math.min(typed, Math.max(0, Math.floor(available)));
+}
+
 export function appendActiveLineKeys(
   current: readonly string[],
   additions: readonly string[],

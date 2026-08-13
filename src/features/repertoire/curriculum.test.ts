@@ -11,6 +11,7 @@ import {
   isLineMastered,
   expansionPresets,
   nextRecommendedLines,
+  parseExpansionCount,
   selectionIndices,
 } from './curriculum';
 
@@ -180,5 +181,35 @@ describe('expansionPresets', () => {
 
   it('honours a different step', () => {
     expect(expansionPresets(12, 4)).toEqual([4, 8, 12]);
+  });
+});
+
+describe('parseExpansionCount', () => {
+  it('reads a typed number, capped at what is available', () => {
+    expect(parseExpansionCount('6', 176)).toBe(6);
+    expect(parseExpansionCount('176', 176)).toBe(176);
+    expect(parseExpansionCount('9999', 176)).toBe(176);
+    expect(parseExpansionCount(' 12 ', 176)).toBe(12);
+  });
+
+  it('returns null for an empty field rather than falling back to 1', () => {
+    // The regression: a clamped fallback put a "1" back in the field the
+    // moment it was cleared, so typing 6 produced 16.
+    expect(parseExpansionCount('', 176)).toBeNull();
+    expect(parseExpansionCount('   ', 176)).toBeNull();
+    expect(parseExpansionCount('0', 176)).toBeNull();
+    expect(parseExpansionCount('00', 176)).toBeNull();
+  });
+
+  it('returns null for anything that is not plain digits', () => {
+    expect(parseExpansionCount('-3', 176)).toBeNull();
+    expect(parseExpansionCount('2.5', 176)).toBeNull();
+    expect(parseExpansionCount('1e3', 176)).toBeNull();
+    expect(parseExpansionCount('abc', 176)).toBeNull();
+    expect(parseExpansionCount('12a', 176)).toBeNull();
+  });
+
+  it('caps at zero when nothing is available', () => {
+    expect(parseExpansionCount('5', 0)).toBe(0);
   });
 });
