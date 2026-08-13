@@ -111,12 +111,54 @@ export interface JumpToEvent {
   index: number;
 }
 
+/**
+ * The page's line array was rebuilt and the indices moved.
+ *
+ * Lines aren't first-class rows: the page derives them by walking the
+ * repertoire tree (`enumerateLines`), so adding a single line renumbers
+ * every leaf after it. Every index this reducer holds — the selection, the
+ * line under the runner, the perfect-this-session set — would then point at
+ * a *different line* than it did a moment ago. `indexMap` carries
+ * old-index → new-index for the lines that survived; anything absent from
+ * it is gone and gets dropped.
+ */
+export interface RemapIndicesEvent {
+  type: 'remapIndices';
+  indexMap: ReadonlyMap<number, number>;
+}
+
 export type SessionEvent =
   | FinishedEvent
   | SkipEvent
   | ChangeModeEvent
   | ChangeSelectionEvent
-  | JumpToEvent;
+  | JumpToEvent
+  | RemapIndicesEvent;
+
+/**
+ * old-index → new-index for lines identified by key, given the key order
+ * before and after a rebuild. Keys that vanished are simply absent, which
+ * is how `remapIndices` learns to drop them.
+ *
+ * Duplicate keys can't happen — `enumerateLines` de-duplicates by joined
+ * UCI — but if one ever did, first occurrence wins, matching the index the
+ * page's own `indexOf`-style lookups would resolve to.
+ */
+export function buildIndexRemap(
+  prevKeys: readonly string[],
+  nextKeys: readonly string[],
+): Map<number, number> {
+  const nextIndexByKey = new Map<string, number>();
+  nextKeys.forEach((key, index) => {
+    if (!nextIndexByKey.has(key)) nextIndexByKey.set(key, index);
+  });
+  const map = new Map<number, number>();
+  prevKeys.forEach((key, prevIndex) => {
+    const nextIndex = nextIndexByKey.get(key);
+    if (nextIndex != null) map.set(prevIndex, nextIndex);
+  });
+  return map;
+}
 
 export function reduceSession(
   state: PracticeSessionState,
@@ -185,6 +227,27 @@ export function reduceSession(
     case 'jumpTo': {
       if (!state.selectedIndices.includes(event.index)) return state;
       return { ...state, currentIndex: event.index };
+    }
+    case 'remapIndices': {
+      const { indexMap } = event;
+      const translate = (i: number): number | null => indexMap.get(i) ?? null;
+      const selectedIndices = dedupAndSort(
+        state.selectedIndices
+          .map(translate)
+          .filter((i): i is number => i != null),
+      );
+      const perfectThisSession = state.perfectThisSession
+        .map(translate)
+        .filter((i): i is number => i != null && selectedIndices.includes(i));
+      // The line under the runner keeps its identity: it follows its own
+      // key to the new index, and only falls back when the line itself is
+      // gone (deleted, or merged into a deeper leaf).
+      let currentIndex =
+        state.currentIndex != null ? translate(state.currentIndex) : null;
+      if (currentIndex == null || !selectedIndices.includes(currentIndex)) {
+        currentIndex = selectedIndices.length > 0 ? selectedIndices[0] : null;
+      }
+      return { ...state, selectedIndices, perfectThisSession, currentIndex };
     }
   }
 }

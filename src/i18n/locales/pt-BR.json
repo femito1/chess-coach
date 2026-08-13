@@ -458,8 +458,12 @@
     "linesSelected_one": "{{total}} linha · {{selected}} selecionada · jogando de {{color}}",
     "linesSelected_other": "{{total}} linhas · {{selected}} selecionadas · jogando de {{color}}",
     "nextLinesReady": "Você está pronto para as próximas linhas",
-    "nextLinesDescription": "Você dominou o conjunto ativo. Adicione {{count}} continuações comuns quando estiver pronto.",
-    "addNextLines": "Adicionar próximas {{count}} linhas",
+    "nextLinesDescription_one": "Você dominou o conjunto ativo. Há mais uma linha disponível nesta abertura.",
+    "nextLinesDescription_other": "Você dominou o conjunto ativo. Há mais {{count}} linhas disponíveis nesta abertura.",
+    "addNextLines_one": "Adicionar próxima linha",
+    "addNextLines_other": "Adicionar próximas {{count}} linhas",
+    "expandCountLabel": "Quantas",
+    "expandCountPresets": "Número de linhas a adicionar",
     "addingNextLines": "Adicionando linhas…",
     "allRepertoires": "Todos os repertórios",
     "mode": "Modo",
@@ -548,6 +552,7 @@
       "selectFiltered": "Selecionar filtradas ({{count}})",
       "noMatches": "Nenhuma linha corresponde a \"{{query}}\".",
       "mainline": "Linha principal",
+      "customLine": "Linha personalizada",
       "donePerfectThisSession": "Concluída perfeitamente nesta sessão",
       "donePerfect": "{{count}} perfeitas",
       "doneCount": "{{count}} concluídas",
@@ -578,7 +583,9 @@
       "recordInheritedHint": "Seu retrospecto nesta variante (mais ampla que esta linha)"
     },
     "statusbar": {
-      "ply": "{{ply}}/{{total}} ply · {{wrong}} errados · jogada #{{play}}"
+      "ply": "{{ply}}/{{total}} ply · {{wrong}} errados · jogada #{{play}}",
+      "evalBar": "Avaliação",
+      "evalBarHint": "Mostra a avaliação do motor ao lado do tabuleiro"
     },
     "drillProgress": "Treinando {{active}} de {{total}} linhas",
     "includeAllLines": "Incluir todas as linhas",

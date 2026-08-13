@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Board } from '@/components/Board';
 import { BoardFrame } from '@/components/BoardFrame';
-import { EVAL_BAR_WIDTH_PX } from '@/components/EvalBar';
+import { EvalBar, EVAL_BAR_WIDTH_PX, mateForWhite } from '@/components/EvalBar';
+import { useLiveEval } from '@/features/review/LiveEval';
 import {
   recordLineAttempt,
   recordLineCompletion,
@@ -30,6 +31,15 @@ export interface SessionStats {
 
 const OPPONENT_AUTOPLAY_DELAY_MS = 600;
 
+/**
+ * Depth for the drill-time eval bar. Matches the puzzles page: enough for a
+ * trustworthy bar on an opening position, shallow enough that the reading
+ * lands well within the pause between two prep moves. The bar reads the
+ * position only — it never surfaces the engine's best move, which would
+ * hand the user the answer they're being tested on.
+ */
+const DRILL_EVAL_DEPTH = 12;
+
 export interface LineRunnerProps {
   repertoireId: string;
   line: RepertoireLine;
@@ -43,6 +53,11 @@ export interface LineRunnerProps {
   /** Optional nodes rendered below the board (status row, action
    *  buttons). Practice page injects mode-aware controls here. */
   renderControls?: (state: LineRunnerControlState) => React.ReactNode;
+  /** Show a live engine eval bar beside the board while drilling. Off by
+   *  default: it boots a Stockfish worker, which a caller that only wants
+   *  the drill board shouldn't pay for without asking. The gutter is
+   *  reserved either way, so toggling it never shifts the board. */
+  showEvalBar?: boolean;
 }
 
 export interface LineRunnerControlState {
@@ -97,6 +112,7 @@ export function LineRunner({
   onLineFinished,
   onStatsChanged,
   renderControls,
+  showEvalBar = false,
 }: LineRunnerProps) {
   const [ply, setPly] = useState(0);
   const [status, setStatus] = useState<LineStatus>('thinking');
@@ -271,6 +287,11 @@ export function LineRunner({
   const fen = line.fens[Math.min(ply, line.fens.length - 1)];
   const lastUci = ply > 0 ? line.uci[ply - 1] : undefined;
 
+  // Live eval for the position on the board. `''` is the hook's documented
+  // idle path — with the bar off no worker is booted at all, and the
+  // refcounted singleton tears down when the last consumer goes away.
+  const liveEval = useLiveEval(showEvalBar ? fen : '', DRILL_EVAL_DEPTH);
+
   const highlightSquares =
     hintShown && expectedFromSquare && status === 'thinking'
       ? [{ square: expectedFromSquare, color: 'hint' as const }]
@@ -305,11 +326,21 @@ export function LineRunner({
   return (
     <div className="space-y-3">
       <BoardFrame
-        // Reserve the eval-bar gutter once the line is finished so
-        // "Play it out vs engine" can mount FreePlayRunner (with a real
-        // EvalBar) without shoving the board sideways.
+        // The gutter is reserved whenever an eval bar is showing OR the line
+        // is finished, so that mounting FreePlayRunner (which has its own
+        // EvalBar) from "Play it out vs engine" never shoves the board
+        // sideways.
         evalBar={
-          status === 'done' ? (
+          showEvalBar ? (
+            <EvalBar
+              cpWhite={liveEval?.cpWhite ?? null}
+              // Stockfish reports mate from the side-to-move's perspective,
+              // which flips sign every ply; convert to White-relative so the
+              // fill stays anchored to the winning colour. See EvalBar docs.
+              mate={mateForWhite(liveEval?.mate, fen)}
+              orientation={userColor}
+            />
+          ) : status === 'done' ? (
             <div
               className="shrink-0 self-stretch"
               style={{ width: EVAL_BAR_WIDTH_PX }}

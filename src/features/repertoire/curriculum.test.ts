@@ -9,7 +9,9 @@ import {
   guidedLineIndices,
   initialActiveLineKeys,
   isLineMastered,
+  expansionPresets,
   nextRecommendedLines,
+  selectionIndices,
 } from './curriculum';
 
 function practiceLine(uci: string[]): RepertoireLine {
@@ -125,5 +127,58 @@ describe('guided repertoire curriculum', () => {
     const many = Array.from({ length: 9 }, (_, i) => practiceLine([`m${i}`]));
     expect(drillableGuidedIndices(many, ['nope'], 3)).toEqual([0, 1, 2]);
     expect(drillableGuidedIndices([], ['nope'])).toEqual([]);
+  });
+});
+
+describe('selectionIndices', () => {
+  const a = practiceLine(['e2e4', 'e7e5']);
+  const b = practiceLine(['e2e4', 'c7c5']);
+  const c = practiceLine(['d2d4', 'd7d5']);
+
+  it('resolves keys to their current positions', () => {
+    expect(
+      selectionIndices([a, b, c], new Set(['e2e4 e7e5', 'd2d4 d7d5'])),
+    ).toEqual([0, 2]);
+  });
+
+  it('follows a line through a renumber rather than holding its old index', () => {
+    // The whole point: the same key set means the same LINES after a line
+    // is inserted at the front, even though every index moved.
+    const keys = new Set(['e2e4 c7c5']);
+    expect(selectionIndices([a, b, c], keys)).toEqual([1]);
+    expect(selectionIndices([c, a, b], keys)).toEqual([2]);
+  });
+
+  it('ignores keys with no line yet, and matches exactly (not by prefix)', () => {
+    // Optimistically selecting a line before its leaf exists must not throw
+    // or select a neighbour; and a key that is a prefix of a line is not
+    // that line.
+    expect(selectionIndices([a, b], new Set(['g1f3 d7d5']))).toEqual([]);
+    expect(selectionIndices([a], new Set(['e2e4']))).toEqual([]);
+    expect(selectionIndices([], new Set(['e2e4 e7e5']))).toEqual([]);
+    expect(selectionIndices([a, b], new Set())).toEqual([]);
+  });
+});
+
+describe('expansionPresets', () => {
+  it('steps by five and always ends at the total', () => {
+    expect(expansionPresets(23)).toEqual([5, 10, 15, 20, 23]);
+    expect(expansionPresets(20)).toEqual([5, 10, 15, 20]);
+    expect(expansionPresets(7)).toEqual([5, 7]);
+  });
+
+  it('offers a small pool as its own only choice', () => {
+    expect(expansionPresets(3)).toEqual([3]);
+    expect(expansionPresets(1)).toEqual([1]);
+    expect(expansionPresets(5)).toEqual([5]);
+  });
+
+  it('has nothing to offer when nothing is left', () => {
+    expect(expansionPresets(0)).toEqual([]);
+    expect(expansionPresets(-4)).toEqual([]);
+  });
+
+  it('honours a different step', () => {
+    expect(expansionPresets(12, 4)).toEqual([4, 8, 12]);
   });
 });

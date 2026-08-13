@@ -458,8 +458,12 @@
     "linesSelected_one": "{{total}} linea · {{selected}} selezionata · giochi col {{color}}",
     "linesSelected_other": "{{total}} linee · {{selected}} selezionate · giochi col {{color}}",
     "nextLinesReady": "Sei pronto per le prossime linee",
-    "nextLinesDescription": "Hai imparato il set attivo. Aggiungi {{count}} continuazioni comuni quando vuoi.",
-    "addNextLines": "Aggiungi le prossime {{count}} linee",
+    "nextLinesDescription_one": "Hai imparato il set attivo. C'è un'altra linea disponibile in questa apertura.",
+    "nextLinesDescription_other": "Hai imparato il set attivo. Ci sono altre {{count}} linee disponibili in questa apertura.",
+    "addNextLines_one": "Aggiungi la prossima linea",
+    "addNextLines_other": "Aggiungi le prossime {{count}} linee",
+    "expandCountLabel": "Quante",
+    "expandCountPresets": "Numero di linee da aggiungere",
     "addingNextLines": "Aggiunta linee…",
     "allRepertoires": "Tutti i repertori",
     "mode": "Modalità",
@@ -548,6 +552,7 @@
       "selectFiltered": "Seleziona filtrate ({{count}})",
       "noMatches": "Nessuna linea corrisponde a \"{{query}}\".",
       "mainline": "Linea principale",
+      "customLine": "Linea personalizzata",
       "donePerfectThisSession": "Completata alla perfezione in questa sessione",
       "donePerfect": "{{count}} perfette",
       "doneCount": "{{count}} completate",
@@ -578,7 +583,9 @@
       "recordInheritedHint": "Il tuo record in questa variante (più ampia di questa linea)"
     },
     "statusbar": {
-      "ply": "{{ply}}/{{total}} ply · {{wrong}} sbagliate · partita #{{play}}"
+      "ply": "{{ply}}/{{total}} ply · {{wrong}} sbagliate · partita #{{play}}",
+      "evalBar": "Valutazione",
+      "evalBarHint": "Mostra la valutazione del motore accanto alla scacchiera"
     },
     "drillProgress": "Allenando {{active}} di {{total}} linee",
     "includeAllLines": "Includi tutte le linee",

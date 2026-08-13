@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildIndexRemap,
   initSession,
   reduceSession,
   PRACTICE_MODE_LABEL,
@@ -237,6 +238,113 @@ describe('practiceMode.reduceSession :: changeSelection / changeMode', () => {
     });
     const s1 = reduceSession(s0, { type: 'jumpTo', index: 99 });
     expect(s1).toEqual(s0);
+  });
+});
+
+describe('practiceMode.buildIndexRemap', () => {
+  it('maps old indices to new ones by key', () => {
+    // A line inserted at the front pushes everything down one.
+    const prev = ['e4 e5', 'e4 c5', 'd4 d5'];
+    const next = ['d4 Nf6', 'e4 e5', 'e4 c5', 'd4 d5'];
+    expect([...buildIndexRemap(prev, next)]).toEqual([
+      [0, 1],
+      [1, 2],
+      [2, 3],
+    ]);
+  });
+
+  it('omits keys that are gone', () => {
+    const map = buildIndexRemap(['a', 'b', 'c'], ['c', 'a']);
+    expect(map.get(0)).toBe(1);
+    expect(map.has(1)).toBe(false);
+    expect(map.get(2)).toBe(0);
+  });
+
+  it('is empty for an empty before-list', () => {
+    expect(buildIndexRemap([], ['a'])).toEqual(new Map());
+  });
+});
+
+describe('practiceMode remapIndices', () => {
+  /** Three lines selected, drilling the middle one, first one already
+   *  perfect — then a line is inserted at the front. */
+  function afterInsertAtFront() {
+    const s0 = initSession({
+      mode: 'repeat-until-perfect',
+      selectedIndices: [0, 1, 2],
+      randSeed: FIXED_SEED,
+    });
+    const s1 = reduceSession(
+      { ...s0, currentIndex: 1, perfectThisSession: [0] },
+      {
+        type: 'remapIndices',
+        indexMap: buildIndexRemap(['a', 'b', 'c'], ['new', 'a', 'b', 'c']),
+      },
+    );
+    return s1;
+  }
+
+  it('keeps the runner on the same line across a renumber', () => {
+    const s = afterInsertAtFront();
+    // 'b' moved from index 1 to index 2 — the drilled line follows it.
+    expect(s.currentIndex).toBe(2);
+  });
+
+  it('carries the selection and the perfect set to the new indices', () => {
+    const s = afterInsertAtFront();
+    expect(s.selectedIndices).toEqual([1, 2, 3]);
+    expect(s.perfectThisSession).toEqual([1]);
+    // The newly inserted line is NOT auto-selected — selection is the
+    // page's business, not the remap's.
+    expect(s.selectedIndices).not.toContain(0);
+  });
+
+  it('drops lines that disappeared, from both selection and perfect set', () => {
+    const s0 = initSession({
+      mode: 'repeat-until-perfect',
+      selectedIndices: [0, 1, 2],
+      randSeed: FIXED_SEED,
+    });
+    const s1 = reduceSession(
+      { ...s0, currentIndex: 0, perfectThisSession: [0, 2] },
+      {
+        // 'a' (index 0) is gone; 'b' and 'c' shift down.
+        type: 'remapIndices',
+        indexMap: buildIndexRemap(['a', 'b', 'c'], ['b', 'c']),
+      },
+    );
+    expect(s1.selectedIndices).toEqual([0, 1]);
+    expect(s1.perfectThisSession).toEqual([1]);
+    // The drilled line vanished, so fall back to the first selected one.
+    expect(s1.currentIndex).toBe(0);
+  });
+
+  it('empties the session when every line is gone', () => {
+    const s0 = initSession({
+      mode: 'sequential',
+      selectedIndices: [0, 1],
+      randSeed: FIXED_SEED,
+    });
+    const s1 = reduceSession(s0, {
+      type: 'remapIndices',
+      indexMap: buildIndexRemap(['a', 'b'], []),
+    });
+    expect(s1.selectedIndices).toEqual([]);
+    expect(s1.currentIndex).toBeNull();
+  });
+
+  it('leaves an unchanged line list untouched', () => {
+    const s0 = initSession({
+      mode: 'sequential',
+      selectedIndices: [0, 2],
+      randSeed: FIXED_SEED,
+    });
+    const s1 = reduceSession({ ...s0, currentIndex: 2 }, {
+      type: 'remapIndices',
+      indexMap: buildIndexRemap(['a', 'b', 'c'], ['a', 'b', 'c']),
+    });
+    expect(s1.selectedIndices).toEqual([0, 2]);
+    expect(s1.currentIndex).toBe(2);
   });
 });
 

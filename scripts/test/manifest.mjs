@@ -52,6 +52,7 @@ export const BROWSER_TESTS = [
   { name: 'auto-import',                file: 'scripts/test/integration/auto-import.mjs',                category: 'integration' },
   { name: 'opening-popularity-build',   file: 'scripts/test/integration/opening-popularity-build.mjs',   category: 'integration' },
   { name: 'drill-add-lines',            file: 'scripts/test/integration/drill-add-lines.mjs',            category: 'integration' },
+  { name: 'drill-selection-survives-add', file: 'scripts/test/integration/drill-selection-survives-add.mjs', category: 'integration' },
   { name: 'live-chesscom',              file: 'scripts/test/live/live-chesscom.mjs',                     category: 'live' },
 
   // --- UI / review page -------------------------------------------

@@ -76,6 +76,28 @@ export function drillableGuidedIndices(
   return lines.slice(0, Math.max(0, limit)).map((_, index) => index);
 }
 
+/**
+ * Indices of the lines whose key is in `selectedKeys`.
+ *
+ * The drill page holds its selection by line key rather than by index,
+ * because `enumerateLines` derives lines by walking the repertoire tree:
+ * add one line and every leaf after it renumbers, so a stored index
+ * silently comes to mean a different line. Keys are stable (they ARE the
+ * move sequence), so the selection is resolved to indices at render time
+ * through here. Unknown keys are ignored, which lets a caller optimistically
+ * select a line before its leaf exists.
+ */
+export function selectionIndices(
+  lines: readonly RepertoireLine[],
+  selectedKeys: ReadonlySet<string>,
+): number[] {
+  const out: number[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    if (selectedKeys.has(openingLineKey(lines[index].uci))) out.push(index);
+  }
+  return out;
+}
+
 export function areGuidedLinesMastered(
   lines: readonly RepertoireLine[],
   selectedIndices: readonly number[],
@@ -96,6 +118,25 @@ export function nextRecommendedLines(
   return ranked
     .filter((entry) => !active.has(openingLineKey(entry.line.uci)))
     .slice(0, Math.max(0, limit));
+}
+
+/**
+ * Dropdown choices for "add N more lines": multiples of `step`, then the
+ * total itself so "everything that's left" is always one click away.
+ *
+ * A fixed expansion of two lines was the only option before, which the user
+ * found useless when they wanted a real chunk of an opening at once. The
+ * total is included even when it isn't a multiple of `step` (23 available →
+ * 5, 10, 15, 20, 23), and a pool smaller than one step still offers itself
+ * (3 available → 3) rather than an empty menu.
+ */
+export function expansionPresets(available: number, step = 5): number[] {
+  const total = Math.floor(available);
+  if (!Number.isFinite(total) || total <= 0) return [];
+  const out: number[] = [];
+  for (let n = step; n < total; n += step) out.push(n);
+  out.push(total);
+  return out;
 }
 
 export function appendActiveLineKeys(
