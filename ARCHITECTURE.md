@@ -1,8 +1,10 @@
 # Architecture notes
 
-Load-bearing invariants and the reasoning behind them. Everything here is
-something that has already been broken at least once; the code comments at
-each site are the detailed version, this is the map.
+Load-bearing invariants: the rules this codebase breaks quietly rather
+than loudly if you violate them, and enough reasoning to know when a
+change is about to violate one. Read the relevant entry before touching
+its area; the code comments at each site are the detailed version, this is
+the map.
 
 ## Data model
 
@@ -64,12 +66,12 @@ doesn't fight live eval.
 **Pool slots are released by worker identity, never by captured index.**
 `setMaxWorkers()` splices `workers`/`busy` (the visibility throttle calls
 it when the tab hides), which renumbers every worker above a removed slot.
-A task that captured index 2 and finished after a shrink used to clear
-`busy[2]` past the end of the array, stranding its own slot as
-permanently busy — which leaked a worker, made `isIdle()` permanently
-false so the WASM heap was never freed, and eventually made `pump()` call
-`.analyze()` on `undefined`, surfacing as a game that errored for no
-reason. Pinned by `pool-shrink-desync.mjs`.
+A task holding an index across a shrink therefore clears the wrong slot —
+or one past the end of the array — stranding its own slot as permanently
+busy. That leaks a worker, pins `isIdle()` false so the WASM heap is never
+freed, and eventually has `pump()` call `.analyze()` on `undefined`, which
+surfaces as a game erroring for no visible reason. Pinned by
+`pool-shrink-desync.mjs`.
 
 **`cancelAnalysis()` on the shared singleton kills whatever is running,
 whoever started it.** `useLiveEval` only calls it once its consumer
@@ -114,41 +116,45 @@ prefix stages above exist.
 **Personal opening stats are expensive.** `buildPersonalOpeningStats`
 re-parses every game's PGN through chess.js (~1.3 s at 2 500 games).
 Compute one colour, and only once it is actually needed — not on mount.
-It now also accumulates per-prefix win/draw/loss (from `Game.result`,
-already stored from the user's perspective) in that same single walk, so
-the difficulty tiers get a winrate signal for free — no second parse. The
-practice page computes it once in `PracticeRunner` and threads it down;
-never build it twice on one page.
+The same single walk also accumulates per-prefix win/draw/loss (from
+`Game.result`, already stored from the user's perspective), so a winrate
+signal costs nothing extra — add any further per-game derivation to that
+walk rather than a second pass. The practice page computes it once in
+`PracticeRunner` and threads it down; never build it twice on one page.
 
-**The generated bundle must stay coherent with its TSV inputs.** The bug
-that motivated this: `openings.generated.ts` once shipped built from an
-*older* `data/openings/line-popularity.tsv` than the one committed beside
-it — 3 406 of 3 690 lines disagreed, so every frequency-derived number
-(suggestions, difficulty tiers) was silently wrong. Because
-`scripts/build-openings.mjs` is offline over committed inputs, a unit test
-(`src/data/openings.generated.test.ts`) rebuilds the bundle in memory and
-fails if it differs from the committed file (ignoring only the timestamped
-banner line). `buildBundle()` is the pure seam it calls. If it fails, run
-`npm run openings:build` and commit. A scheduled refresh
-(`.github/workflows/openings-refresh.yml`) re-snapshots monthly and pushes
-to `main` **only after** `typecheck` + `test:unit` pass — verify-before-
-push is load-bearing because Cloudflare Pages deploys from `main` on its
-own webhook, not through Actions, so bad data would ship the instant it
-landed. It gates on unit (not e2e) so a pre-existing e2e failure can't
-freeze data refreshes.
+**The generated bundle must stay coherent with its TSV inputs.** If
+`openings.generated.ts` is built from a different
+`data/openings/line-popularity.tsv` than the one committed beside it,
+every frequency-derived number (opening suggestions, difficulty tiers) is
+silently wrong — the data still looks plausible, so nothing surfaces it.
+Because `scripts/build-openings.mjs` is offline over committed inputs, a
+unit test (`src/data/openings.generated.test.ts`) rebuilds the bundle in
+memory and fails if it differs from the committed file, ignoring only the
+timestamped banner line; `buildBundle()` is the pure seam it calls. **If
+that test fails, run `npm run openings:build` and commit the result** —
+never edit the bundle by hand.
+
+Never let the two halves be regenerated separately: refresh the TSV and
+rebuild the bundle in the same change. `.github/workflows/openings-refresh.yml`
+does this monthly and pushes to `main` only after a plausibility gate,
+`typecheck` and `test:unit` all pass. Verify-before-push is load-bearing,
+because Cloudflare Pages deploys from `main` on its own webhook rather
+than through Actions — anything that lands ships immediately. It gates on
+unit rather than e2e so a single known-failing e2e test cannot freeze data
+refreshes.
 
 **The guided set must never resolve to nothing drillable.** Active line
 keys are *library* lines, and `guidedLineIndices` matches a key only
-against a repertoire line that equals or **extends** it. A sparse
-repertoire whose lines are shallower than the recommendations therefore
-matches nothing — seed just the 5-ply Italian mainline and every top-5
-recommendation is a 6+ ply continuation of it — leaving the drill page with
-an empty session and no board. Which lines rank top-5 shifts with every
-opening-data refresh, so this is latent, not rare: it went from dormant to
-reproducible the moment the frequency data was corrected. `PracticePage`
-therefore calls `drillableGuidedIndices`, which falls back to the
-repertoire's own lines (capped at the guided starter size). Pinned in
-`curriculum.test.ts`.
+against a repertoire line that equals or **extends** it. A repertoire
+whose lines are shallower than its recommendations therefore matches
+nothing — hold just the 5-ply Italian mainline and every top-5
+recommendation is a 6+ ply continuation of it — which would leave the
+drill page with an empty session and no board to practise on. Which lines
+rank top-5 shifts with every opening-data refresh, so treat this as live
+rather than hypothetical: `PracticePage` calls `drillableGuidedIndices`,
+which falls back to the repertoire's own lines (capped at the guided
+starter size). Pinned in `curriculum.test.ts` — keep that guard when
+touching the guided flow.
 
 **The drill picker merges repertoire and library, keyed by
 `openingLineKey`.** `buildPickerModel` (`repertoire/pickerModel.ts`) unions
@@ -198,8 +204,16 @@ cache is still incomplete (resume), anything else is a hard failure — so
 "incomplete" is never mistaken for "complete but unchanged". The explorer
 cache is persisted across runs with `actions/cache/save@v4` under
 `if: always()` (the default `@v4` post-step only saves on success, which
-would discard every rate-limited run's progress). Gates on unit not e2e,
-so the pre-existing `touch-longpress-arrow` failure can't freeze refreshes.
+would discard every rate-limited run's progress). It gates on unit rather
+than e2e so a known-failing e2e test cannot freeze data refreshes.
+
+To refresh by hand, expect it to take a while: the unauthenticated proxy
+throttles at roughly 24 requests/minute and a full-depth snapshot needs
+~2 300 parent positions, so run it in small batches
+(`--concurrency=1 --delay=1500 --max=300`) and re-run to resume — the cache
+makes each attempt compound, and the script exits `3` while work remains.
+Setting a `LICHESS_TOKEN` hits Lichess directly and skips the proxy's
+limits entirely.
 
 ## UI conventions
 

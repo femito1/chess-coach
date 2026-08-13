@@ -522,7 +522,7 @@ async function captureOptionsShot(ctx) {
 
   // Focus the primary inputs so the form looks "filled in".
   await page.fill('#username', 'HeroUser');
-  await page.fill('#coachOrigin', 'https://chess-coach.pages.dev');
+  await page.fill('#coachOrigin', 'https://chess-coach-bip.pages.dev');
   await page.click('#test');
   // Wait for the status text to update to the green path.
   await page.waitForFunction(
@@ -564,7 +564,7 @@ async function main() {
       // eslint-disable-next-line no-undef
       chrome.storage.sync.set(
         {
-          coachOrigin: 'https://chess-coach.pages.dev',
+          coachOrigin: 'https://chess-coach-bip.pages.dev',
           chesscomUsername: 'HeroUser',
           enabled: true,
         },

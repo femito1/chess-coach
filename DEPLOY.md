@@ -1,10 +1,27 @@
 # Deployment — Cloudflare Pages + GitHub Actions
 
-> One-time setup to deploy Chess Coach to Cloudflare Pages with a
-> GitHub-Actions-driven CI pipeline. Companion to `SETUP_AUTH.md`.
-> Estimated time: ~20 minutes.
+> How to stand Chess Coach up on Cloudflare Pages, and the operational
+> reference for keeping it running. Companion to `SETUP_AUTH.md`.
+> From-scratch setup: ~20 minutes.
 
-## What we're building
+## Production host
+
+**`https://chess-coach-bip.pages.dev`**
+
+The Cloudflare Pages *project* is named `chess-coach`, but the hostname
+Cloudflare assigned it is `chess-coach-bip.pages.dev`: Cloudflare
+appends a suffix when the plain `<project>.pages.dev` subdomain is
+already taken. **The assigned hostname is not derivable from the project
+name — never guess it**, or you will end up poking at an unrelated
+third-party app that happens to own the subdomain you assumed. The
+authoritative sources are:
+
+- the project's page in the Cloudflare Pages dashboard, which lists the
+  assigned domain; or
+- the **Cloudflare Pages** check on any recent commit on `main` in
+  GitHub — its check summary prints the deployment URL.
+
+## How a deploy happens
 
 ```
                            ┌─────────────────────────────────┐
@@ -15,53 +32,65 @@
                   ▼                                           ▼
    ┌────────────────────────────┐            ┌──────────────────────────────┐
    │   GitHub Actions (tests)   │            │  Cloudflare Pages (deploy)   │
-   │                            │            │                              │
-   │  • npm run typecheck       │            │  • npm run build             │
-   │  • npm test (unit + integ) │            │  • upload dist/ to CDN       │
-   │  • npm run test:e2e        │            │  • preview URL on PRs        │
-   │                            │            │  • production deploy on main │
-   │  Status checks on PR       │            │  Status check on PR          │
+   │                            │            │  via CF's GitHub integration │
+   │  • npm run typecheck       │            │  — NOT a GitHub Action       │
+   │  • npm run build           │            │                              │
+   │  • npm test (unit + integ) │            │  • npm run build             │
+   │  • npm run test:e2e        │            │  • upload dist/ to CDN       │
+   │                            │            │  • preview URL on PRs        │
+   │  Status checks on PR       │            │  • production deploy on main │
    └────────────────────────────┘            └──────────────────────────────┘
-                  │                                           │
-                  └────────────┬──────────────────────────────┘
-                               ▼
-              Branch protection: all checks must pass to merge
+
+            Tests report status. They do not gate the deploy.
 ```
 
-Two pipelines, one branch-protection rule. CF Pages does what it's good
-at (build + CDN upload + preview URLs); GitHub Actions does what *it*'s
-good at (running the test suite with full Linux + Playwright + Stockfish
-WASM access).
+Two independent pipelines. CF Pages does what it's good at (build + CDN
+upload + preview URLs); GitHub Actions does what *it*'s good at (running
+the test suite with full Linux + Playwright + Stockfish WASM access).
+
+**There is no gate between them.** The production branch is `main`, and
+Cloudflare's GitHub integration deploys the moment a commit lands there
+— it neither waits for CI nor cares whether CI passed, and `main` carries
+no branch-protection rule to hold anything back (§4). Two things push to
+`main`:
+
+- you, merging or pushing directly;
+- `.github/workflows/openings-refresh.yml`, a monthly scheduled job that
+  refreshes the bundled opening data. It verifies before it pushes,
+  precisely because a push to `main` ships instantly. (ARCHITECTURE.md
+  documents how it works.)
+
+Anything that must not ship must not land on `main`.
 
 ---
 
-## 0. Going live — quick checklist
+## 0. Quick checklist
 
-The fastest "make Chess Coach + the chrome extension live for real
-people" path. Each step links to the section that goes deep:
+The short path from nothing to a live app plus Chrome extension. Each
+step links to the section that goes deep:
 
 1. **Deploy the app** (§1–§3): create the CF Pages project, paste in
-   the three Clerk + Supabase env vars, click Deploy. First green
-   build gets you a `https://<project>.pages.dev` URL.
+   the three Clerk + Supabase env vars, deploy. Then read the assigned
+   hostname off the project page rather than assuming it.
 2. **Verify the deploy** (§3): one console check
    (`crossOriginIsolated === true`), one hard-refresh check, one
    sign-in round-trip. Five minutes.
-3. **Update Clerk allow-list**: add the `pages.dev` URL (and any
+3. **Update Clerk allow-list**: add the production hostname (and any
    custom domain) to Clerk → Domains and to every OAuth provider's
    redirect URLs. Without this, sign-in loops.
 4. **(Optional) Custom domain** (§5): if you want `chess.example.com`
-   instead of the `.pages.dev` URL, do this **before** sharing the
-   URL with anyone — IndexedDB is keyed by origin and migrating
-   later costs each user a backup-export-restore.
+   instead of the `.pages.dev` hostname, do this **before** sharing the
+   URL with anyone — IndexedDB is keyed by origin, so changing origins
+   later leaves every user's imported games behind on the old one.
 5. **Build the chrome extension for that origin**:
    ```bash
-   npm run extension:build -- --coach-origin=https://<your-prod-host>
+   npm run extension:build -- --coach-origin=https://chess-coach-bip.pages.dev
    ```
-   Produces `dist-extension/chess-coach-<version>.zip` with your
-   production URL baked in as the default `coachOrigin`. First-time
-   installs land with the right URL preconfigured — no options-page
-   visit required for a working install.
-6. **Distribute the extension**:
+   Produces `dist-extension/chess-coach-<version>.zip` with the
+   production URL baked in as the default `coachOrigin`. Fresh installs
+   land with the right URL preconfigured — no options-page visit
+   required for a working install.
+6. **Distribute the extension** (§9):
    - **Personal / a few friends**: send them the zip. They unzip
      locally and Load Unpacked from `chrome://extensions`.
    - **Public install**: upload the zip to the Chrome Web Store
@@ -69,8 +98,9 @@ people" path. Each step links to the section that goes deep:
      One-time $5 developer registration; review takes ~1–3 days.
 7. **Smoke-test the live loop** end-to-end: open Chrome with the
    extension installed, finish any chess.com game, click "Review",
-   confirm the deep link lands on `https://<your-prod-host>/review/<id>`
-   and analysis kicks off.
+   confirm the deep link opens
+   `https://chess-coach-bip.pages.dev/review-by-url?…`, lands on
+   `/review/<id>`, and analysis kicks off.
 
 Everything below is the deeper version of these steps plus
 operational notes (rolling back, cache busting, troubleshooting).
@@ -83,7 +113,7 @@ operational notes (rolling back, cache busting, troubleshooting).
 - A Cloudflare account (free tier is fine).
 - A Clerk app set up per `SETUP_AUTH.md` §1.
 - A Supabase project set up per `SETUP_AUTH.md` §2.
-- Optionally: a custom domain you control (recommended -- see §6).
+- Optionally: a custom domain you control (recommended -- see §5).
 
 ## 2. Cloudflare Pages — connect the repo (~5 min)
 
@@ -91,7 +121,10 @@ operational notes (rolling back, cache busting, troubleshooting).
    **Workers & Pages** → **Create** → **Pages** → **Connect to Git**.
 2. Authorize Cloudflare to access your GitHub. Pick the chess repo.
 3. **Project name**: `chess-coach` (or whatever; you can rename later).
-4. **Production branch**: `main`.
+   The project name is *not* necessarily the hostname you'll get — see
+   **Production host** above.
+4. **Production branch**: `main`. Every commit that lands on `main`
+   deploys to production with no further gate.
 5. **Build configuration**:
 
    | Field                       | Value          |
@@ -109,20 +142,24 @@ operational notes (rolling back, cache busting, troubleshooting).
    - `VITE_CLERK_PUBLISHABLE_KEY`
    - `VITE_SUPABASE_URL`
    - `VITE_SUPABASE_ANON_KEY`
-   - `NODE_VERSION` = `20` (forces the build container to Node 20; the
-     default has historically been older).
+   - `NODE_VERSION` = `20` (pins the build container to Node 20; the
+     container default is not guaranteed to match, and must not be
+     relied on).
 
    Do **not** set `VITE_E2E_AUTH_BYPASS` here. The bypass is gated on
    `import.meta.env.MODE === 'development'` in `src/lib/testAuth.ts`, so
    production builds can't reach it -- but defense in depth: the var
    simply must not exist on prod.
 
-7. Click **Save and Deploy**. The first build takes 2-4 minutes.
+7. Save and deploy. A build takes 2-4 minutes.
 
-## 3. Verify the first deploy (cross-origin isolation + SPA fallback)
+## 3. Verify a deploy (cross-origin isolation + SPA fallback)
 
-CF assigns `<project>.pages.dev` (e.g. `chess-coach.pages.dev`) and a
-preview URL per branch. Open the production URL and run this checklist:
+CF assigns the project a `*.pages.dev` hostname —
+`chess-coach-bip.pages.dev` for this project — plus a preview URL per
+branch. Open the production URL and run this checklist. It's worth
+re-running after any change to `public/_headers`, `public/_redirects`,
+or the engine files.
 
 1. **Cross-origin isolation is on** (multi-thread Stockfish enabled):
 
@@ -130,7 +167,7 @@ preview URL per branch. Open the production URL and run this checklist:
    - If `false`, something is stripping COOP/COEP. Check the response
      headers on `/`:
      ```bash
-     curl -I https://chess-coach.pages.dev/
+     curl -I https://chess-coach-bip.pages.dev/
      ```
      `cross-origin-opener-policy: same-origin` and
      `cross-origin-embedder-policy: require-corp` must be present.
@@ -146,7 +183,7 @@ preview URL per branch. Open the production URL and run this checklist:
 
 3. **SPA fallback works**:
 
-   - Visit `https://chess-coach.pages.dev/dashboard` directly (hard
+   - Visit `https://chess-coach-bip.pages.dev/dashboard` directly (hard
      refresh, not via in-app navigation). It must render the dashboard,
      not a 404. If it 404s, `public/_redirects` didn't deploy.
 
@@ -154,10 +191,10 @@ preview URL per branch. Open the production URL and run this checklist:
 
    - Add the production URL to Clerk's **Allowed origins**:
      <https://dashboard.clerk.com> → your app → **Domains** → add
-     `chess-coach.pages.dev`.
-   - Add `chess-coach.pages.dev` to **OAuth redirect URLs** for any
+     `chess-coach-bip.pages.dev`.
+   - Add `chess-coach-bip.pages.dev` to **OAuth redirect URLs** for any
      enabled providers (Google, GitHub).
-   - For preview URLs, add the wildcard `*.chess-coach.pages.dev`
+   - For preview URLs, add the wildcard `*.chess-coach-bip.pages.dev`
      (Clerk supports `*.` as a single-level wildcard).
    - Try Sign in with Google. You should land on `/dashboard` with the
      `<UserButton />` rendered in the header.
@@ -170,24 +207,27 @@ preview URL per branch. Open the production URL and run this checklist:
      production origin.
    - Pick the 1m import preset. Confirm games land in the dashboard.
 
-If step 1 fails specifically because **Clerk's sign-in widget is
+If step 4 fails specifically because **Clerk's sign-in widget is
 broken under COEP** (you'll see `NotSameOriginAfterDefaultedToSameOriginByCoep`
 errors in the console), swap `Cross-Origin-Embedder-Policy: require-corp`
 to `Cross-Origin-Embedder-Policy: credentialless` in `public/_headers`.
 `credentialless` still enables `SharedArrayBuffer` (Stockfish keeps
 working multi-threaded) but is more permissive about cross-origin
-loads. Document the swap here if you have to do it.
+loads. Note the swap here if you make it, so the next reader knows
+which policy prod is on.
 
 ## 4. GitHub Actions — already in the repo
 
-Two workflows ship with this repo:
+Three workflows ship with this repo:
 
 - **`.github/workflows/ci.yml`** — runs on every push to `main` and every
   PR targeting `main`. Two jobs in sequence:
 
   - `Typecheck + unit + integration`: `npm run typecheck`, `npm run
-    test:unit`, then starts a background `npm run dev` and runs `npm
-    run test:integration` against it.
+    build` (production-build parity, so a Vite-only break surfaces here
+    rather than in CF's build log), `npm run test:unit`, then starts a
+    background `npm run dev` and runs `npm run test:integration`
+    against it.
   - `Playwright e2e` (depends on the unit job passing): same dev-server
     pattern, runs `npm run test:e2e`.
 
@@ -197,12 +237,21 @@ Two workflows ship with this repo:
 - **`.github/workflows/live.yml`** — runs daily at 06:17 UTC, plus
   `workflow_dispatch` for manual runs. Hits the real Chess.com API
   (`npm run test:live`). Uses `continue-on-error: true` because Chess.com
-  occasionally rate-limits or has transient outages, and we don't want
-  that flake to page anyone or block a deploy.
+  occasionally rate-limits or has transient outages, and that flake must
+  not page anyone or block a deploy.
+
+- **`.github/workflows/openings-refresh.yml`** — scheduled monthly
+  (04:41 UTC on the 3rd) plus `workflow_dispatch`. Regenerates the
+  bundled opening-frequency data and **pushes the result straight to
+  `main`**, which means it can trigger a production deploy. It gates
+  itself on typecheck + unit tests before pushing, because there is no
+  gate on `main` to catch it afterwards. ARCHITECTURE.md owns the
+  details; what matters here is that this workflow is a writer to the
+  production branch.
 
 ### CI env vars (why real values, not dummies)
 
-Both workflows read three GitHub Actions secrets:
+All three workflows read the same three GitHub Actions secrets:
 
 ```yaml
 VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
@@ -238,30 +287,42 @@ canary failure pattern is: `auth-bypass` fails the
 the page-error log on every failed test that depends on the React tree
 mounting.
 
-### Branch protection (the gating step)
+### Branch protection (optional, currently off)
 
-In GitHub repo settings → **Branches** → **Add rule** for `main`:
+`main` has **no branch protection rule**. Pushes and merges land
+unconditionally, and Cloudflare deploys them. That's a deliberate
+trade-off for a solo project — but if you want a gate, add one in GitHub
+repo settings → **Branches** → add a rule for `main`:
 
 - ☑ Require a pull request before merging
 - ☑ Require status checks to pass before merging
-- Required status checks (these names must match the job names):
+- Required status checks (these names must match the job names exactly):
   - `Typecheck + unit + integration`
-  - `Playwright e2e`
-  - `Cloudflare Pages — chess-coach (Preview)` (CF auto-creates this
-    check once the repo is connected; click **Search for status checks**
-    after the first preview deploy lands)
+  - the Cloudflare Pages preview check, if you want the deploy to be
+    part of the gate. GitHub only offers a check name once it has been
+    reported at least once, so add it from the status-check search box
+    after a preview deploy has run.
 - ☑ Require branches to be up to date before merging
 - ☐ Do not allow bypassing the above settings (toggle on if you want
   the rule to apply to admins too; for a solo project you may want this
   off so you can hot-fix without ceremony)
 
+**Do not require `Playwright e2e`.** That job has a known failure
+(`touch-longpress-arrow`), so requiring it makes every PR unmergeable.
+Either leave it off the required list and read it as advisory, or fix
+the failing test first and then add it.
+
+Whatever you require here, remember it does not gate Cloudflare: CF
+deploys from `main` after the merge, so a required check only stops the
+merge, and a direct push still ships.
+
 ## 5. Custom domain (recommended)
 
 **The IndexedDB-origin pin matters in production too.** IndexedDB is
-keyed by origin; if you migrate users from `chess-coach.pages.dev` to
-`yourchess.app` later, their imported games will look "missing" on the
-new origin. The `BackupPage` makes this recoverable (export → re-import)
-but you don't want to ask real users to do that.
+keyed by origin; if you move users from `chess-coach-bip.pages.dev` to
+`yourchess.app` later, every imported game and cached analysis looks
+"missing" on the new origin, and there is no in-app export/import to dig
+them out with.
 
 So: **decide your production hostname before sharing the URL with anyone
 real.** If you'll use a custom domain eventually, do it now.
@@ -276,7 +337,7 @@ In the CF Pages dashboard:
    new hostname.
 6. Re-run the §3 verification checklist on the new hostname.
 
-If you skip the custom domain for now, `chess-coach.pages.dev` is fine
+If you skip the custom domain, `chess-coach-bip.pages.dev` is fine
 -- just **don't change it later** without warning users.
 
 ## 6. Operational notes
@@ -288,10 +349,15 @@ CF Pages keeps every prior deploy. To roll back:
 1. Project → **Deployments** → find the last known-good deploy.
 2. Click **⋯** → **Rollback**. Production traffic switches in <30s.
 
-This is safe to do at any time. The deploy is atomic (engine + bundle +
-headers all roll back together) precisely because everything lives in
-the same `dist/` artifact -- which is the architectural reason we keep
-Stockfish bundled with the app rather than on a separate origin.
+This is safe to do at any time. The deploy is atomic — engine + bundle +
+headers roll back together — because everything lives in the same
+`dist/` artifact. Stockfish must stay bundled with the app rather than
+served from a separate origin, because otherwise a rollback would leave
+the engine and the code that drives it at mismatched versions.
+
+A rollback only holds until the next commit lands on `main`: that
+triggers a fresh production deploy and supersedes it. Revert the bad
+commit too, or the rollback is temporary.
 
 ### Cache busting
 
@@ -310,37 +376,40 @@ asset filenames so old bundles age out automatically.
 
 ### Cost ceiling
 
-Free tier covers everything we need today:
+Free tier covers this project's usage:
 
 - **Bandwidth**: unlimited on Pages.
 - **Builds**: 500/month.
 - **Concurrent builds**: 1 (sequential queue).
 - **Custom domains**: unlimited.
-- **GH Actions free minutes**: 2000/mo for public repos, unlimited for
-  public repos -- effectively free for this project's CI volume.
+- **GH Actions free minutes**: unlimited on public repos; 2000/mo on
+  private ones -- either way, effectively free at this CI volume.
 
-If we ever blow past free, the next tier is $5/mo. The architecture
-doesn't have to change.
+Outgrowing the free tier means paying for the next Cloudflare tier. The
+architecture doesn't have to change.
 
 ## 7. Troubleshooting
 
 | Symptom                                        | Likely cause                                         | Fix                                                                                                                                                                |
 | ---------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The "production" URL serves an app that isn't Chess Coach | Wrong hostname — `<project>.pages.dev` was guessed rather than looked up | The assigned host is `chess-coach-bip.pages.dev`. Confirm it on the CF Pages project page, or in the summary of the **Cloudflare Pages** check on a recent `main` commit. |
 | `crossOriginIsolated === false` in prod         | `_headers` not deployed or being stripped            | `npm run build && ls dist/_headers`. If absent, confirm the file is in `public/` (Vite auto-copies) and not `.gitignored`. Check headers via `curl -I`.            |
-| Sign-in redirects loop                         | OAuth redirect URL not whitelisted in Clerk           | Add the prod hostname (and `*.pages.dev` for previews) to Clerk → Domains and OAuth providers.                                                                     |
+| Sign-in redirects loop                         | OAuth redirect URL not whitelisted in Clerk           | Add the prod hostname (and `*.chess-coach-bip.pages.dev` for previews) to Clerk → Domains and OAuth providers.                                                     |
 | Hard refresh on `/review/<id>` 404s             | `_redirects` not deployed                            | Same fix as `_headers` -- verify `dist/_redirects` exists after build.                                                                                             |
 | Stockfish loads single-thread on prod          | COEP not active                                      | `crossOriginIsolated` must be `true`. See first row.                                                                                                               |
 | All games error with `Stockfish worker failed to start (worker error)`, `crossOriginIsolated === true`, JS/WASM fetch 200, but `new Worker('/stockfish/...')` fires `error` with empty `message` / `filename` / `lineno` | Duplicate `Cross-Origin-Embedder-Policy` header on `/stockfish/*`. Cloudflare Pages **appends** per-route `_headers` rules on top of the wildcard `/*` block — re-declaring `COEP: require-corp` on `/stockfish/*` produces a response with the header listed twice, which Chromium rejects when loading a worker script. Confirm with `curl -sI /stockfish/stockfish-nnue-16.js \| grep -i embedder` (should show **one** line, not two). | Remove `Cross-Origin-Embedder-Policy: require-corp` from the `/stockfish/*` block in `public/_headers`. The wildcard `/*` already covers it. Keep `Cross-Origin-Resource-Policy: same-origin` on `/stockfish/*` since the wildcard doesn't set CORP. |
 | Clerk widget shows blank / console COEP errors | `require-corp` blocking Clerk's cross-origin scripts  | Swap to `Cross-Origin-Embedder-Policy: credentialless` in `public/_headers`.                                                                                       |
-| CI fails on dev-server start                   | Port 5173 occupied by something or env var missing    | Check the uploaded `vite.log` artifact. If the error is `ENV missing`, the dummy CI env vars in the workflow regressed.                                            |
+| CI fails on dev-server start                   | Port 5173 occupied by something or env var missing    | Check the uploaded `vite.log` artifact. If the error is `ENV missing`, one of the three repository secrets is unset — see "CI env vars" above.                     |
 | CI integration tests timeout                   | Stockfish init slow under Actions runner              | Already give the harness 60s for dev-server boot + each test has its own timeout. If consistently slow, bump `timeout-minutes` on the `unit` job.                  |
 | `pages.dev` works but custom domain 404s       | DNS not pointing to CF or cert still provisioning     | CF dashboard → Custom domains → check status. Wait up to 5 min after first setup.                                                                                  |
 
 ## 8. What to update if you change deploy infra
 
 - **Different host**: keep the `_headers` / `_redirects` files (Netlify
-  uses the same format; Vercel needs a `vercel.json`). Update §1-3 of
-  this file.
+  uses the same format; Vercel needs a `vercel.json`). Update the
+  **Production host** block and §1-3 of this file, plus the hint string
+  in `extension/src/options.html` and the fixtures in
+  `scripts/screenshot-extension.mjs`.
 - **Different Node version**: change the `node-version` in both
   workflows AND the `NODE_VERSION` env var in CF Pages.
 - **New build script**: update CF Pages **Build command** AND keep
@@ -371,14 +440,14 @@ those, use 9b.
 ### 9b. Side-loaded zip with production URL baked in
 
 ```bash
-npm run extension:build -- --coach-origin=https://<your-prod-host>
+npm run extension:build -- --coach-origin=https://chess-coach-bip.pages.dev
 ```
 
 Produces `dist-extension/chess-coach-<version>.zip`. The build
 script:
 
 - Copies `extension/` to a clean staging directory (drops
-  `README.md`, dotfiles, `.DS_Store`).
+  `README.md`, `WEB_STORE_LISTING.md`, dotfiles, `.DS_Store`).
 - Rewrites the `DEFAULT_COACH_ORIGIN` constant in `options.js` to
   the URL you passed.
 - Validates the URL with `new URL(...)`, strips trailing slash,
@@ -401,23 +470,24 @@ For each release:
 
 1. Bump `extension/manifest.json`'s `version` field (semver-ish,
    chrome only enforces `x.y.z.w` numeric form).
-2. `npm run extension:build -- --coach-origin=https://<your-prod-host>`.
+2. `npm run extension:build -- --coach-origin=https://chess-coach-bip.pages.dev`.
 3. Upload `dist-extension/chess-coach-<version>.zip` to the
-   developer console → your item → New version → Upload package.
-4. First-ever submission also asks for: a 128×128 icon, 1280×800
-   screenshots, a privacy policy URL, and a "Single Purpose"
-   declaration. The single purpose for this extension is: **"Detect
-   the end of a Chess.com game and offer a deep link into the user's
-   own Chess Coach review tool."** Keep that wording — it matches
-   what the extension actually does, which is the Web Store's
-   sole acceptance criterion.
-5. Review usually takes 1–3 business days. Updates after the first
-   approval are typically auto-approved within hours.
+   developer console → your item → new version → upload the package.
+4. A submission for an item that has never been reviewed also asks
+   for: a 128×128 icon, 1280×800 screenshots, a privacy policy URL,
+   and a "Single Purpose" declaration. The single purpose for this
+   extension is: **"Detect the end of a Chess.com game and offer a
+   deep link into the user's own Chess Coach review tool."** Keep that
+   wording — it matches what the extension actually does, which is the
+   Web Store's sole acceptance criterion. `extension/WEB_STORE_LISTING.md`
+   holds the full copy-paste set of answers.
+5. Review usually takes 1–3 business days; subsequent updates are
+   typically approved within hours.
 
 ### Updating the live extension
 
 The extension does not auto-pull from the source tree once installed.
-If you change `content.js` or `options.html`:
+If you change `extension/src/content.js` or `extension/src/options.html`:
 
 - **Side-loaded users**: send them the new zip; they remove + Load
   Unpacked again, or click "Update" in `chrome://extensions` if they

@@ -4,6 +4,15 @@ A personal chess improvement app. Imports your Chess.com games, runs Stockfish a
 
 Everything runs in the browser. No backend, no server, no account. Your data stays in IndexedDB on your machine.
 
+## What it does
+
+- **Import + analyse** — pull your Chess.com games, analyse them in the background with Stockfish, and read the result as an eval graph with mistakes and blunders called out.
+- **Coaching from your own games** — mistake patterns aggregated across games, puzzles generated from your blunders, and win-rate by opening family on the dashboard alongside rating and accuracy trends.
+- **Openings Library** — ~3,700 named lines from the Lichess `chess-openings` dataset (MIT). Browse by family/variation, preview any line, add a single line or a whole family to a repertoire.
+- **Repertoire drilling** — family-bound repertoires with SM-2 spaced repetition, and "play it out vs Stockfish" from the end of any line.
+- **Learn-then-drill with difficulty tiers** — the drill page lists every library line for the openings you play, marks the ones already in your repertoire, and tiers each **Easy / Medium / Hard**: family-relative, blending line depth, master-level frequency, and your own win/draw/loss record in that variation. Add lines in place, filter by tier, and **Learn** a line first — step through it with the next move hidden, guess it on the board (nothing is scored), then hand straight into drilling that same line.
+- **Chrome extension** (`extension/`) — detects the end of a Chess.com game and offers a one-click deep link into your review. Build with `npm run extension:build -- --coach-origin=<url>`.
+
 ## Stack
 
 - React + Vite + TypeScript
@@ -35,10 +44,11 @@ On first launch:
 ## Contributing
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — data model, boot-time version
-  stamps, engine pool, the two opening-naming systems, UI conventions.
-  Read this before touching the analysis queue, a boot pass, or anything
-  that maps a game to an opening; each entry is something that has already
-  broken once.
+  stamps, engine pool, the openings data pipeline, the two opening-naming
+  systems, UI conventions. Read the relevant entry before touching the
+  analysis queue, a boot pass, the openings data, or anything that maps a
+  game to an opening: these are the rules the codebase breaks quietly
+  rather than loudly.
 - [`DEPLOY.md`](DEPLOY.md) — Cloudflare Pages + GitHub Actions setup.
 - [`SETUP_AUTH.md`](SETUP_AUTH.md) — Clerk + Supabase env vars.
 
@@ -59,6 +69,11 @@ ones there and use `runBrowserTest()` from `scripts/test/harness.mjs`.
 Unit tests must not import Dexie, Web Workers, chessground or Stockfish —
 see the conventions comment in `vitest.config.ts`.
 
+Two e2e results are expected and not your fault: `touch-longpress-arrow`
+fails everywhere (it is the only reason CI shows red on `main`), and
+`mobile-audit` fails on some local setups while passing in CI. Everything
+else passing is the real bar.
+
 ## Self-hosting
 
 `npm run build` produces a static `dist/` folder. Serve it with any static file server (nginx, Caddy, `python -m http.server`, GitHub Pages, etc.).
@@ -74,30 +89,19 @@ The Vite dev server sets these automatically. On GitHub Pages (which can't set c
 
 ## Roadmap
 
-Phase 1: Chess.com import, background analysis, eval graph, blunder highlighting, backup/restore.
+- **Opening prep-gap detection** — detailed below; the next thing to build.
+- **Endgame trainer** built on the Lichess Syzygy tablebase.
+- **Pre-game prep** — scout an opponent's openings before you play them.
+- **Position annotations** — your own notes, recalled across games.
 
-Phase 2: mistake pattern aggregation across games, personalized puzzles from your blunders, opening repertoire with SM-2 spaced repetition, repertoire gap analysis.
+### Next up: opening prep-gap detection
 
-Phase 3 (this version):
-- **Openings Library** preloaded with ~3,700 named lines from the Lichess `chess-openings` dataset (MIT). Browse by family/variation, preview any line, and one-click add individual lines or a whole family into a repertoire.
-- **Progress charts** on the dashboard: rating trend per time class, accuracy over time (per-game + 20-game rolling avg), and win-rate by opening family.
-- **Board polish**: Chess.com-style right-click drag arrows (with L-shaped paths for knight moves), right-click red square highlights, and faster piece movement (animation trimmed and suppressed on user-initiated moves).
-
-Also shipped:
-- **Repertoire drilling** — family-bound repertoires, a guided starter set of five lines, SM-2 review, and "play it out vs Stockfish" from the end of any line.
-- **Learn-then-drill with difficulty tiers** — the drill page now shows every library line for the openings you play in one list, marks the ones already in your repertoire, and tiers each **Easy / Medium / Hard** (family-relative, blending line depth, master-level frequency, and your own win/draw/loss record in that variation). Add any lines in place, filter by tier, and **Learn** a line first — step through it with the next move hidden, guess it on the board (no score kept), then hand straight off into drilling. Frequency data is measured at full depth and a unit test keeps the generated bundle from ever drifting out of sync with its source, refreshed monthly by a self-verifying job.
-- **Chrome extension** (`extension/`) — detects the end of a Chess.com game and offers a one-click deep link into your review. Build with `npm run extension:build -- --coach-origin=<url>`.
-- **Dashboard deep links** — win-rate-by-opening rows link into the openings library, or into your own repertoire when you already have one for that family.
-- **Brilliant-move tags** in the Games table.
-
-Planned (Phase 4+): endgame trainer (Lichess Syzygy), pre-game prep (opponent scouting), position annotations / "memory palace" across games.
-
-### Next up: opening prep-gap detection (designed, not built)
-
-With discovery and learning in place, the highest-value next step is
-surfacing the openings you *lose* to but haven't prepped — e.g. "you've
-lost 8 of 11 in the Advance Variation and it isn't in your repertoire" —
-turning your own game history into a prioritized study list.
+Surface the openings you *lose* to but haven't prepped — e.g. "you've lost
+8 of 11 in the Advance Variation and it isn't in your repertoire" — turning
+your own game history into a prioritized study list. `repertoire/gaps.ts`
+already walks games against a repertoire tree to find out-of-book points;
+the missing half is ranking those gaps by how much they cost you and
+offering the fix as lines to learn.
 
 ### Refreshing the openings database
 

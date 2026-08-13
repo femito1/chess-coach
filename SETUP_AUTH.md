@@ -1,18 +1,19 @@
 # Auth setup — Clerk + Supabase
 
-> One-time setup to stand up the Phase 2 auth infrastructure. Follow this
-> end-to-end before running the app for the first time after Phase 2 lands.
+> How to stand up the auth infrastructure the app needs. Follow this
+> end-to-end before running the app: without these three env vars,
+> `src/lib/env.ts` throws at module load and nothing boots.
 > Estimated time: ~15 minutes.
 
 The app uses **Clerk** (auth: sign-in, session management, user identity) and
 **Supabase** (Postgres for the `profiles` table that holds linked chess
 usernames). Clerk is wired to Supabase as a **third-party auth provider** —
 the modern replacement for the deprecated "JWT template" approach. Supabase
-trusts Clerk's JWKS directly; we never copy JWT secrets between the two.
+trusts Clerk's JWKS directly; JWT secrets are never copied between the two.
 
 Heavy user data (games, analyses, eval cache) stays in IndexedDB on the
-client — Supabase only stores the small `profiles` row. Phase 3 adds cloud
-backup for the heavy data.
+client. Supabase stores only the small `profiles` row, so nothing in this
+setup needs to scale with a user's game count.
 
 ---
 
@@ -61,14 +62,14 @@ backup for the heavy data.
 4. Once provisioned, open **Project Settings → API**. Copy:
    - **Project URL** (e.g. `https://xxxxxxxxxxxx.supabase.co`)
    - **Publishable key** — starts with `sb_publishable_…`. This is the
-     current Supabase key format (replaces the older `anon` JWT key,
-     which is being phased out by late 2026). It's safe to ship to the
-     browser; it only grants the low-privilege `anon` Postgres role.
+     current Supabase key format, which supersedes the older `anon` JWT
+     key. It's safe to ship to the browser; it only grants the
+     low-privilege `anon` Postgres role.
 
      Older Supabase projects may still show an **anon public** key as a
-     long `eyJhbGc…` JWT instead. If that's all you have, use it — it
-     works identically. New projects only get the `sb_publishable_…`
-     format.
+     long `eyJhbGc…` JWT instead. If that's all the dashboard offers,
+     use it — it works identically. Either way it goes in
+     `VITE_SUPABASE_ANON_KEY`.
 
      **Do NOT** use the `service_role` / `secret` key. That one bypasses
      Row-Level Security and must never ship to the browser.
@@ -79,8 +80,8 @@ backup for the heavy data.
    - Left nav → **Authentication → Providers**.
    - Scroll to **Third-party Auth** (separate from the OAuth list).
    - Click **Add provider → Clerk**.
-   - Paste your Clerk **Frontend API URL** from step 6 of the Clerk
-     section. Save.
+   - Paste the Clerk **Frontend API URL** you saved in step 7 of the
+     Clerk section. Save.
 
    This tells Supabase to trust JWTs issued by your Clerk instance.
    Supabase fetches Clerk's JWKS automatically; nothing to copy by hand.
@@ -132,8 +133,9 @@ backup for the heavy data.
    - The three RLS policies pin every row access to the signed-in user's
      own row. `auth.jwt() ->> 'sub'` is Clerk's user id when Clerk is
      configured as the third-party auth provider.
-   - There is intentionally no `delete` policy — accounts get deleted via
-     a Clerk webhook (future work).
+   - There is intentionally no `delete` policy: the browser client must
+     not be able to drop rows. Account deletion belongs out-of-band, via
+     a Clerk `user.deleted` webhook (see the production checklist below).
 
 ## 3. Local environment file
 
@@ -148,8 +150,12 @@ backup for the heavy data.
    ```
    VITE_CLERK_PUBLISHABLE_KEY=pk_test_xxx...
    VITE_SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
-   VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
+   VITE_SUPABASE_ANON_KEY=sb_publishable_xxx...
    ```
+
+   All three are required. `src/lib/env.ts` throws on a missing or
+   prefix-invalid value at module load, so a typo here fails the app at
+   boot rather than at first sign-in.
 
 3. Restart `npm run dev` if it was already running. Vite only reads
    env files at startup.
@@ -159,8 +165,7 @@ checked in so contributors know which variables they need.
 
 ## 4. Verify
 
-After Phase 2 code lands, you can verify the wiring works without writing
-any code:
+You can confirm the whole wiring works without writing any code:
 
 1. `npm run dev`, open the app — you should see a sign-in screen instead
    of the dashboard.
@@ -171,23 +176,42 @@ any code:
 5. Refresh the app. You should stay signed in.
 6. Sign out from the user button. You should be sent back to sign-in.
 
-If any step fails, the integration test `auth-gate.mjs` (Phase 2 Pass 2)
-runs the same flow programmatically with stubbed credentials and gives a
-clearer error than the UI does.
+If a step fails, with `npm run dev` running in another terminal, run:
+
+```bash
+node scripts/run-tests.mjs --only=auth-bypass
+```
+
+That test (`scripts/test/integration/auth-bypass.mjs`) drives the same
+auth gate with a synthetic identity and a stubbed Supabase, and asserts
+the signed-in layout renders. Because it stubs the backends, it splits
+the failure in two:
+
+- **It passes** → the app and your env vars are fine, and the problem is
+  dashboard configuration (Clerk domains / OAuth redirect URLs, the
+  third-party auth provider, or the `profiles` table and its policies).
+- **It fails** → the problem is local. A malformed publishable key shows
+  up as `@clerk/clerk-react: The publishableKey passed to Clerk is
+  invalid` in the page-error log.
 
 ---
 
-## Production checklist (when you're ready to deploy)
+## Production checklist
 
-These don't matter for local dev; flag them for the eventual public deploy.
+None of these matter for local dev. They all matter for the deployed app
+(see `DEPLOY.md`, whose production host is
+`https://chess-coach-bip.pages.dev`).
 
-- [ ] Clerk → **Domains**: add the production domain (e.g.
-      `chess-coach.<something>`) so OAuth redirects work there.
-- [ ] Clerk → **API Keys**: switch to a `pk_live_…` key for production
-      (separate Clerk app or "Production" instance of the same one).
+- [ ] Clerk → **Domains**: add the production hostname, plus the
+      `*.chess-coach-bip.pages.dev` wildcard for CF Pages preview
+      deploys, so OAuth redirects work there.
+- [ ] Clerk → **API Keys**: use a `pk_live_…` key for production
+      (separate Clerk app, or the "Production" instance of the same one).
 - [ ] Supabase → **Authentication → URL Configuration**: add the
-      production domain to the allowed redirect list.
-- [ ] Confirm RLS is still enabled on `profiles` (it should be — the
-      `enable row level security` line above is durable).
+      production hostname to the allowed redirect list.
+- [ ] Confirm RLS is enabled on `profiles`. The `enable row level
+      security` line above is durable, but a table recreated by hand
+      without it is world-readable to anyone holding the publishable key.
 - [ ] Set up a Clerk webhook for `user.deleted` so Supabase rows get
-      cleaned up when accounts are removed. (Out of scope for Phase 2.)
+      cleaned up when accounts are removed — the RLS policies above
+      deliberately give the client no way to do this itself.
