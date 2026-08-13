@@ -55,6 +55,7 @@ import { usePersistedState } from '@/lib/usePersistedState';
 import { buildSolutionSteps } from '@/components/SolutionPlayer';
 import { Chess } from 'chess.js';
 import {
+  areGuidedLinesMastered,
   drillableGuidedIndices,
   expansionPresets,
   GUIDED_EXPANSION_SIZE,
@@ -737,6 +738,24 @@ function ActivePractice({
   const [expandText, setExpandText] = useState<string>(
     String(GUIDED_EXPANSION_SIZE),
   );
+  /**
+   * Has the active set actually been mastered?
+   *
+   * The card below is shown whenever there are lines left to add — growth
+   * deliberately isn't gated on mastery any more (see above). But its copy
+   * used to congratulate the user unconditionally ("Your active set is
+   * mastered"), which was simply false most of the time, and left
+   * `areGuidedLinesMastered` unused. Now the claim is checked, and the card
+   * reads as a plain shortcut until it's earned. Missing stats count as not
+   * mastered: never congratulate on absent data.
+   */
+  const guidedMastered = useMemo(
+    () =>
+      stats
+        ? areGuidedLinesMastered(decoratedRawLines, guidedIndices, stats)
+        : false,
+    [decoratedRawLines, guidedIndices, stats],
+  );
   /** The count that will actually be added: the typed number capped at what
    *  exists, or null while the field holds nothing usable (empty, or 0). */
   const expandLimit = useMemo(
@@ -1184,13 +1203,25 @@ function ActivePractice({
       <ModePicker mode={session.mode} onChange={setMode} />
 
       {usingRecommendedSet && availableNextLines.length > 0 && (
-        <div className="card p-4 border-good/40 bg-good/5 flex flex-col sm:flex-row gap-3 sm:items-center">
+        <div
+          className={`card p-4 flex flex-col sm:flex-row gap-3 sm:items-center ${
+            guidedMastered ? 'border-good/40 bg-good/5' : ''
+          }`}
+        >
           <div className="flex-1">
-            <div className="font-medium text-good">{t('practice.nextLinesReady')}</div>
+            <div className={`font-medium ${guidedMastered ? 'text-good' : ''}`}>
+              {guidedMastered
+                ? t('practice.nextLinesReady')
+                : t('practice.moreLinesTitle')}
+            </div>
             <p className="text-xs text-text-muted">
-              {t('practice.nextLinesDescription', {
-                count: availableNextLines.length,
-              })}
+              {guidedMastered
+                ? t('practice.nextLinesDescription', {
+                    count: availableNextLines.length,
+                  })
+                : t('practice.moreLinesDescription', {
+                    count: availableNextLines.length,
+                  })}
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
