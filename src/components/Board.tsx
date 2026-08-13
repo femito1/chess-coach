@@ -487,8 +487,13 @@ export function Board({
     if (!sounds) return;
     // First position we ever see, or a position reached without a move.
     if (previous === null || previous === fen || !lastMoveUci) return;
-    playMove({ fenBefore: fenBefore ?? undefined, fenAfter: fen, uci: lastMoveUci });
-  }, [fen, lastMoveUci, sounds]);
+    playMove({
+      fenBefore: fenBefore ?? undefined,
+      fenAfter: fen,
+      uci: lastMoveUci,
+      classification: lastMoveClassification,
+    });
+  }, [fen, lastMoveUci, lastMoveClassification, sounds]);
 
   useEffect(() => {
     if (!api.current) return;

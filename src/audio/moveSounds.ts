@@ -1,15 +1,31 @@
 /**
- * Move sounds: the chess.com-style cue set (move, capture, castle,
- * promotion, check, game end, illegal), synthesized in the browser.
+ * Move sounds: five cues, one impact each.
+ *
+ * **Shape of the design, and why.** The first version layered a click over a
+ * ringing tone, played castling as two clicks 85 ms apart, and used little
+ * melodic runs for promotion and game end. The verdict was blunt and right:
+ * doubled sounds, chimes, and no clear moment of impact. So every cue here is
+ * a *single* burst of filtered noise with an instant attack — one audible
+ * event, landing exactly when the piece does. There are no oscillators in
+ * this file at all, which makes a chime structurally impossible.
+ *
+ * The cue set:
+ *
+ *   move       — a short mid-high tock
+ *   capture    — the same tock, louder and a little lower
+ *   check      — bright, resonant, cutting; unmistakably not a move
+ *   mate       — low and long; the only cue that rings
+ *   brilliant  — bright with a fast upward sweep, still one hit
+ *   illegal    — dull low thud, for a move the board refused
+ *
+ * Castling and promotion deliberately have no cue of their own: they're
+ * moves, and a second click to mark them was the thing that read as doubled.
  *
  * **Why synthesized rather than sampled.** chess.com's audio files are their
  * copyrighted assets; shipping them here would be redistributing someone
- * else's work. So these are built from oscillators and filtered noise at
- * play time: nothing to license, nothing added to the bundle, and no network
- * request on the first move of a session. If you ever want real samples,
- * `playMoveSound` is the only function to change — decode a buffer per kind
- * and play it instead of calling `synthesize`. The rest of the app talks to
- * this module through `MoveSoundKind` and never knows the difference.
+ * else's work. Generating the cues costs no bundle weight and no request on
+ * the first move of a session. Swapping in real samples means changing
+ * `playMoveSound` alone — callers only ever name a `MoveSoundKind`.
  *
  * The classifier (`classifyMoveSound`) is pure and separately tested; the
  * playback half touches Web Audio and is a no-op wherever that's missing
@@ -17,15 +33,15 @@
  */
 
 import { Chess } from 'chess.js';
+import type { Classification } from '@/db/schema';
 import { readPersistedValue, persistedStorageKey } from '@/lib/usePersistedState';
 
 export type MoveSoundKind =
   | 'move'
   | 'capture'
-  | 'castle'
-  | 'promote'
   | 'check'
-  | 'gameEnd'
+  | 'mate'
+  | 'brilliant'
   | 'illegal';
 
 /** Same key/version scheme as `usePersistedState`, so the Settings toggle
@@ -68,24 +84,30 @@ export interface MoveSoundInput {
   fenAfter: string;
   /** The move in UCI (`e2e4`, `e7e8q`). */
   uci: string;
+  /** Engine judgement of the move, where the surface has one (review,
+   *  free play). Only `'brilliant'` changes the cue. */
+  classification?: Classification;
 }
 
 /**
  * Which cue a move earns. Precedence, highest first:
  *
- *   gameEnd — the move ended the game (mate, stalemate, draw)
- *   check   — it gave check (beats capture, as on chess.com: a capture with
- *             check announces the check, which is the thing you must react to)
- *   promote — a pawn became a piece
- *   castle  — the king travelled two files
- *   capture — a piece left the board
- *   move    — everything else
+ *   mate      — the move ended the game. Stalemate and draws share this cue:
+ *               "the game is over" is the thing to convey, and a separate
+ *               draw sound would be a fourth timbre nobody asked for.
+ *   brilliant — flagged brilliant by the analysis. Above check because it's
+ *               the rarer, more remarkable fact about the move; below mate
+ *               because a finished game outranks a compliment.
+ *   check     — beats capture, as requested: a capture that gives check
+ *               announces the check, since that's what must be answered.
+ *   capture   — a piece left the board.
+ *   move      — everything else, including castling and promotion.
  *
  * Falls back to `'move'` for anything unparseable, so a malformed FEN makes
  * a plain click rather than throwing inside a board render.
  */
 export function classifyMoveSound(input: MoveSoundInput): MoveSoundKind {
-  const { fenBefore, fenAfter, uci } = input;
+  const { fenBefore, fenAfter, classification } = input;
   let chess: Chess;
   try {
     chess = new Chess(fenAfter);
@@ -94,27 +116,10 @@ export function classifyMoveSound(input: MoveSoundInput): MoveSoundKind {
   }
 
   if (chess.isCheckmate() || chess.isDraw() || chess.isStalemate()) {
-    return 'gameEnd';
+    return 'mate';
   }
+  if (classification === 'brilliant') return 'brilliant';
   if (chess.inCheck()) return 'check';
-  if (uci.length >= 5) return 'promote';
-
-  const from = uci.slice(0, 2);
-  const to = uci.slice(2, 4);
-  const moved = (() => {
-    try {
-      return chess.get(to as never);
-    } catch {
-      return undefined;
-    }
-  })();
-  if (
-    moved?.type === 'k' &&
-    Math.abs(from.charCodeAt(0) - to.charCodeAt(0)) >= 2
-  ) {
-    return 'castle';
-  }
-
   if (fenBefore && pieceCount(fenAfter) < pieceCount(fenBefore)) {
     return 'capture';
   }
@@ -148,129 +153,77 @@ function audio(): AudioContext | null {
   return ctx;
 }
 
-/** ~200 ms of white noise, reused for every percussive click. */
+/** ~600 ms of white noise, reused by every cue (`mate` is the longest). */
 function noiseBuffer(c: AudioContext): AudioBuffer {
   if (noise && noise.sampleRate === c.sampleRate) return noise;
-  const frames = Math.floor(c.sampleRate * 0.2);
+  const frames = Math.floor(c.sampleRate * 0.6);
   const buf = c.createBuffer(1, frames, c.sampleRate);
   const data = buf.getChannelData(0);
-  // Deterministic pseudo-noise: a plain LCG rather than Math.random, so the
-  // click sounds identical every time (and nothing here depends on the
-  // global RNG).
+  // Deterministic pseudo-noise: a plain LCG rather than Math.random, so a
+  // given cue sounds identical every time.
   let seed = 0x2f6e2b1;
   for (let i = 0; i < frames; i++) {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    data[i] = (seed / 0x3fffffff) - 1;
+    data[i] = seed / 0x3fffffff - 1;
   }
   noise = buf;
   return buf;
 }
 
-/** A filtered noise burst — the "wood" in a piece landing. */
-function click(
-  c: AudioContext,
-  out: AudioNode,
-  at: number,
-  opts: { gain: number; freq: number; decay: number; q?: number },
-): void {
+interface Impact {
+  /** Peak level, 0..1, before the master gain. */
+  gain: number;
+  /** Centre of the resonant band — the cue's apparent pitch. */
+  freq: number;
+  /** Resonance. Higher is more pitched and bell-like, lower is more of a
+   *  dry click. */
+  q: number;
+  /** Seconds to silence. */
+  decay: number;
+  /** Optional band sweep, giving a rising "shine" within the one hit. */
+  sweepTo?: number;
+}
+
+/**
+ * The whole synthesizer: one noise burst, one filter, one envelope that
+ * starts at full level. Instant attack is what makes the moment of impact
+ * legible; every cue differs only in the four numbers above.
+ */
+function impact(c: AudioContext, out: AudioNode, at: number, spec: Impact): void {
   const src = c.createBufferSource();
   src.buffer = noiseBuffer(c);
   const band = c.createBiquadFilter();
   band.type = 'bandpass';
-  band.frequency.value = opts.freq;
-  band.Q.value = opts.q ?? 1.2;
+  band.frequency.setValueAtTime(spec.freq, at);
+  band.Q.value = spec.q;
+  if (spec.sweepTo != null) {
+    band.frequency.exponentialRampToValueAtTime(
+      spec.sweepTo,
+      at + spec.decay * 0.7,
+    );
+  }
   const env = c.createGain();
-  env.gain.setValueAtTime(opts.gain, at);
-  env.gain.exponentialRampToValueAtTime(0.0001, at + opts.decay);
+  env.gain.setValueAtTime(spec.gain, at);
+  env.gain.exponentialRampToValueAtTime(0.0001, at + spec.decay);
   src.connect(band).connect(env).connect(out);
   src.start(at);
-  src.stop(at + opts.decay + 0.02);
+  src.stop(at + spec.decay + 0.02);
 }
 
-/** A short pitched body — the "thump" under the click, or a blip/tone. */
-function tone(
-  c: AudioContext,
-  out: AudioNode,
-  at: number,
-  opts: {
-    gain: number;
-    freq: number;
-    decay: number;
-    type?: OscillatorType;
-    endFreq?: number;
-  },
-): void {
-  const osc = c.createOscillator();
-  osc.type = opts.type ?? 'sine';
-  osc.frequency.setValueAtTime(opts.freq, at);
-  if (opts.endFreq != null) {
-    osc.frequency.exponentialRampToValueAtTime(opts.endFreq, at + opts.decay);
-  }
-  const env = c.createGain();
-  env.gain.setValueAtTime(0.0001, at);
-  env.gain.exponentialRampToValueAtTime(opts.gain, at + 0.005);
-  env.gain.exponentialRampToValueAtTime(0.0001, at + opts.decay);
-  osc.connect(env).connect(out);
-  osc.start(at);
-  osc.stop(at + opts.decay + 0.02);
-}
+/** One spec per cue. Capture is deliberately the move spec with more level
+ *  and slightly less brightness — "the same sound, a bit louder", as asked. */
+const CUES: Record<MoveSoundKind, Impact> = {
+  move: { gain: 0.6, freq: 1900, q: 1.6, decay: 0.045 },
+  capture: { gain: 0.95, freq: 1500, q: 1.4, decay: 0.055 },
+  check: { gain: 0.75, freq: 3000, q: 6, decay: 0.09 },
+  mate: { gain: 0.95, freq: 320, q: 3.5, decay: 0.5 },
+  brilliant: { gain: 0.8, freq: 1300, q: 5, decay: 0.18, sweepTo: 3600 },
+  illegal: { gain: 0.5, freq: 220, q: 2, decay: 0.12 },
+};
 
-/** Master level. Deliberately low: this fires on every move, and a board
- *  that clicks loudly gets muted by the user within a minute. */
-const MASTER_GAIN = 0.28;
-
-function synthesize(c: AudioContext, kind: MoveSoundKind): void {
-  const master = c.createGain();
-  master.gain.value = MASTER_GAIN;
-  master.connect(c.destination);
-  const t0 = c.currentTime + 0.001;
-
-  switch (kind) {
-    case 'move':
-      click(c, master, t0, { gain: 0.9, freq: 1250, decay: 0.055 });
-      tone(c, master, t0, { gain: 0.35, freq: 190, decay: 0.07 });
-      break;
-    case 'capture':
-      // Lower, grittier, a touch longer — something left the board.
-      click(c, master, t0, { gain: 1, freq: 620, decay: 0.1, q: 0.7 });
-      click(c, master, t0 + 0.012, { gain: 0.6, freq: 1500, decay: 0.06 });
-      tone(c, master, t0, { gain: 0.4, freq: 120, decay: 0.11 });
-      break;
-    case 'castle':
-      // Two pieces, so two clicks.
-      click(c, master, t0, { gain: 0.75, freq: 1250, decay: 0.05 });
-      tone(c, master, t0, { gain: 0.3, freq: 190, decay: 0.06 });
-      click(c, master, t0 + 0.085, { gain: 0.85, freq: 1100, decay: 0.055 });
-      tone(c, master, t0 + 0.085, { gain: 0.32, freq: 170, decay: 0.07 });
-      break;
-    case 'promote':
-      click(c, master, t0, { gain: 0.6, freq: 1250, decay: 0.05 });
-      tone(c, master, t0, { gain: 0.28, freq: 660, decay: 0.09 });
-      tone(c, master, t0 + 0.075, { gain: 0.3, freq: 990, decay: 0.12 });
-      break;
-    case 'check':
-      click(c, master, t0, { gain: 0.7, freq: 1400, decay: 0.05 });
-      tone(c, master, t0 + 0.01, { gain: 0.3, freq: 950, decay: 0.08 });
-      tone(c, master, t0 + 0.085, { gain: 0.28, freq: 1300, decay: 0.1 });
-      break;
-    case 'gameEnd':
-      tone(c, master, t0, { gain: 0.3, freq: 660, decay: 0.16 });
-      tone(c, master, t0 + 0.13, { gain: 0.3, freq: 550, decay: 0.16 });
-      tone(c, master, t0 + 0.26, { gain: 0.32, freq: 440, decay: 0.26 });
-      break;
-    case 'illegal':
-      // Low buzz. Distinct from every "something happened" cue above,
-      // because it means the opposite: nothing happened.
-      tone(c, master, t0, {
-        gain: 0.22,
-        freq: 150,
-        endFreq: 110,
-        decay: 0.13,
-        type: 'square',
-      });
-      break;
-  }
-}
+/** Master level. Loud enough that the cue is unmistakable, low enough that a
+ *  sound on every move doesn't get the whole feature muted. */
+const MASTER_GAIN = 0.5;
 
 /**
  * Play a cue. Silent when the user has turned sounds off, and a no-op
@@ -282,7 +235,10 @@ export function playMoveSound(kind: MoveSoundKind): void {
   try {
     const c = audio();
     if (!c) return;
-    synthesize(c, kind);
+    const master = c.createGain();
+    master.gain.value = MASTER_GAIN;
+    master.connect(c.destination);
+    impact(c, master, c.currentTime + 0.001, CUES[kind]);
   } catch {
     // Audio is a nicety; never let it break the board.
   }
