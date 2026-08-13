@@ -548,7 +548,7 @@
       "selectedCount": "{{selected}} / {{total}} selected",
       "searchPlaceholder": "Search by name, ECO, or move…",
       "selectAll": "Select all",
-      "selectNone": "Select none",
+      "selectNone": "Clear all",
       "selectFiltered": "Select filtered ({{count}})",
       "noMatches": "No lines match \"{{query}}\".",
       "mainline": "Mainline",

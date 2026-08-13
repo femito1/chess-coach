@@ -1094,6 +1094,50 @@ function ActivePractice({
     [toAdd],
   );
 
+  // ── Bulk selection ───────────────────────────────────────────────────
+  //
+  // These act on repertoire LINES, which is what the drill session walks —
+  // several picker rows can share one line (a row stands for the shortest
+  // leaf extending it), and library rows that aren't in the repertoire have
+  // nothing to select, so counting rows would overstate what these do.
+  const filterActive = query.trim().length > 0 || tierFilter !== 'all';
+  /** Keys of the drillable lines the current filter leaves on screen. */
+  const visibleLineKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const fam of visibleFamilies) {
+      for (const entry of fam.entries) {
+        if (entry.repertoireIndex == null) continue;
+        const key = allLineKeys[entry.repertoireIndex];
+        if (key) keys.add(key);
+      }
+    }
+    return keys;
+  }, [visibleFamilies, allLineKeys]);
+
+  const selectAllLines = useCallback(() => {
+    markSelectionTouched();
+    // Nothing is refused any more, so a later add may tick its line freely.
+    deselectedKeysRef.current = new Set();
+    setSelectedKeys(new Set(allLineKeys));
+  }, [allLineKeys, markSelectionTouched]);
+
+  const clearAllLines = useCallback(() => {
+    markSelectionTouched();
+    // Every existing line is now an explicit "no", so a background add can't
+    // quietly repopulate the set the user just emptied. A line added *after*
+    // this still joins, since the user asked for that one by name.
+    deselectedKeysRef.current = new Set(allLineKeys);
+    setSelectedKeys(new Set());
+  }, [allLineKeys, markSelectionTouched]);
+
+  const selectFilteredLines = useCallback(() => {
+    markSelectionTouched();
+    deselectedKeysRef.current = new Set(
+      allLineKeys.filter((key) => !visibleLineKeys.has(key)),
+    );
+    setSelectedKeys(new Set(visibleLineKeys));
+  }, [allLineKeys, visibleLineKeys, markSelectionTouched]);
+
   return (
     <div className="space-y-4">
       <header className="flex items-baseline justify-between flex-wrap gap-2">
@@ -1403,6 +1447,11 @@ function ActivePractice({
             adding={addingLibrary}
             addProgress={addProgress}
             addableSelectedKeys={addableSelectedKeys}
+            filterActive={filterActive}
+            filteredLineCount={visibleLineKeys.size}
+            onSelectAll={selectAllLines}
+            onClearAll={clearAllLines}
+            onSelectFiltered={selectFilteredLines}
             onToggleDrill={toggleLine}
             onToggleAdd={toggleToAdd}
             onAddSelected={() => void addLibraryLines(addableSelectedKeys)}
@@ -1891,6 +1940,11 @@ function LinePicker({
   adding,
   addProgress,
   addableSelectedKeys,
+  filterActive,
+  filteredLineCount,
+  onSelectAll,
+  onClearAll,
+  onSelectFiltered,
   onToggleDrill,
   onToggleAdd,
   onAddSelected,
@@ -1913,6 +1967,13 @@ function LinePicker({
   adding: boolean;
   addProgress: { done: number; total: number } | null;
   addableSelectedKeys: string[];
+  /** True when a search query or tier filter is narrowing the list. */
+  filterActive: boolean;
+  /** Drillable lines the filter leaves visible (lines, not rows). */
+  filteredLineCount: number;
+  onSelectAll: () => void;
+  onClearAll: () => void;
+  onSelectFiltered: () => void;
   onToggleDrill: (repertoireIndex: number) => void;
   onToggleAdd: (key: string) => void;
   onAddSelected: () => void;
@@ -1963,6 +2024,44 @@ function LinePicker({
               : t(`practice.linePicker.tier.${opt}` as const)}
           </button>
         ))}
+      </div>
+      {/* Bulk selection. Disabled when they'd be no-ops, so the state of the
+          drill set is readable from the buttons themselves. Counts are
+          LINES, not rows — several rows can point at one line. */}
+      <div className="flex flex-wrap items-center gap-1 text-xs">
+        <button
+          type="button"
+          className="text-[11px] px-2 py-0.5 rounded border border-border text-text-muted hover:text-text disabled:opacity-40 disabled:hover:text-text-muted"
+          disabled={drillSelected.size === inRepertoireCount}
+          onClick={onSelectAll}
+        >
+          {t('practice.linePicker.selectAll')}
+        </button>
+        <button
+          type="button"
+          className="text-[11px] px-2 py-0.5 rounded border border-border text-text-muted hover:text-text disabled:opacity-40 disabled:hover:text-text-muted"
+          disabled={drillSelected.size === 0}
+          onClick={onClearAll}
+        >
+          {t('practice.linePicker.selectNone')}
+        </button>
+        {filterActive && filteredLineCount > 0 && (
+          <button
+            type="button"
+            className="text-[11px] px-2 py-0.5 rounded border border-border text-text-muted hover:text-text"
+            onClick={onSelectFiltered}
+          >
+            {t('practice.linePicker.selectFiltered', {
+              count: filteredLineCount,
+            })}
+          </button>
+        )}
+        <span className="ml-auto text-[11px] text-text-muted tabular-nums">
+          {t('practice.linePicker.selectedCount', {
+            selected: drillSelected.size,
+            total: inRepertoireCount,
+          })}
+        </span>
       </div>
       {addableSelectedKeys.length > 0 && (
         <button

@@ -548,7 +548,7 @@
       "selectedCount": "{{selected}} / {{total}} selezionate",
       "searchPlaceholder": "Cerca per nome, ECO o mossa…",
       "selectAll": "Seleziona tutte",
-      "selectNone": "Deseleziona tutte",
+      "selectNone": "Cancella tutte",
       "selectFiltered": "Seleziona filtrate ({{count}})",
       "noMatches": "Nessuna linea corrisponde a \"{{query}}\".",
       "mainline": "Linea principale",

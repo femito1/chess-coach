@@ -125,8 +125,26 @@ await runBrowserTest({
       },
       { timeoutMs: 20_000 },
     );
-    // Let the rebuilt line list land in the page.
-    await page.waitForTimeout(1500);
+    // Wait for the page to actually re-render off the rebuilt line list,
+    // rather than sleeping a guessed interval: the DB write above lands a
+    // beat before `rep.updatedAt` propagates through the re-enumeration, and
+    // a fixed wait that is generous on an idle machine is not generous when
+    // the whole suite is competing for CPU (this test failed only inside a
+    // full run for exactly that reason).
+    await pollUntil(
+      async () => {
+        const settled = await page.evaluate((title) => {
+          for (const li of document.querySelectorAll('li')) {
+            const label = li.querySelector('label');
+            if (label?.getAttribute('title')?.trim() !== title) continue;
+            return !li.textContent.includes('not added');
+          }
+          return false;
+        }, setup.addTitle);
+        return { done: settled, value: settled, label: `addedRowSettled=${settled}` };
+      },
+      { timeoutMs: 20_000 },
+    );
 
     // ── 3. The hand-edit survived, the add landed, the drill didn't move.
     const after = await readState();
