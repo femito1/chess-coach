@@ -16,11 +16,16 @@
  * decay and are gone inside ~130 ms (mate excepted), which is what separates
  * struck wood from a tone.
  *
+ * The transients are deliberately quiet, dark and very short (20–32 ms, with
+ * a lowpass on top). Loud, bright or long noise stops sounding like contact
+ * and starts sounding like *air*; the body is what should carry each cue.
+ *
  * The cue set:
  *
  *   move       — mid tock with a short low body
  *   capture    — the same knock, louder and heavier
- *   check      — brighter and more resonant; unmistakably not a move
+ *   check      — the same knock pitched higher with a harder top: recognisably
+ *                the same instrument, plainly a different event
  *   mate       — low, heavy, the only cue that rings on
  *   brilliant  — an ascending three-note "achievement" flourish, by request:
  *                a brilliant move shouldn't sound like a louder move
@@ -192,14 +197,21 @@ function noiseBuffer(c: AudioContext): AudioBuffer {
  *  piece does. */
 const ATTACK = 0.0015;
 
-/** The contact transient: a filtered noise burst. On its own this is the
- *  thin, hissy click the first version shipped; it's the *top* of a sound,
- *  not the whole of one. */
+/**
+ * The contact transient: a filtered noise burst, there to mark the instant of
+ * impact and nothing else.
+ *
+ * It is kept short, quiet and dark on purpose. Noise that is loud, bright or
+ * long stops reading as contact and starts reading as *air* — the hiss that
+ * made the previous voicing sound breathy. A lowpass after the band throws
+ * away the top end the bandpass leaks, which is where nearly all of that
+ * airiness lives; the body below is what the ear should mostly hear.
+ */
 function transient(
   c: AudioContext,
   out: AudioNode,
   at: number,
-  spec: { gain: number; freq: number; q: number; decay: number },
+  spec: { gain: number; freq: number; q: number; decay: number; cut?: number },
 ): void {
   const src = c.createBufferSource();
   src.buffer = noiseBuffer(c);
@@ -207,11 +219,15 @@ function transient(
   band.type = 'bandpass';
   band.frequency.value = spec.freq;
   band.Q.value = spec.q;
+  const cut = c.createBiquadFilter();
+  cut.type = 'lowpass';
+  cut.frequency.value = spec.cut ?? 3200;
+  cut.Q.value = 0.7;
   const env = c.createGain();
   env.gain.setValueAtTime(0.0001, at);
   env.gain.linearRampToValueAtTime(spec.gain, at + ATTACK);
   env.gain.exponentialRampToValueAtTime(0.0001, at + spec.decay);
-  src.connect(band).connect(env).connect(out);
+  src.connect(band).connect(cut).connect(env).connect(out);
   src.start(at);
   src.stop(at + spec.decay + 0.02);
 }
@@ -249,8 +265,9 @@ function body(
 }
 
 interface KnockSpec {
-  /** Contact noise. */
-  hit: { gain: number; freq: number; q: number; decay: number };
+  /** Contact noise. `cut` is the lowpass above the band — the lower it is,
+   *  the less air the cue has. */
+  hit: { gain: number; freq: number; q: number; decay: number; cut?: number };
   /** Pitched body: fundamental, plus an inharmonic upper partial at
    *  `partial` × the fundamental. Inharmonic and fast-decaying is what reads
    *  as "wood"; harmonic and slow would read as a chime. */
@@ -303,28 +320,33 @@ function fanfare(c: AudioContext, out: AudioNode, at: number): void {
  */
 const KNOCKS: Record<Exclude<MoveSoundKind, 'brilliant'>, KnockSpec> = {
   move: {
-    hit: { gain: 0.5, freq: 2200, q: 1.1, decay: 0.03 },
-    low: { gain: 0.6, freq: 210, decay: 0.085, drop: 0.85 },
-    partial: { ratio: 2.6, gain: 0.22, decay: 0.055 },
+    hit: { gain: 0.3, freq: 1500, q: 1.4, decay: 0.02, cut: 2800 },
+    low: { gain: 0.8, freq: 200, decay: 0.075, drop: 0.82 },
+    partial: { ratio: 2.6, gain: 0.13, decay: 0.03 },
   },
   capture: {
-    hit: { gain: 0.7, freq: 1700, q: 0.9, decay: 0.045 },
-    low: { gain: 0.9, freq: 150, decay: 0.13, drop: 0.8 },
-    partial: { ratio: 2.4, gain: 0.3, decay: 0.08 },
+    hit: { gain: 0.4, freq: 1200, q: 1.2, decay: 0.028, cut: 2600 },
+    low: { gain: 1, freq: 145, decay: 0.115, drop: 0.78 },
+    partial: { ratio: 2.4, gain: 0.17, decay: 0.045 },
   },
+  // Same knock family as `move` — a piece still lands — but pitched a fifth
+  // or so higher with a harder, tighter top, so it reads as "that was a
+  // check" without becoming a different instrument. It used to sit at 520 Hz
+  // with a ringing 3× partial and a bright 3.4 kHz top, which is a chime, and
+  // chimes were ruled out.
   check: {
-    hit: { gain: 0.7, freq: 3400, q: 2.5, decay: 0.05 },
-    low: { gain: 0.5, freq: 520, decay: 0.12, drop: 0.9 },
-    partial: { ratio: 3, gain: 0.34, decay: 0.09 },
+    hit: { gain: 0.42, freq: 2100, q: 3, decay: 0.022, cut: 3400 },
+    low: { gain: 0.78, freq: 300, decay: 0.065, drop: 0.8 },
+    partial: { ratio: 2.6, gain: 0.14, decay: 0.028 },
   },
   mate: {
-    hit: { gain: 0.55, freq: 1200, q: 1, decay: 0.05 },
-    low: { gain: 1, freq: 95, decay: 0.55, drop: 0.75 },
-    partial: { ratio: 2.2, gain: 0.34, decay: 0.3 },
+    hit: { gain: 0.32, freq: 900, q: 1.2, decay: 0.032, cut: 2200 },
+    low: { gain: 1, freq: 90, decay: 0.5, drop: 0.72 },
+    partial: { ratio: 2.2, gain: 0.2, decay: 0.18 },
   },
   illegal: {
-    hit: { gain: 0.28, freq: 400, q: 1, decay: 0.04 },
-    low: { gain: 0.6, freq: 110, decay: 0.16, drop: 0.8 },
+    hit: { gain: 0.16, freq: 350, q: 1, decay: 0.028, cut: 1600 },
+    low: { gain: 0.6, freq: 105, decay: 0.15, drop: 0.8 },
   },
 };
 
