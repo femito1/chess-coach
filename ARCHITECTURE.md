@@ -182,6 +182,11 @@ leave the app asking for a file nobody copies and every eval would quietly go
 classical. Starting Vite directly (`npx vite`) skips npm lifecycle scripts and
 therefore skips staging.
 
+**NNUE is live in production** as of 2026-08-31, served from R2 — measured
++377 cp vs classical's +53 on the live origin. Before that the app had never run
+NNUE anywhere but dev; if you find a comment or doc implying production is
+classical, it is stale.
+
 **The net is served from two different places, decided at build time by
 `VITE_NNUE_NET_URL`.** Cloudflare Pages caps a single asset at 25 MiB and the net
 is 38.3 MiB (40,119,326 bytes), so production cannot serve it from the app's own

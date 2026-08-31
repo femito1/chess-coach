@@ -70,6 +70,17 @@ app's own origin on this host — not as a build-configuration mistake to be fix
 but permanently. The fix is to serve it from an object store and point the app
 there with **`VITE_NNUE_NET_URL`**.
 
+> **Status: done and live.** The bucket is `chess-coach-nnue`, served at
+> `https://pub-0110d0bdad544ae6a1a6151b54021f00.r2.dev`, and
+> `.env.production` carries the URL. Verified on 2026-08-31 from the production
+> origin in a real cross-origin-isolated browser: R2 answers the live origin with
+> HTTP 200 and the right `content-length`, Stockfish reports
+> `info string NNUE evaluation enabled.`, and the rook endgame evaluates at
+> **+377 cp** against **+53** for the classical control on the same page. Since
+> production carries no same-origin net at all, that number could only have come
+> from R2. Re-run `npm run nnue:upload -- --verify-only` after any bucket change
+> or Stockfish upgrade.
+
 ```
    Cloudflare Pages (the app)              R2 bucket (the net)
    ┌──────────────────────────┐            ┌─────────────────────────┐
