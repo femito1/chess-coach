@@ -25,7 +25,7 @@
  * use the query string everywhere because it composes more cleanly with
  * the existing harness.
  *
- * Read `PASS4_PLAN.md § Auth-bypass test mode` for the full design.
+ * `TESTING.md § Running the browser tiers` documents how the tiers use it.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';

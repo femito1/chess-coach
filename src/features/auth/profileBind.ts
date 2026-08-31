@@ -6,7 +6,7 @@
  * deterministic, and unit-testable. The only consumer is `useProfileSync`,
  * which executes the actions this reducer returns against Supabase + Dexie.
  *
- * State machine (see `PROJECT_STATUS.md` §10 Phase 2):
+ * State machine:
  *
  *  | local username | cloud username    | bound user      | action          |
  *  | -------------- | ----------------- | --------------- | --------------- |

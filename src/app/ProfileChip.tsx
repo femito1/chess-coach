@@ -4,7 +4,7 @@ import { UserButton } from '@clerk/clerk-react';
  * Header profile chip. Renders Clerk's `<UserButton />` — opens a popover
  * with account info, "Manage account", and "Sign out".
  *
- * Phase 1 (off-plan additions in `PROJECT_STATUS.md`) shipped a hand-built
+ * An earlier iteration shipped a hand-built
  * chip that linked to the Backup page when a username was set, or showed
  * a "Sign in" placeholder otherwise. Phase 2 swaps both behaviours for
  * Clerk's component while keeping the same header slot dimensions so the

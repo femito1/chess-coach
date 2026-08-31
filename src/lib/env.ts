@@ -5,7 +5,7 @@
  *
  * Fails fast at module load time with a clear, actionable error if any of
  * the three is missing. We deliberately throw rather than silently falling
- * back to local-only mode: per `PROJECT_STATUS.md` §10 Phase 2, sign-in is
+ * back to local-only mode: sign-in is
  * required, so a misconfigured deploy must be a hard failure, not a soft
  * "everyone is anonymous" failure that's easy to miss in code review.
  *

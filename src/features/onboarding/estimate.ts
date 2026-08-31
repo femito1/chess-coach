@@ -19,12 +19,20 @@
  * estimates tuned to what we measured on a 2024 mid-range laptop.
  *
  * Multi-thread vs single-thread matters because COOP/COEP-less hosts
- * (e.g. plain GitHub Pages) fall back to single-thread Stockfish, which
- * is roughly 3–4× slower per game. The probe will pick up that
- * difference automatically.
+ * (e.g. plain GitHub Pages) fall back to single-thread Stockfish. The gap is
+ * **~11×**, not the 3–4× this comment used to claim: that older figure predates
+ * NNUE, and the `-single` build is dramatically worse at NNUE specifically.
+ * Measured on one 59-ply game, depth 18, 4 workers:
+ *
+ *     stockfish-nnue-16.js         (threaded)    9 716 ms
+ *     stockfish-nnue-16-single.js  (fallback)  110 199 ms
+ *
+ * The probe picks the real number up automatically; these constants only apply
+ * when it hasn't run or returned something unusable, so an understated fallback
+ * shows a new user "~20 min" for an import that will actually take hours.
  */
 export const FALLBACK_MS_PER_GAME_MULTI = 8_000;
-export const FALLBACK_MS_PER_GAME_SINGLE = 20_000;
+export const FALLBACK_MS_PER_GAME_SINGLE = 90_000;
 
 export interface ImportTimeEstimate {
   /** Estimated wall-clock seconds. Best for sorting/comparison. */

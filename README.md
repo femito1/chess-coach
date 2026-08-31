@@ -138,12 +138,12 @@ Read ARCHITECTURE.md § Cloud sync before changing anything in
 | `TESTING.md` | Test tiers, how to add a browser test, known-failing tests, and the traps that produce false passes. |
 | `DEPLOY.md` | Cloudflare Pages + GitHub Actions, deploy verification, rollback, troubleshooting, extension distribution. |
 | `SETUP_AUTH.md` | Clerk + Supabase setup, env vars, cloud-sync enrolment (§5). |
-| `scripts/worker/README.md` | The off-laptop analysis worker: provisioning, env, run order, costs. |
+| `scripts/worker/README.md` | The off-laptop analysis worker: the scheduled Cloud Run deployment, env, run order, costs. |
 | `scripts/README.md` | Script inventory and the browser-test entry points. |
 
-Some code comments reference `PROJECT_STATUS.md`, `PASS4_PLAN.md` and
-`TESTING.md § …`. The first two are gitignored planning docs that are not in
-the repo — treat those pointers as dead and read the code.
+Every doc above is in the repo. Code comments point only at these files — if you
+find a pointer to something absent, it is a bug in the comment, not a doc you are
+missing.
 
 ## Self-hosting
 
@@ -158,11 +158,24 @@ Cross-Origin-Embedder-Policy: require-corp
 ```
 
 Without cross-origin isolation there is no `SharedArrayBuffer`, and the engine
-falls back to the single-threaded Stockfish build (~3-4× slower). The second
-group is `Cache-Control: immutable` on `/stockfish/*` and `/puzzles/*`, which
-is what makes a 40 MB NNUE net and an 18 MB puzzle corpus a one-time cost per
-device. `public/_redirects` provides the SPA fallback. Read the comments in
-both files before editing them.
+falls back to the single-threaded Stockfish build — **~11× slower at NNUE**
+(measured 9.7 s vs 110 s on the same game at depth 18), not a mild degradation.
+Settings surfaces a warning when that happens.
+
+The second group is `Cache-Control: immutable` on `/stockfish/*` and
+`/puzzles/*`, which makes the 38.3 MiB NNUE net and the 18 MB puzzle corpus a
+one-time cost per device. The third is `no-store` on the SPA document **for every
+route** — `_headers` matches the request path, not the SPA-rewritten one, so a
+host that only no-stores `/` will serve stale bundles on `/games`, `/settings`
+and the rest. `src/app/routeHeaders.test.ts` guards the list.
+
+Self-hosting somewhere without a per-asset size cap is the one case where the
+NNUE net can just live in `dist/`: leave `VITE_NNUE_NET_URL` unset and
+`prebuild` stages it. Cloudflare Pages caps assets at 25 MiB and therefore
+cannot — see DEPLOY.md § The NNUE network.
+
+`public/_redirects` provides the SPA fallback. Read the comments in all three
+files before editing them.
 
 ## Regenerating committed data
 

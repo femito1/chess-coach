@@ -32,7 +32,10 @@ Two schema rules:
 
 - **A version bump is only needed to change stores or indexes.** Adding a field
   to `Settings` or `Game` needs no bump — many current fields shipped without
-  one. Bump only for a new store, a new index, or an `upgrade()` hook.
+  one, `Game.requeuedAt` most recently. Bump only for a new store, a new index,
+  or an `upgrade()` hook. (`v11` bumped for an optional `Settings` field anyway,
+  purely so the addition showed up in the schema history. Don't read that as the
+  rule; it isn't.)
 - **Never drop a store to tidy up.** Dexie destroys its rows irreversibly. The
   two dead stores above are kept for exactly that reason. `v10` is the worked
   example of a deliberate wipe: its `upgrade()` clears the four repertoire
@@ -247,11 +250,6 @@ installed package ships a different net** — otherwise a Stockfish upgrade woul
 leave the app asking for a file nobody copies and every eval would quietly go
 classical. Starting Vite directly (`npx vite`) skips npm lifecycle scripts and
 therefore skips staging.
-
-**NNUE is live in production** as of 2026-08-31, served from R2 — measured
-+377 cp vs classical's +53 on the live origin. Before that the app had never run
-NNUE anywhere but dev; if you find a comment or doc implying production is
-classical, it is stale.
 
 **The net is served from two different places, decided at build time by
 `VITE_NNUE_NET_URL`.** Cloudflare Pages caps a single asset at 25 MiB and the net
@@ -662,9 +660,27 @@ Three invariants a change must not break:
 the analysis queue going idle (`running` true→false), and the manual "Sync now"
 button in Settings. There is deliberately **no polling timer** for sync itself;
 the 45 s interval in `useCloudProgress` is a read-only progress readout and a
-different thing. `startSync` is de-duped by a module-level in-flight promise,
-and the store is pinned on `globalThis` so a duplicate module (HMR, dynamic
-import) cannot split the state.
+different thing. The store is pinned on `globalThis` so a duplicate module (HMR,
+dynamic import) cannot split the state.
+
+**`startSync` coalesces concurrent triggers, but never onto an aborted pass.**
+De-duping onto a pass whose signal is already aborted *drops the request
+invisibly*: the aborted pass resolves, `isAbort` maps it to `phase: 'ready'` —
+which is indistinguishable from a clean no-op sync — and nothing transferred.
+This is not theoretical. Clerk resolves `isLoaded` / `userId` in stages, so the
+first effect run starts a sync and the second aborts it and retries; a retry that
+adopted the dying promise never synced at all, and whether that happened depended
+on network timing. Two rules follow:
+
+- a request arriving while the running pass is aborted **queues behind it**
+  instead of adopting it;
+- the manual button passes `force`, because a deliberate click must always produce
+  a pass — it is pressed precisely when something already looks wrong.
+
+Ownership of the in-flight slot is tracked with a token, not promise identity: a
+chained pass may already own the slot by the time its predecessor's `finally`
+runs, and clearing it unconditionally would allow a third concurrent sync. Pinned
+by `sync-coalescing.mjs`.
 
 **Sync is mounted in `AppLayout`, so it runs in every browser test.** The E2E
 bypass stub therefore answers the cloud tables as empty rather than throwing —
@@ -678,17 +694,25 @@ NNUE analysis.
 
 ## Off-laptop analysis worker
 
-`scripts/worker/` analyzes `cloud_games` with native Stockfish 16 on a box you
-provision, writes `cloud_analyses` and stamps a summary back onto `cloud_games`;
-the laptop collects the results through cloud sync. **Full docs: `scripts/worker/README.md`.** Two things that must not
-be missed:
+`scripts/worker/` analyzes `cloud_games` with native Stockfish 16, writes
+`cloud_analyses` and stamps a summary back onto `cloud_games`; the laptop collects
+the results through cloud sync. It runs as a **scheduled Cloud Run job**
+(`npm run worker:deploy`). **Full docs: `scripts/worker/README.md`** — read the
+six load-bearing deployment decisions there before changing any of its flags.
+Three things that must not be missed:
 
-- **It is code, not a running service.** No server exists until someone
-  provisions one.
-- **Run `npm run worker:verify` before any bulk run.** It proves the native
-  binary reproduces the browser's evals with NNUE off, that NNUE genuinely
-  changes them with it on (the check that catches a net failing to load), and
-  that `analyzeGamePgn` runs end-to-end under Node.
+- **Run the verify job before any bulk run.** It proves the native binary
+  reproduces the browser's evals with NNUE off, that NNUE genuinely changes them
+  with it on (the check that catches a net failing to load), and that
+  `analyzeGamePgn` runs end-to-end under Node.
+- **One task, never parallel.** The worker has no lease or claiming — it selects
+  every candidate game itself — so N parallel tasks each analyze the same games
+  for N times the compute. Concurrency belongs inside the task.
+- **The cloud is not the interactive path.** ~115 s of Cloud Run provisioning
+  before any analysis starts, against ~10 s for a whole game locally. It exists to
+  converge the library without the laptop, and to make devices that cannot run a
+  4-worker NNUE pool (phones) fast. A review the user is waiting on is always
+  answered locally — see § Engine.
 
 Auth is the Supabase **service_role** key, which bypasses RLS entirely — hence
 `USER_ID` is mandatory and every query filters on it. Because a classical

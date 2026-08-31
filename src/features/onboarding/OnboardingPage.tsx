@@ -33,8 +33,7 @@ import { runProfileSync } from '@/features/auth/useProfileSync';
  * to the multi/single-thread constants in `estimate.ts`.
  *
  * Mounted at `/onboarding` outside `<AppLayout>` so the nav header /
- * profile chip don't appear during the focused flow. Per
- * `PASS4_PLAN.md § Pass 4.5`.
+ * profile chip don't appear during the focused flow.
  */
 export function OnboardingPage() {
   const { t } = useTranslation();

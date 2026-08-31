@@ -6,7 +6,10 @@
 #        Cross-Origin-Opener-Policy:   same-origin
 #        Cross-Origin-Embedder-Policy: require-corp
 #      Without these, the engine silently falls back to the single-threaded
-#      build (`stockfish-nnue-16-single.js`) and analysis is ~3-4x slower.
+#      build (`stockfish-nnue-16-single.js`), which is ~11x slower at NNUE —
+#      measured 9.7 s vs 110 s on the same 60-position game at depth 18. That is
+#      a cliff, not a degradation, and nothing in the UI would say why, so
+#      `activeEngineBuild()` records it and Settings warns.
 #   2. With COEP=require-corp every subresource must opt-in via CORP. We mark
 #      the engine + hashed Vite assets as same-origin so the worker can fetch
 #      them.

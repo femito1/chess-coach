@@ -70,16 +70,17 @@ app's own origin on this host — not as a build-configuration mistake to be fix
 but permanently. The fix is to serve it from an object store and point the app
 there with **`VITE_NNUE_NET_URL`**.
 
-> **Status: done and live.** The bucket is `chess-coach-nnue`, served at
-> `https://pub-0110d0bdad544ae6a1a6151b54021f00.r2.dev`, and
-> `.env.production` carries the URL. Verified on 2026-08-31 from the production
-> origin in a real cross-origin-isolated browser: R2 answers the live origin with
-> HTTP 200 and the right `content-length`, Stockfish reports
-> `info string NNUE evaluation enabled.`, and the rook endgame evaluates at
-> **+377 cp** against **+53** for the classical control on the same page. Since
-> production carries no same-origin net at all, that number could only have come
-> from R2. Re-run `npm run nnue:upload -- --verify-only` after any bucket change
-> or Stockfish upgrade.
+**The current configuration.** Bucket `chess-coach-nnue`, public URL
+`https://pub-0110d0bdad544ae6a1a6151b54021f00.r2.dev`, with the URL committed in
+`.env.production`. `npm run nnue:upload -- --verify-only` checks it end to end —
+run that after any bucket change and after any Stockfish upgrade, since the net's
+filename carries its own hash and a stale object then 404s under the new name.
+
+To confirm the browser is really using it: on the live site, the network panel
+shows one 38.3 MiB GET to `pub-*.r2.dev` (then `(disk cache)`), and no
+`[engine] NNUE net not served` warning in the console. A request for
+`/stockfish/nn-*.nnue` on the app's own origin returning SPA-fallback HTML is
+expected and correct — the net is deliberately not there.
 
 ```
    Cloudflare Pages (the app)              R2 bucket (the net)
@@ -254,19 +255,22 @@ At R2's pricing the net is ~$0.0006/month of storage and zero egress. Class B
 (read) operations are the only other line item, and `immutable` means one read
 per device rather than one per page load.
 
-### If you would rather not
+### If you ever want to undo this
 
-Two alternatives, both legitimate, both requiring you to delete the premise of
-this section rather than leave it to rot:
+Two supported ways off R2. Both are real choices rather than fallbacks, and both
+mean editing the sections above rather than leaving them describing a setup you no
+longer have:
 
-- **Leave the browser on classical and let the off-laptop worker own recorded
-  analysis.** Coherent now that the worker exists: it embeds the net in its own
-  binary, runs depth-18 NNUE natively, and cloud sync already prefers an NNUE
-  analysis over a classical one for the same game. The browser's evaluator would
-  then only affect live eval bars and newly imported games before the worker
-  catches up. Costs nothing, ships nothing.
-- **Host the app somewhere without a per-asset cap.** Removes the problem and
-  re-opens every `_headers` / `_redirects` assumption in §8.
+- **Unset `VITE_NNUE_NET_URL` and let the browser run classical.** The
+  off-laptop worker embeds the net in its own binary and runs depth-18 NNUE
+  natively regardless, and cloud sync prefers an NNUE analysis over a classical
+  one for the same game — so recorded analysis quality would be unaffected. Only
+  live eval bars and freshly imported games not yet picked up by the worker would
+  use the weaker evaluator. Note the Pages build then fails on the 25 MiB cap
+  unless you also stop staging the net, which is what the `CF_PAGES` check in
+  `copy-nnue.mjs` is telling you.
+- **Host the app somewhere without a per-asset cap.** Removes the constraint
+  entirely, and re-opens every `_headers` / `_redirects` assumption in §8.
 
 ---
 
@@ -632,6 +636,33 @@ commit too, or the rollback is temporary.
 
 ### Cache busting
 
+**The SPA document is `no-store` on every route, and every route is listed
+explicitly in `public/_headers`.** This matters more than it looks. `_headers`
+matches the **request** path, not the path `_redirects` rewrites to, so listing
+only `/` and `/index.html` protected the two URLs nobody navigates to directly
+while every real entry point fell through to Cloudflare's default
+`public, max-age=0, must-revalidate`:
+
+```
+/            no-cache, no-store, must-revalidate   ← the rule
+/settings    public, max-age=0, must-revalidate    ← CF default
+/games       public, max-age=0, must-revalidate    ← CF default
+/review/abc  public, max-age=0, must-revalidate    ← CF default
+```
+
+The symptom is the worst kind: **a deploy that appears not to take effect.** A
+normal reload on a deep route can keep running the previous bundle while a hard
+reload picks up the new one, which reads as random flakiness rather than as
+caching — and it cost a debugging session chasing an application bug that was
+partly a stale bundle.
+
+A wildcard `/*` rule cannot be used instead, because Pages *appends* per-route
+headers to the wildcard rather than replacing them (§7's duplicate-COEP entry is
+the same mechanism), which would put two conflicting `Cache-Control` values on
+`/assets/*` and `/stockfish/*`. So the list is enumerated, and
+`src/app/routeHeaders.test.ts` fails if a route in `src/app/routes.tsx` has no
+entry. **Adding a route means adding it to `_headers`.**
+
 If you ship a Stockfish version bump, the `immutable` cache rule on
 `/stockfish/*` means returning visitors keep the old binary until the
 filename changes. Two ways to handle this:
@@ -688,6 +719,7 @@ architecture doesn't have to change.
 | Clerk widget shows blank / console COEP errors | `require-corp` blocking Clerk's cross-origin scripts  | Swap to `Cross-Origin-Embedder-Policy: credentialless` in `public/_headers`.                                                                                       |
 | Console warns `NNUE net not served at …`, and evals look off (quiet positions read as equal) | The engine could not fetch the network and fell back to the classical evaluator. The URL in the warning tells you which mode you are in | **Remote URL in the warning**: run `npm run nnue:upload -- --verify-only`. Most likely the bucket lacks a CORS rule for this origin (which fails as an opaque `TypeError: Failed to fetch`), or public access is off (404), or the net was never uploaded. **Same-origin URL in the warning**: `VITE_NNUE_NET_URL` is unset in this environment, or `prebuild` was skipped — run `npm run nnue:stage`. |
 | Console errors `VITE_NNUE_NET_URL is unusable — …` | The variable is set to something that isn't a usable net URL, so the app fell back to the same-origin path (which on Pages does not exist) | The message names the problem. This should have failed the build in `prebuild`; reaching the browser means the build ran `vite build` directly, bypassing it. |
+| A deploy appears not to take effect — new code works after Ctrl+Shift+R but not after a normal reload | The SPA document was served from cache on that route, so the browser kept the previous bundle's `<script src>` | Check `curl -sI <origin>/<route> \| grep -i cache-control`. It must read `no-cache, no-store, must-revalidate`. If it reads `public, max-age=0, must-revalidate`, that route is missing from `public/_headers` — see § Cache busting. `src/app/routeHeaders.test.ts` is meant to catch this before deploy. |
 | Cloudflare Pages check is red while GitHub Actions is green | The two pipelines are independent; a failed Pages **build** leaves the previous deploy live, so the site keeps working and only the check goes red | Read the dashboard log linked from the check. If it is the NNUE network, see the section above — a docs-only or code-only commit will not fix it. |
 | Every game errors as soon as analysis starts, with no useful message | Stockfish 16 `exit()`s at the first `go` when `Use NNUE` is on and the net did not load. The app probes for this, so reaching it means the probe passed and the load still failed — e.g. a truncated or wrong-sized `.nnue` | Compare `content-length` against the file in `node_modules/stockfish/src/`. Purge the CF cache for `/stockfish/*` if the sizes differ.                              |
 | CI fails on dev-server start                   | Port 5173 occupied by something or env var missing    | Check the uploaded `vite.log` artifact. If the error is `ENV missing`, one of the three repository secrets is unset — see "CI env vars" above.                     |

@@ -78,6 +78,7 @@ worth knowing before you touch their area:
 | `src/features/sync/diff.test.ts` | The sync conflict rules, including that the attempt merge is commutative and idempotent and that a pushed row round-trips as a fixed point. |
 | `src/features/openings/difficulty.test.ts` | Tier scoring as properties (exposure lowers a tier, rarity raises one, tiers are family-relative) — never constant assertions on the weights. |
 | `src/features/repertoire/pickerModel.test.ts` | The repertoire ∪ library merge, including the "leaf extends a library variation" match. |
+| `src/app/routeHeaders.test.ts` | Every route in `routes.tsx` has a `no-store` entry in `public/_headers`. Guards the enumeration a wildcard can't replace — without it, a new route silently serves a cacheable document and deploys stop taking effect on a normal reload there. |
 | `src/i18n/parity.test.ts` | Every locale carries exactly the English key set (keys aren't typed and `fallbackLng` hides omissions, so this is the only backstop). |
 
 **integration** (`scripts/test/integration/`)
@@ -87,6 +88,13 @@ cache, migration, backfill and cloud-sync behaviour is pinned. `recompute-skip`
 pins the boot-pass version gates (including that an empty DB must not stamp);
 `cloud-sync` pins the three ordering rules in ARCHITECTURE.md § Cloud sync;
 `puzzle-library` is the worked example of seeding synthetic analyses safely.
+
+`sync-coalescing` pins that a sync request is never silently dropped — concurrent
+triggers still coalesce onto one pass, but a request arriving on an already-aborted
+pass queues behind it rather than adopting it, and the manual button always
+produces a pass. It counts passes rather than comparing promise identity, because
+`startSync` is `async` and so always returns a fresh wrapper; identity was never
+the contract.
 
 `analysis-priority` pins demand-driven queueing: that the game you are viewing is
 analyzed ahead of newer pending ones, that re-requesting the in-flight game does
@@ -120,8 +128,8 @@ unit → integration, then e2e as a second job. The live tier is not in CI.
    from `scripts/test/harness.mjs` so browser launch, console wiring, assertions
    and polling stay shared.
 2. Add an entry to `scripts/test/manifest.mjs`. **A script that is not in the
-   manifest never runs** — `scripts/test/integration/extension.mjs` is currently
-   in exactly that state.
+   manifest never runs.** The one deliberate exception is documented under
+   § Run on demand below; anything else missing from the manifest is a mistake.
 3. Mention it here under the right feature area.
 
 The harness's `expect()` is deliberately minimal: `toBe`, `toEqual`,
@@ -166,6 +174,24 @@ Treat any red as yours, with these exceptions:
   `ERR_INSUFFICIENT_RESOURCES` — Chromium runs out of resources over ~45
   full-page screenshots of WASM-heavy pages. It passes in CI (~73 s); confirm
   against CI before chasing it.
+
+## Run on demand
+
+**`scripts/test/integration/extension.mjs`** — the Chrome extension smoke test.
+Deliberately absent from `manifest.mjs`, so `npm test` never runs it: Chrome
+extensions need a real browser head
+(`chromium.launchPersistentContext({ headless: false })`), which CI does not
+have. It does *not* need `npm run dev` — it builds the deep link without
+following it.
+
+```bash
+node scripts/test/integration/extension.mjs
+```
+
+Run it whenever `extension/` changes. It covers the auto-prompt rules that are
+easy to regress: an in-progress game at a numeric URL must NOT prompt, while
+both old game-over and current game-result markup must; plus SPA navigation,
+dismissal, the manual fallback and the deep-link shape.
 
 ## Not covered by automation
 

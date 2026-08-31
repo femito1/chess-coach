@@ -5,8 +5,10 @@
  * a Sicilian shares the first 6+ plies, every endgame run of pawn moves
  * passes through positions other games hit, and re-analysis of the same
  * archive is a common user action. Caching `(fen, depth) -> AnalysisResult`
- * gives a large speedup for free, since Stockfish is fully deterministic
- * for a given depth (per the CLAUDE.md contract).
+ * gives a large speedup for free, since Stockfish is deterministic for a given
+ * (position, depth, evaluator) at `Threads 1` — which is why every pool worker is
+ * single-threaded. A multi-threaded search is NOT reproducible, so caching its
+ * output keyed on depth alone would be a lie.
  *
  * Two layers:
  *   1) `inflight`: in-memory `Map<key, Promise>` so concurrent calls for

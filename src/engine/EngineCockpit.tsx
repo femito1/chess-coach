@@ -38,7 +38,6 @@ import { useQueueStore } from './queue';
  *       PV in SAN, eval in cp/mate, depth/seldepth/nodes/NPS, all
  *       throttled in `cockpit.ts` so React never re-renders > ~10 Hz.
  *
- *  See PROJECT_STATUS.md → "Engine cockpit" for the full design rationale.
  *  Tests: src/engine/cockpit.test.ts, src/engine/pv.test.ts,
  *  scripts/test/integration/engine-cockpit.mjs. */
 

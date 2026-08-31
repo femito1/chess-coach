@@ -18,7 +18,7 @@ import { isE2EBypass } from '@/lib/testAuth';
  *   `redirect_url` natively).
  * - Otherwise renders the nested route (`<Outlet />`).
  *
- * Per `PROJECT_STATUS.md` §10 Phase 2 the whole app requires sign-in, so
+ * The whole app requires sign-in, so
  * there's no "anonymous mode" branch here. If we ever decide to support
  * a guest mode, this is the only place that needs to learn about it.
  */

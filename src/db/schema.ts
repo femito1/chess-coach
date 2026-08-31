@@ -220,7 +220,7 @@ export interface Settings {
    *  when `reparseOpeningFromPgn` changes its output for existing PGNs. */
   lastOpeningRefreshVersion?: number;
   /** Clerk user id this local DB is bound to. Set on first successful
-   *  sign-in (Pass 3 of `PROJECT_STATUS.md` §10). When a *different*
+   *  sign-in. When a *different*
    *  Clerk user signs in on the same browser profile, the profile-sync
    *  layer refuses to silently merge their data and surfaces a warning
    *  — without this we'd happily attribute one user's imported games to
@@ -500,8 +500,10 @@ export interface RepertoireLineStats {
  *  Stockfish results keyed by `(fen, depth)` so repeated positions —
  *  shared opening prefixes across a month of games, replays of the same
  *  endgame, etc. — don't re-pay the engine cost. Reads are tolerant of
- *  *deeper* hits: a depth-20 cached result satisfies a depth-16 query,
- *  matching the determinism contract documented in CLAUDE.md.
+ *  *deeper* hits: a depth-20 cached result satisfies a depth-16 query, which is
+ *  sound because a deeper search strictly refines a shallower one at the same
+ *  (position, evaluator). See `src/engine/cache.ts` for the determinism this
+ *  rests on.
  *
  *  This table is intentionally a pure cache — nothing else in the app
  *  reads it for correctness, so we can wipe it at any time without
@@ -727,7 +729,7 @@ export class CoachDB extends Dexie {
       importRecords: 'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
     });
     // v7: no shape change — added optional `boundClerkUserId` to the
-    // `Settings` row for Phase 2 auth (PROJECT_STATUS.md §10). Dexie
+    // `Settings` row for auth. Dexie
     // doesn't index that field, so nothing in `.stores(...)` differs
     // from v6. The version bump exists purely so existing DBs surface
     // the new field as `undefined` (the type contract) rather than
@@ -797,7 +799,7 @@ export class CoachDB extends Dexie {
       importRecords: 'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
     });
     // v10: introduce `Repertoire.kind` + `Repertoire.family` for the
-    // family-first refactor (PROJECT_STATUS.md §4). Neither field is
+    // family-first refactor. Neither field is
     // indexed, so `.stores(...)` is unchanged from v9 — the version
     // bump exists so the type contract advances and so we can run a
     // one-shot migration that **wipes** every legacy repertoire and
@@ -812,7 +814,7 @@ export class CoachDB extends Dexie {
     // without inspecting every node tree, guessing which lines belong
     // together, and inventing names for the result. Anything we
     // generate would be wrong some of the time. Per the design
-    // decision in PASS4_PLAN.md, we ship a clean break: nuke the
+    // deliberate decision, we ship a clean break: nuke the
     // legacy rows and let the user rebuild via the openings library
     // (one click per family, fast).
     //
@@ -831,7 +833,7 @@ export class CoachDB extends Dexie {
     // the upgrade unchanged.
     //
     // Pattern note: the upgrade hook follows the safe pattern (see
-    // CLAUDE.md gotcha) — we use `tx.table(...).clear()` inside the
+    // Dexie gotcha) — we use `tx.table(...).clear()` inside the
     // upgrade transaction Dexie hands us, rather than reading rows
     // and writing them back. `.clear()` is a single IDB op that's
     // safe to call from inside an upgrade.
@@ -863,10 +865,10 @@ export class CoachDB extends Dexie {
     // is optional + non-indexed, so the schema strings are identical
     // to v10 and there's no upgrade hook needed — Dexie carries the
     // existing row forward and any read-side default lives in the
-    // strength-mapping helper. We bump anyway because the project
-    // convention (CLAUDE.md) is that all new persistent Settings
-    // fields go through a Dexie version bump so the schema history
-    // makes the addition discoverable without diffing the interface.
+    // strength-mapping helper. The bump is therefore cosmetic: it was
+    // added so the schema history makes the field discoverable. Newer
+    // optional fields (`Game.requeuedAt`) do NOT bump — see
+    // ARCHITECTURE.md § Data model for the rule that applies now.
     this.version(11).stores({
       games:
         'id, url, username, endTime, analysisStatus, timeClass, eco, result',

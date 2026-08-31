@@ -5,7 +5,7 @@
  * users see calibrated estimates ("~12 min") rather than the
  * conservative fallback ("~25 min").
  *
- * Behaviour contract (see `PASS4_PLAN.md § Pass 4.3`):
+ * Behaviour contract:
  *
  *  - Idempotent: a second call returns the cached value from
  *    `Settings.deviceAnalysisMsPerGame` without re-running the engine.
