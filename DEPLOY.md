@@ -62,6 +62,38 @@ no branch-protection rule to hold anything back (§4). Two things push to
 
 Anything that must not ship must not land on `main`.
 
+## The NNUE network and the 25 MiB asset cap
+
+**Cloudflare Pages refuses any single asset larger than 25 MiB.** Stockfish's
+NNUE network is 38.3 MiB (40,119,326 bytes), and `prebuild` stages it into
+`public/stockfish/` on every build, from where Vite copies it into `dist/`. The
+result is a **failing deployment**: the live site keeps serving the last build
+that predates the network, and `curl` on `/stockfish/nn-*.nnue` returns the
+SPA fallback HTML rather than the file.
+
+Nothing crashes when the network is absent — `nnueNetAvailable()` in
+`src/engine/nnue.ts` probes for it and falls back to Stockfish's classical
+evaluator with a console warning. The cost is silent and analytical: classical
+misjudges quiet and endgame positions, which is where a coaching app draws its
+conclusions.
+
+So, until this is resolved, hold two facts together: **`main` deploys are red,
+and production evaluations are classical.** Check
+`gh api repos/:owner/:repo/commits/<sha>/check-runs` for the `Cloudflare Pages`
+conclusion after any push, and read the real build log from the dashboard link
+in that check — only the dashboard shows why a Pages build failed.
+
+Three ways out, in rising order of work:
+
+| Option | Effect |
+|---|---|
+| Keep the net out of the deployed `public/` (stage it for `dev` only) | Deploys go green immediately; production stays on classical eval, deliberately and documented. |
+| Serve the net from R2 (or any host that allows a 40 MB object) | Production gets NNUE. The engine fetches the net from inside a Worker under `COEP: require-corp`, so that host must send CORS **and** `Cross-Origin-Resource-Policy: cross-origin`, and `EvalFile` currently passes a bare filename that Stockfish resolves next to the worker script — an off-origin net needs that path handling changed too. |
+| Move hosting off Pages | Removes the cap, but re-opens every `_headers` / `_redirects` assumption in §8. |
+
+Whichever is chosen, re-run the §3 net check afterwards, and delete this
+section's premise from the docs rather than leaving it to rot.
+
 ---
 
 ## 0. Quick checklist
@@ -71,10 +103,12 @@ step links to the section that goes deep:
 
 1. **Deploy the app** (§1–§3): create the CF Pages project, paste in
    the three Clerk + Supabase env vars, deploy. Then read the assigned
-   hostname off the project page rather than assuming it.
+   hostname off the project page rather than assuming it. Expect the
+   build to fail on the 38.3 MiB NNUE network until that is dealt with —
+   see "The NNUE network and the 25 MiB asset cap" above.
 2. **Verify the deploy** (§3): one console check
-   (`crossOriginIsolated === true`), one hard-refresh check, one
-   sign-in round-trip. Five minutes.
+   (`crossOriginIsolated === true`), one `curl` for the NNUE network,
+   one hard-refresh check, one sign-in round-trip. Five minutes.
 3. **Update Clerk allow-list**: add the production hostname (and any
    custom domain) to Clerk → Domains and to every OAuth provider's
    redirect URLs. Without this, sign-in loops.
@@ -134,6 +168,16 @@ operational notes (rolling back, cache busting, troubleshooting).
    | Build output directory      | `dist`         |
    | Root directory              | `/` (default)  |
 
+   **The build command must be `npm run build`, not `vite build`.** The
+   `prebuild` lifecycle hook (`scripts/copy-nnue.mjs`) is what stages
+   Stockfish's 40 MB NNUE network into `public/stockfish/`, and Vite
+   copies `public/` into `dist/` verbatim. A bare `vite build` skips npm
+   lifecycle scripts, so `dist/stockfish/nn-*.nnue` never exists, the
+   app's runtime probe finds no net, and every analysis silently drops
+   to Stockfish's weaker classical evaluator. Nothing about the page
+   looks broken — the evals are just wrong. `npm ci` supplies the net in
+   `node_modules`, so no extra download or build secret is involved.
+
 6. **Environment variables** — click **Add variable** for each. CF Pages
    distinguishes **Production** and **Preview** environments; set each
    variable for **both**. The values are the same as your local
@@ -153,7 +197,7 @@ operational notes (rolling back, cache busting, troubleshooting).
 
 7. Save and deploy. A build takes 2-4 minutes.
 
-## 3. Verify a deploy (cross-origin isolation + SPA fallback)
+## 3. Verify a deploy (isolation, engine assets, SPA fallback)
 
 CF assigns the project a `*.pages.dev` hostname —
 `chess-coach-bip.pages.dev` for this project — plus a preview URL per
@@ -181,13 +225,38 @@ or the engine files.
    - You should see `stockfish-nnue-16.js` and its `.wasm`, **not**
      `stockfish-nnue-16-single.js`.
 
-3. **SPA fallback works**:
+3. **The NNUE network shipped**:
+
+   ```bash
+   curl -sI https://chess-coach-bip.pages.dev/stockfish/nn-5af11540bbfe.nnue \
+     | grep -iE 'content-length|cache-control|embedder'
+   ```
+
+   Expect `content-length: 40119326`, `cache-control: public,
+   max-age=31536000, immutable`, and **exactly one**
+   `cross-origin-embedder-policy` line (two makes worker loads fail —
+   see §7).
+
+   **This check currently fails**, returning `content-type: text/html`
+   (the SPA fallback) because the file exceeds Pages' 25 MiB asset cap
+   and the deploy never uploaded it — see "The NNUE network and the
+   25 MiB asset cap" above. The app falls back to the classical
+   evaluator with a console warning rather than crashing, so this will
+   not surface on its own. A local build is the way to confirm the
+   staging step itself works:
+   `npm run build && ls -l dist/stockfish/nn-*.nnue`.
+
+   The filename is a content hash of the network, so it changes when
+   Stockfish is upgraded. Read the current one from `NNUE_NET_FILE` in
+   `src/engine/nnue.ts` rather than copying it from here.
+
+4. **SPA fallback works**:
 
    - Visit `https://chess-coach-bip.pages.dev/dashboard` directly (hard
      refresh, not via in-app navigation). It must render the dashboard,
      not a 404. If it 404s, `public/_redirects` didn't deploy.
 
-4. **Sign-in works end-to-end**:
+5. **Sign-in works end-to-end**:
 
    - Add the production URL to Clerk's **Allowed origins**:
      <https://dashboard.clerk.com> → your app → **Domains** → add
@@ -199,7 +268,7 @@ or the engine files.
    - Try Sign in with Google. You should land on `/dashboard` with the
      `<UserButton />` rendered in the header.
 
-5. **Onboarding wizard runs**:
+6. **Onboarding wizard runs**:
 
    - On first sign-in you should be redirected to `/onboarding`.
    - Confirm a Chess.com username. The "Is this you?" card with avatar
@@ -207,7 +276,7 @@ or the engine files.
      production origin.
    - Pick the 1m import preset. Confirm games land in the dashboard.
 
-If step 4 fails specifically because **Clerk's sign-in widget is
+If step 5 fails specifically because **Clerk's sign-in widget is
 broken under COEP** (you'll see `NotSameOriginAfterDefaultedToSameOriginByCoep`
 errors in the console), swap `Cross-Origin-Embedder-Policy: require-corp`
 to `Cross-Origin-Embedder-Policy: credentialless` in `public/_headers`.
@@ -322,8 +391,11 @@ merge, and a direct push still ships.
 **The IndexedDB-origin pin matters in production too.** IndexedDB is
 keyed by origin; if you move users from `chess-coach-bip.pages.dev` to
 `yourchess.app` later, every imported game and cached analysis looks
-"missing" on the new origin, and there is no in-app export/import to dig
-them out with.
+"missing" on the new origin. There is no in-app export/import to dig them
+out with. Cloud sync can restore games, analyses and puzzle progress onto
+the new origin, but only for an account enrolled in
+`cloud_sync_allowlist` — it is not a general migration path, and it does
+not carry repertoires, settings or the eval cache.
 
 So: **decide your production hostname before sharing the URL with anyone
 real.** If you'll use a custom domain eventually, do it now.
@@ -375,11 +447,25 @@ filename changes. Two ways to handle this:
 For a normal Vite deploy you don't need to do anything; Vite hashes
 asset filenames so old bundles age out automatically.
 
+The NNUE network needs no cache work either, for the same reason but
+by construction: its filename contains Stockfish's own hash of its
+contents, so a new network can only appear at a new URL. What a
+Stockfish upgrade *does* need is `NNUE_NET_FILE` in
+`src/engine/nnue.ts` updated to the new filename —
+`scripts/copy-nnue.mjs` fails the build if the two disagree, which is
+the intended way to find out.
+
 ### Cost ceiling
 
 Free tier covers this project's usage:
 
 - **Bandwidth**: unlimited on Pages.
+- **Files per site**: 20,000 on the free plan. The deploy is well under
+  it (~50 committed puzzle shards plus the Vite output), but the shard
+  count scales with the puzzle corpus, so a much larger corpus is the
+  one thing that could approach it.
+- **Single asset size**: 25 MiB, and this one is *not* comfortable — see
+  the NNUE section near the top of this file.
 - **Builds**: 500/month.
 - **Concurrent builds**: 1 (sequential queue).
 - **Custom domains**: unlimited.
@@ -400,6 +486,9 @@ architecture doesn't have to change.
 | Stockfish loads single-thread on prod          | COEP not active                                      | `crossOriginIsolated` must be `true`. See first row.                                                                                                               |
 | All games error with `Stockfish worker failed to start (worker error)`, `crossOriginIsolated === true`, JS/WASM fetch 200, but `new Worker('/stockfish/...')` fires `error` with empty `message` / `filename` / `lineno` | Duplicate `Cross-Origin-Embedder-Policy` header on `/stockfish/*`. Cloudflare Pages **appends** per-route `_headers` rules on top of the wildcard `/*` block — re-declaring `COEP: require-corp` on `/stockfish/*` produces a response with the header listed twice, which Chromium rejects when loading a worker script. Confirm with `curl -sI /stockfish/stockfish-nnue-16.js \| grep -i embedder` (should show **one** line, not two). | Remove `Cross-Origin-Embedder-Policy: require-corp` from the `/stockfish/*` block in `public/_headers`. The wildcard `/*` already covers it. Keep `Cross-Origin-Resource-Policy: same-origin` on `/stockfish/*` since the wildcard doesn't set CORP. |
 | Clerk widget shows blank / console COEP errors | `require-corp` blocking Clerk's cross-origin scripts  | Swap to `Cross-Origin-Embedder-Policy: credentialless` in `public/_headers`.                                                                                       |
+| Console warns `NNUE net not served at …`, and evals look off (quiet positions read as equal) | The 40 MB network is missing from the deploy, so the engine fell back to the classical evaluator | On production this is the 25 MiB asset cap (see the section above), not a build misconfiguration. Locally it means `prebuild` was skipped — run `npm run nnue:stage`. |
+| Cloudflare Pages check is red while GitHub Actions is green | The two pipelines are independent; a failed Pages **build** leaves the previous deploy live, so the site keeps working and only the check goes red | Read the dashboard log linked from the check. If it is the NNUE network, see the section above — a docs-only or code-only commit will not fix it. |
+| Every game errors as soon as analysis starts, with no useful message | Stockfish 16 `exit()`s at the first `go` when `Use NNUE` is on and the net did not load. The app probes for this, so reaching it means the probe passed and the load still failed — e.g. a truncated or wrong-sized `.nnue` | Compare `content-length` against the file in `node_modules/stockfish/src/`. Purge the CF cache for `/stockfish/*` if the sizes differ.                              |
 | CI fails on dev-server start                   | Port 5173 occupied by something or env var missing    | Check the uploaded `vite.log` artifact. If the error is `ENV missing`, one of the three repository secrets is unset — see "CI env vars" above.                     |
 | CI integration tests timeout                   | Stockfish init slow under Actions runner              | Already give the harness 60s for dev-server boot + each test has its own timeout. If consistently slow, bump `timeout-minutes` on the `unit` job.                  |
 | `pages.dev` works but custom domain 404s       | DNS not pointing to CF or cert still provisioning     | CF dashboard → Custom domains → check status. Wait up to 5 min after first setup.                                                                                  |
@@ -415,7 +504,13 @@ architecture doesn't have to change.
   workflows AND the `NODE_VERSION` env var in CF Pages.
 - **New build script**: update CF Pages **Build command** AND keep
   `npm run typecheck` / `npm test` working in CI; both pipelines must
-  agree on what "build green" means.
+  agree on what "build green" means. Whatever the command becomes, it
+  must still run `scripts/copy-nnue.mjs` (today via `prebuild`) or the
+  deploy ships without the NNUE network.
+- **Different Stockfish version**: update `NNUE_NET_FILE` in
+  `src/engine/nnue.ts`, the engine filenames in `src/engine/engine.ts`,
+  and the `/stockfish/*` note in `public/_headers`. Re-run §3's net
+  check on the deploy.
 
 ## 9. Chrome extension distribution
 

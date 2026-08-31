@@ -12,7 +12,6 @@ extension-test-*.png
 !.env.example
 PROJECT_STATUS.md
 CLAUDE.md
-TESTING.md
 PASS*_PLAN.md
 # Agent handoff / planning docs (same convention as PASS*_PLAN.md)
 HANDOFF-*.md

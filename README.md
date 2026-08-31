@@ -1,127 +1,174 @@
 # Chess Coach
 
-A personal chess improvement app. Imports your Chess.com games, runs Stockfish analysis in the background, and gives you a clean review UI with an eval graph and classified moves (blunder / mistake / inaccuracy).
+A personal chess improvement app. Imports your Chess.com games, analyses them
+with Stockfish 16 in the browser, and turns the result into a review UI, a
+dashboard, an openings repertoire you can drill, and a puzzle trainer.
 
-Everything runs in the browser. No backend, no server, no account. Your data stays in IndexedDB on your machine.
+Local-first: games, analyses and progress live in IndexedDB on the device.
+There is no application server. Sign-in (Clerk) is required to reach the app,
+and an opt-in Supabase mirror can back the data up — see
+[Cloud sync](#cloud-sync).
 
 ## What it does
 
-- **Import + analyse** — pull your Chess.com games, analyse them in the background with Stockfish, and read the result as an eval graph with mistakes and blunders called out.
-- **Coaching from your own games** — mistake patterns aggregated across games, puzzles generated from your blunders, and win-rate by opening family on the dashboard alongside rating and accuracy trends.
-- **Openings Library** — ~3,700 named lines from the Lichess `chess-openings` dataset (MIT). Browse by family/variation, preview any line, add a single line or a whole family to a repertoire.
-- **Repertoire drilling** — family-bound repertoires with SM-2 spaced repetition, and "play it out vs Stockfish" from the end of any line.
-- **Learn-then-drill with difficulty tiers** — the drill page lists every library line for the openings you play, marks the ones already in your repertoire, and tiers each **Easy / Medium / Hard**: family-relative, blending line depth, master-level frequency, and your own win/draw/loss record in that variation. Add lines in place, filter by tier, and **Learn** a line first — step through it with the next move hidden, guess it on the board (nothing is scored), then hand straight into drilling that same line.
-- **Chrome extension** (`extension/`) — detects the end of a Chess.com game and offers a one-click deep link into your review. Build with `npm run extension:build -- --coach-origin=<url>`.
+| Area | Route | Summary |
+|---|---|---|
+| Import | `/import` | Pull Chess.com games by month; queue them for analysis. |
+| Games | `/games` | The library, filtered/paged; accuracy and brilliancy badges. |
+| Review | `/review/:id` | Eval graph, per-move classification (blunder / mistake / inaccuracy / miss / good / best / brilliant / book), motifs, clock use, play-it-out vs Stockfish. |
+| Dashboard | `/dashboard` | Rating + accuracy trends, win rate by opening family, study cards. |
+| Puzzles | `/puzzles` | 191,250 vetted puzzles from the Lichess open DB (CC0). Tabs: Recommended / Easy / Medium / Hard / All. |
+| Openings | `/openings` | ~3,700 named lines (Lichess `chess-openings`, MIT). Browse by family, preview, add lines or a whole family to a repertoire. |
+| Repertoire | `/repertoire` | Family-bound repertoires; SM-2 spaced repetition (`/repertoire/:id/train`). |
+| Drill | `/repertoire/:id/drill` | Repertoire ∪ library lines in one picker, tiered Easy / Medium / Hard (family-relative), with a **Learn** active-recall step that hands straight into drilling that same line. |
+| Settings | `/settings` | Per-device engine + sound preferences, NNUE toggle, cloud-sync status. |
+
+Two things run outside the page:
+
+- **Chrome extension** (`extension/`) — detects the end of a Chess.com game and
+  offers a one-click deep link into your review. Build with
+  `npm run extension:build -- --coach-origin=<url>`; see DEPLOY.md §9.
+- **Off-laptop analysis worker** (`scripts/worker/`) — native Stockfish on a box
+  you provision, feeding results back through cloud sync. It is **code, not a
+  running service**. See `scripts/worker/README.md`.
 
 ## Stack
 
-- React + Vite + TypeScript
-- [chessground](https://github.com/lichess-org/chessground) + [chess.js](https://github.com/jhlywa/chess.js)
-- [Stockfish 16](https://github.com/nmrugg/stockfish.js) compiled to WASM, run in a Web Worker
-- [Dexie](https://dexie.org/) over IndexedDB for persistence
-- Tailwind CSS
+React 18 + Vite + TypeScript · [chessground](https://github.com/lichess-org/chessground)
++ [chess.js](https://github.com/jhlywa/chess.js) ·
+[Stockfish 16](https://github.com/nmrugg/stockfish.js) WASM in Web Workers
+(NNUE on by default — but see the caveat below) ·
+[Dexie](https://dexie.org/) over IndexedDB ·
+Clerk (auth) + Supabase (optional mirror) · Tailwind · i18next · Recharts.
 
 ## Running locally
 
 ```bash
-npm install
+npm install     # also needed for the Stockfish NNUE net (see below)
 npm run dev
 ```
 
-Then open the URL Vite prints (usually `http://localhost:5173`).
+**The three auth env vars are mandatory.** `src/lib/env.ts` throws at module
+load if any is missing, so the app will not boot without them. Copy
+`.env.example` to `.env.local` and fill it in (`SETUP_AUTH.md` walks through
+obtaining the values).
 
-On first launch:
-1. Go to **Import** and enter your Chess.com username.
-2. Pick the months you want to import.
-3. Games start analyzing automatically in a background Web Worker. Watch progress in the header.
-4. Open **Games** and click **Review** on any game.
-
-## Keyboard shortcuts
-
-- `←` / `→` — step through moves
-- `Home` / `End` — jump to start / end
-
-## Contributing
-
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — data model, boot-time version
-  stamps, engine pool, the openings data pipeline, the two opening-naming
-  systems, UI conventions. Read the relevant entry before touching the
-  analysis queue, a boot pass, the openings data, or anything that maps a
-  game to an opening: these are the rules the codebase breaks quietly
-  rather than loudly.
-- [`DEPLOY.md`](DEPLOY.md) — Cloudflare Pages + GitHub Actions setup.
-- [`SETUP_AUTH.md`](SETUP_AUTH.md) — Clerk + Supabase env vars.
-
-### Tests
+To boot without real credentials, pass structurally-valid fakes inline. The
+Clerk key must decode — `ClerkProvider` base64-decodes it and throws otherwise,
+which error-boundaries the whole router:
 
 ```bash
-npm run typecheck && npm test    # the gate before pushing
-
-npm run test:unit         # vitest — pure logic, no browser
-npm run test:integration  # browser + Stockfish + IndexedDB, synthetic data
-npm run test:e2e          # browser, drives the real UI
-npm run test:live         # hits the live Chess.com API — on demand only
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_bG9jYWwuY2xlcmsuYWNjb3VudHMuZGV2JA== \
+VITE_SUPABASE_URL=https://local.invalid \
+VITE_SUPABASE_ANON_KEY=sb_publishable_local_verify \
+VITE_E2E_AUTH_BYPASS=true npx vite --port 5173 --strictPort
 ```
 
-The browser tiers need `npm run dev` running in another terminal.
-`scripts/test/manifest.mjs` is the catalog of every browser test; add new
-ones there and use `runBrowserTest()` from `scripts/test/harness.mjs`.
-Unit tests must not import Dexie, Web Workers, chessground or Stockfish —
-see the conventions comment in `vitest.config.ts`.
+Two caveats. `npx vite` skips npm lifecycle scripts, so it does **not** stage
+the NNUE net — run `npm run nnue:stage` first or every eval silently falls back
+to the classical evaluator. And the auth bypass is dev-only
+(`import.meta.env.MODE !== 'development'` disables it), so a production build
+cannot be driven this way.
 
-Everything should pass in CI. One exception: `mobile-audit` fails on some
-local setups while passing in CI, so confirm against CI before chasing it.
+First run: **Import** → enter your Chess.com username → pick months. Analysis
+starts automatically in a background worker pool; watch the header indicator.
+
+Keyboard: `←`/`→` step through moves, `Home`/`End` jump to start/end.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Vite dev server (`predev` stages the NNUE net). |
+| `npm run build` | `tsc -b && vite build` (`prebuild` stages the NNUE net). |
+| `npm run typecheck` | `tsc -b --noEmit`. |
+| `npm run nnue:stage` | Copy Stockfish's 40 MB NNUE net into `public/stockfish/`. |
+| `npm test` | Unit + integration (the default gate). |
+| `npm run test:unit` / `:integration` / `:e2e` / `:live` / `:all` | Test tiers — see `TESTING.md`. |
+| `npm run test:watch` | Vitest watch mode. |
+| `npm run puzzles:build` | Rebuild the puzzle corpus shards. Needs a 304 MB download; see ARCHITECTURE.md § Puzzles. |
+| `npm run openings:build` | Regenerate `src/data/openings.generated.ts` from the committed TSVs. |
+| `npm run openings:snapshot` | Re-measure line popularity from the Lichess explorer (slow, rate-limited). |
+| `npm run worker:build` / `worker:verify` / `worker:run` | Off-laptop analysis worker. **Always `worker:verify` before a bulk run.** |
+| `npm run extension:build` | Build the Chrome extension zip. |
+| `npm run extension:screenshots` | Regenerate the extension's store screenshots. |
+| `npm run preview` | Serve a built `dist/`. |
+
+## NNUE, and why production is on classical eval
+
+The engine asks for Stockfish's NNUE network by default, and locally it gets
+it: `predev`/`prebuild` stage the 40 MB net out of `node_modules` into
+`public/stockfish/`. **On Cloudflare Pages it does not.** Pages rejects any
+single asset over 25 MiB and the net is 38.3 MiB, which **fails the build**. So
+the live site keeps serving the last deploy that succeeded, `/stockfish/nn-*.nnue`
+there answers with the SPA fallback HTML, and every browser analysis in
+production runs Stockfish's weaker classical evaluator (with a console warning;
+nothing crashes).
+
+Consequences for anyone picking this up:
+
+- Deploys stay red until the net is either kept out of the deployed `public/`
+  or served from somewhere that allows a 40 MB object. DEPLOY.md
+  § "The NNUE network and the 25 MiB asset cap" has the details and the
+  trade-offs.
+- Analyses produced in the browser in production are labelled
+  `stockfish-16-classical`, and are legitimately worse in quiet and endgame
+  positions. The off-laptop worker is unaffected — its Stockfish binary embeds
+  the network.
+
+## Cloud sync
+
+Optional, and gated **per account by a row in the Supabase
+`cloud_sync_allowlist` table, enforced in RLS**. There is no in-app enrolment;
+enrol from the Supabase dashboard (`SETUP_AUTH.md` §5). Unenrolled accounts
+run fully local and the Settings card stays hidden.
+
+It mirrors games, analyses and puzzle attempts as an accumulating archive.
+Read ARCHITECTURE.md § Cloud sync before changing anything in
+`src/features/sync/` — three ordering rules there are load-bearing.
+
+## Docs
+
+| File | Contents |
+|---|---|
+| `ARCHITECTURE.md` | The invariants map: data model, boot passes, engine + NNUE, puzzles, openings, cloud sync, UI conventions. **Read the relevant entry before touching its area** — these are the rules the codebase breaks quietly rather than loudly. |
+| `TESTING.md` | Test tiers, how to add a browser test, known-failing tests, and the traps that produce false passes. |
+| `DEPLOY.md` | Cloudflare Pages + GitHub Actions, deploy verification, rollback, troubleshooting, extension distribution. |
+| `SETUP_AUTH.md` | Clerk + Supabase setup, env vars, cloud-sync enrolment (§5). |
+| `scripts/worker/README.md` | The off-laptop analysis worker: provisioning, env, run order, costs. |
+| `scripts/README.md` | Script inventory and the browser-test entry points. |
+
+Some code comments reference `PROJECT_STATUS.md`, `PASS4_PLAN.md` and
+`TESTING.md § …`. The first two are gitignored planning docs that are not in
+the repo — treat those pointers as dead and read the code.
 
 ## Self-hosting
 
-`npm run build` produces a static `dist/` folder. Serve it with any static file server (nginx, Caddy, `python -m http.server`, GitHub Pages, etc.).
-
-For full-strength Stockfish (multi-threaded WASM), the serving origin must be cross-origin isolated:
+`npm run build` produces a static `dist/`. Serve it with any static file
+server, but two response-header groups are load-bearing and shipped as
+`public/_headers` (Cloudflare Pages format; Netlify reads the same file,
+Vercel needs a `vercel.json`):
 
 ```
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-The Vite dev server sets these automatically. On GitHub Pages (which can't set custom headers) the app falls back to a single-threaded Stockfish build that still works, just slower.
+Without cross-origin isolation there is no `SharedArrayBuffer`, and the engine
+falls back to the single-threaded Stockfish build (~3-4× slower). The second
+group is `Cache-Control: immutable` on `/stockfish/*` and `/puzzles/*`, which
+is what makes a 40 MB NNUE net and an 18 MB puzzle corpus a one-time cost per
+device. `public/_redirects` provides the SPA fallback. Read the comments in
+both files before editing them.
 
-## Roadmap
+## Regenerating committed data
 
-- **Opening prep-gap detection** — detailed below; the next thing to build.
-- **Endgame trainer** built on the Lichess Syzygy tablebase.
-- **Pre-game prep** — scout an opponent's openings before you play them.
-- **Position annotations** — your own notes, recalled across games.
+Two datasets are generated and committed. Both have a unit test that fails if
+the committed artifact drifts from its inputs, so a red test here means "run
+the build", not "fix the test".
 
-### Next up: opening prep-gap detection
-
-Surface the openings you *lose* to but haven't prepped — e.g. "you've lost
-8 of 11 in the Advance Variation and it isn't in your repertoire" — turning
-your own game history into a prioritized study list. `repertoire/gaps.ts`
-already walks games against a repertoire tree to find out-of-book points;
-the missing half is ranking those gaps by how much they cost you and
-offering the fix as lines to learn.
-
-### Refreshing the openings database
-
-The library is generated from the Lichess chess-openings TSVs committed
-under `data/openings/`, plus a line-popularity snapshot from the Lichess
-opening explorer. A scheduled job
-(`.github/workflows/openings-refresh.yml`) re-snapshots monthly and pushes
-the regenerated data to `main` only after typecheck + unit tests pass, so
-you normally don't touch this. To refresh by hand:
-
-```bash
-# 1. (optional) re-measure line popularity at full depth. Slow and
-#    rate-limited; resumes from .cache if interrupted. Set LICHESS_TOKEN
-#    to hit Lichess directly and skip the proxy's limits.
-node scripts/snapshot-opening-popularity.mjs
-
-# 2. (optional) pull upstream chess-openings updates: download the latest
-#    a.tsv..e.tsv into data/openings/, then rebuild.
-node scripts/build-openings.mjs
-```
-
-`build-openings.mjs` regenerates `src/data/openings.generated.ts` from the
-committed TSVs; commit the result. A unit test
-(`openings.generated.test.ts`) fails if the committed bundle ever drifts
-out of sync with its inputs — if it's red, run `npm run openings:build`.
+- **Openings** — `npm run openings:build` rebuilds `src/data/openings.generated.ts`
+  from `data/openings/*.tsv`. `.github/workflows/openings-refresh.yml` does this
+  monthly and pushes to `main`. ARCHITECTURE.md § Openings data refresh.
+- **Puzzles** — `npm run puzzles:build` rebuilds `public/puzzles/<buildId>/`
+  and `src/data/puzzles.meta.generated.ts`. ARCHITECTURE.md § Puzzles.

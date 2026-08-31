@@ -365,6 +365,8 @@ export interface CloudAnalysisRow {
   game_id: string;
   depth: number;
   analyzed_at: number;
+  /** Which evaluator produced it. Load-bearing: see `toCloudAnalysis`. */
+  engine: string;
   move_count: number;
   data: Analysis;
 }
@@ -390,12 +392,24 @@ export function toCloudGame(userId: string, g: Game): CloudGameRow {
   };
 }
 
+/**
+ * `engine` must be written, not left to default NULL.
+ *
+ * The remote manifest reads `engine` (see `cloudSync`'s analyses select) and
+ * `isBetter` ranks the evaluator above depth, so a NULL column reads as
+ * classical no matter what the payload says. Omit it and an NNUE analysis
+ * pushed from the browser comes back looking weaker than itself: the diff
+ * stops being a fixed point and every sync re-pushes every analysis, while
+ * the cloud NNUE progress readout undercounts. The value inside `data` is
+ * not enough — nothing reads the blob to decide.
+ */
 export function toCloudAnalysis(userId: string, a: Analysis): CloudAnalysisRow {
   return {
     user_id: userId,
     game_id: a.gameId,
     depth: a.depth,
     analyzed_at: a.analyzedAt,
+    engine: a.engine,
     move_count: a.moves.length,
     data: a,
   };

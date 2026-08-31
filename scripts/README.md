@@ -51,7 +51,21 @@ Override the URL with `URL=http://localhost:5174/` if your dev server is elsewhe
 
 ## Other scripts
 
-```bash
-node scripts/build-openings.mjs   # regenerate src/data/openings.generated.ts from data/openings/*.tsv
-node scripts/check-errors.mjs     # ad-hoc DB diagnostic
-```
+Every one of these has an `npm run` alias; prefer the alias so lifecycle hooks
+and paths stay right.
+
+| script | alias | what it does |
+|---|---|---|
+| `copy-nnue.mjs` | `nnue:stage` | Stages Stockfish's 40 MB NNUE network into `public/stockfish/`. Runs automatically as `predev` / `prebuild`; **not** for a bare `npx vite`, which skips lifecycle scripts. Fails the build if `node_modules` ships a different net than `NNUE_NET_FILE` in `src/engine/nnue.ts`. |
+| `build-openings.mjs` | `openings:build` | Regenerates `src/data/openings.generated.ts` from `data/openings/*.tsv`. Commit the result; a unit test fails if the two drift. |
+| `snapshot-opening-popularity.mjs` | `openings:snapshot` | Re-measures line popularity from the Lichess explorer. Slow and rate-limited; resumable, and exits `3` while work remains. |
+| `build-puzzles.mjs` | `puzzles:build` | Rebuilds the puzzle corpus into `public/puzzles/<buildId>/` + `src/data/puzzles.meta.generated.ts`. Needs `.cache/lichess_db_puzzle.csv.zst` and `zstd`. Deletes stale build dirs. |
+| `build-extension.mjs`, `build-extension-icons.mjs` | `extension:build` | Builds the Chrome extension zip into `dist-extension/`. |
+| `screenshot-extension.mjs` | `extension:screenshots` | Regenerates the extension's store screenshots. |
+| `worker/build.mjs` | `worker:build` | esbuilds `scripts/worker/{main,verify}.ts` into `dist-worker/`. |
+| `worker/verify.ts` | `worker:verify` | Proves a native Stockfish binary matches the browser's evals and that NNUE is really loaded. **Run before any bulk worker run.** |
+| `worker/main.ts` | `worker:run` | The off-laptop analysis worker. See `scripts/worker/README.md`. |
+| `check-errors.mjs` | — | Ad-hoc DB diagnostic. |
+
+Data-pipeline rationale and traps live in `ARCHITECTURE.md`; the worker has its
+own `README.md` in `scripts/worker/`.

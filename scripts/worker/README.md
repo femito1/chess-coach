@@ -18,6 +18,11 @@ It reuses `analyzeGamePgn` from `src/` verbatim, so classifications, motifs,
 phases, accuracies and book detection are computed by exactly the same code the
 browser runs. Only the engine transport differs.
 
+Per game it writes two rows, not one: the analysis into `cloud_analyses`, and a
+summary back onto `cloud_games` (`analysis_status: 'done'`, `accuracy`,
+`brilliantCount`). The second is what lets a laptop that never analyzed the game
+see it as analyzed after a sync.
+
 ---
 
 ## Why this exists, and the thing it fixes
@@ -113,14 +118,18 @@ npm run worker:run
 npm run worker:verify
 ```
 
-This is not a formality. It checks two things with numbers:
+This is not a formality. It checks three things:
 
 1. **With `Use NNUE false`, does this binary reproduce the browser?** If yes, a
    classical-configured worker can extend the existing library seamlessly. On
    the reference machine both positions matched to the centipawn (delta 0).
 2. **With `Use NNUE true`, do the numbers actually change?** This catches a
-   binary silently failing to load its network and falling back to classical —
-   which is precisely the failure the browser has been shipping undetected.
+   binary silently failing to load its network and falling back to classical.
+3. **Does `analyzeGamePgn` run end to end under Node?** It analyzes a short
+   mating game at depth 12 through the real `WorkerPool` backend and checks the
+   move count, the recorded `engine` id, finite accuracies, and that the final
+   move classifies as mate. This is the check that catches a break in the
+   browser/Node seam rather than in the engine.
 
 If it fails, do not run a bulk analysis: the output would not be comparable with
 the rest of your library.
@@ -153,7 +162,7 @@ An existing analysis is good enough only if its evaluator is at least as strong
 **and** its depth at least as deep. So switching from classical to NNUE makes
 every previously-analyzed game a candidate — that is the intent, not a bug: it is
 how the library becomes uniformly NNUE. `DRY_RUN=1` shows the breakdown
-(`missing`, `weaker-evaluator`, `shallower`).
+(`missing`, `weaker-evaluator`, `shallower`, and `forced` under `FORCE=1`).
 
 The worker never downgrades: running with `EVALUATOR=classical` leaves existing
 NNUE analyses alone.
@@ -166,7 +175,11 @@ to. `SIGINT`/`SIGTERM` finish the in-flight game first. There is no lease or
 checkpoint state to corrupt.
 
 A single failing game (unparseable PGN, say) is logged and skipped rather than
-ending the run; the next invocation retries it.
+ending the run; the next invocation retries it. A run that is failing more than
+it is succeeding does stop, though: past 50 failures, once failures outnumber
+completions, it breaks out rather than burning the rest of the compute — so a
+short run that ends early is telling you something is wrong with the setup, not
+with one game.
 
 ## Cost and duration
 

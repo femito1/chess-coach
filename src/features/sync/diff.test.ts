@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { AnalysisStatus, PuzzleAttempt } from '@/db/schema';
+import type { Analysis, AnalysisStatus, PuzzleAttempt } from '@/db/schema';
 import {
   attemptDiffers,
   chunk,
   diffAnalyses,
   diffAttempts,
   diffGames,
-
   mergeAttempt,
+  toCloudAnalysis,
   type LocalAnalysisMeta,
   type LocalGameMeta,
   type RemoteAnalysisMeta,
@@ -474,5 +474,38 @@ describe('chunk', () => {
   it('covers every item exactly once', () => {
     const items = Array.from({ length: 97 }, (_, i) => i);
     expect(chunk(items, 20).flat()).toEqual(items);
+  });
+});
+
+/* =======================================================================
+ *  toCloudAnalysis — the pushed row must carry every field the manifest reads
+ * =======================================================================
+ */
+
+describe('toCloudAnalysis', () => {
+  const analysis: Analysis = {
+    gameId: 'g1',
+    depth: 18,
+    analyzedAt: 900,
+    engine: 'stockfish-16-nnue',
+    moves: [],
+  };
+
+  it('writes the evaluator into its own column', () => {
+    expect(toCloudAnalysis('u1', analysis).engine).toBe('stockfish-16-nnue');
+  });
+
+  it('round-trips through diffAnalyses as a fixed point', () => {
+    // The manifest reads the `engine` COLUMN, never the payload, and the
+    // evaluator ranks above depth. Drop the column and this very row reads
+    // back as classical: the diff would re-push every analysis on every sync.
+    const row = toCloudAnalysis('u1', analysis);
+    const plan = diffAnalyses({
+      local: [{ gameId: 'g1', depth: 18, analyzedAt: 900, engine: 'stockfish-16-nnue' }],
+      remote: [{ game_id: row.game_id, depth: row.depth, analyzed_at: row.analyzed_at, engine: row.engine }],
+      localGameStatus: new Map([['g1', 'done' as AnalysisStatus]]),
+      localGameIds: new Set(['g1']),
+    });
+    expect(plan).toEqual({ push: [], pull: [] });
   });
 });

@@ -131,7 +131,7 @@ export async function listGamesLight(): Promise<GameLight[]> {
 
 /** Same projection but returns rows in arbitrary order — matches
  *  `db.games.toArray()`. Used by pages that don't care about ordering
- *  (Weaknesses, Settings) so the projection stays a one-liner there. */
+ *  (Puzzles, Settings) so the projection stays a one-liner there. */
 export async function listAllGamesLight(): Promise<GameLight[]> {
   const rows = await db.games.toArray();
   return rows.map(stripPgn);
