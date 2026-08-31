@@ -1,8 +1,8 @@
 import {
   CLASSICAL_EVALUATOR_ID,
   NNUE_EVALUATOR_ID,
-  NNUE_NET_FILE,
   nnueActive,
+  nnueEvalFileValue,
 } from './nnue';
 
 export interface InfoLine {
@@ -226,9 +226,16 @@ export class EngineWorker {
    * NNUE network; it comes from `nnueActive()` so the preference and the net's
    * actual availability are both accounted for.
    *
-   * Loading NNUE is two options, in this order: `EvalFile` names the net (bare
-   * filename — Stockfish resolves it next to the worker script), then
+   * Loading NNUE is two options, in this order: `EvalFile` names the net, then
    * `Use NNUE true` switches the evaluator over.
+   *
+   * What `EvalFile` gets is `nnueEvalFileValue()`, not a constant: a bare
+   * filename when the net is served from our own origin (Stockfish resolves it
+   * next to the worker script), or a full absolute URL when it is served from an
+   * object store. Stockfish loads it via `emscripten_fetch`, which hands the
+   * value straight to XHR, so a cross-origin URL needs no special handling here
+   * beyond CORS on the host — measured, both spellings produce the same
+   * evaluation.
    *
    * Stockfish's acknowledgement — `info string NNUE evaluation enabled.` versus
    * `info string classical evaluation enabled.` — does NOT arrive here, measured:
@@ -265,7 +272,7 @@ export class EngineWorker {
       this.send('setoption name Threads value 1');
       this.send('setoption name Hash value 64');
       if (wantNnue) {
-        this.send(`setoption name EvalFile value ${NNUE_NET_FILE}`);
+        this.send(`setoption name EvalFile value ${nnueEvalFileValue()}`);
         this.send('setoption name Use NNUE value true');
         // Set explicitly, not inferred. See the note on `nnueEnabled`.
         this.nnueEnabled = true;

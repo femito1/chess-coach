@@ -9,6 +9,7 @@
     "prebuild": "node scripts/copy-nnue.mjs",
     "build": "tsc -b && vite build",
     "nnue:stage": "node scripts/copy-nnue.mjs",
+    "nnue:upload": "node scripts/upload-nnue.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "test": "node scripts/run-tests.mjs",

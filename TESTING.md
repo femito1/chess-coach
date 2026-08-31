@@ -74,6 +74,7 @@ worth knowing before you touch their area:
 | `src/data/openings.generated.test.ts` | The openings coherence guard: rebuilds the bundle from the committed TSVs and fails if the committed file differs. **Fix: `npm run openings:build`**, never a hand edit. |
 | `src/data/puzzles.corpus.test.ts` | The shipped puzzle shards against the manifest, and replays solution lines so an off-by-one-ply corpus cannot ship. `PUZZLE_CORPUS_FULL=1` walks all 191,250 instead of a 1-in-20 sample (~78 s vs ~4 s). |
 | `src/features/puzzles/motifThemes.test.ts` | Every mapped Lichess theme still exists in the corpus vocabulary — the guard for a corpus refresh. |
+| `src/engine/nnue.test.ts` | `resolveNetLocation()`: where the 38.3 MiB net is fetched from, and that a malformed `VITE_NNUE_NET_URL` falls back rather than throwing. Both failure modes are silent (every eval quietly goes classical), so the URL shapes are pinned here rather than in the browser tier. |
 | `src/features/sync/diff.test.ts` | The sync conflict rules, including that the attempt merge is commutative and idempotent and that a pushed row round-trips as a fixed point. |
 | `src/features/openings/difficulty.test.ts` | Tier scoring as properties (exposure lowers a tier, rarity raises one, tiers are family-relative) — never constant assertions on the weights. |
 | `src/features/repertoire/pickerModel.test.ts` | The repertoire ∪ library merge, including the "leaf extends a library variation" match. |
@@ -86,6 +87,14 @@ cache, migration, backfill and cloud-sync behaviour is pinned. `recompute-skip`
 pins the boot-pass version gates (including that an empty DB must not stamp);
 `cloud-sync` pins the three ordering rules in ARCHITECTURE.md § Cloud sync;
 `puzzle-library` is the worked example of seeding synthetic analyses safely.
+
+`nnue-remote-net` pins the production NNUE deployment: it starts its own HTTP
+server on an ephemeral port to play the part of the object store, with CORS and
+CORP separately switchable, and asserts that the app loads the net cross-origin
+with CORS alone and degrades to a correctly-labelled classical fallback without
+it. **Read the worked example under § Traps that produce false passes before
+touching it** — it is the clearest case in the suite of an assertion set that
+looks thorough and proves nothing.
 
 **e2e** (`scripts/test/e2e/`)
 Drives the actual UI: clicks, boards, navigation.
@@ -173,6 +182,29 @@ here proves nothing unless you've ruled them out.
   generic element. **Prove a new assertion by breaking the code on purpose and
   watching it fail** (revert the fix, run the test, restore); an assertion never
   observed failing is not yet a guard.
+
+  *Worked example — `nnue-remote-net`.* Its job is "the browser can load the NNUE
+  net from another origin". The obvious assertions are the ones `engine-nnue`
+  uses: after pointing the app at a foreign origin, does `evaluatorId()` read
+  `stockfish-16-nnue`, does Stockfish print `NNUE evaluation enabled`, does the
+  rook endgame come out at +377 rather than +53? All three pass **whether or not
+  the cross-origin URL was used at all**, because dev also stages the net at
+  `public/stockfish/`, so a bare-filename `EvalFile` finds a net next to the
+  worker script on the app's own origin. Confirmed by reverting the `engine.ts`
+  change the test exists to protect and watching it stay green.
+
+  The fix was to stop asking the app and ask the server: the fake object store
+  logs every request, and the test asserts it saw the engine's 38 MiB `GET`, not
+  just the probe's `HEAD`. Reverted, the log reads `["HEAD … → 200"]` and the
+  assertion fires naming the cause.
+
+  Generalised: **when a test asserts a resource came from a new place, some
+  assertion must be impossible to satisfy from the old place.** Evaluator ids,
+  console strings and even eval numbers were all reachable from the fallback
+  path; only the foreign server's access log was not. Same reason `engine-nnue`
+  compares classical against NNUE numbers (no net loaded ⇒ two identical
+  numbers), and `diff.test.ts` asserts a pushed row round-trips as a *fixed
+  point* rather than that the push merely happened.
 
 - **`classifyMove` re-derives, it does not trust stored values.** The recompute
   pass recomputes every classification, so a fixture asserting on a stored

@@ -72,11 +72,14 @@ await runBrowserTest({
     // Named separately so a missing net fails with "you didn't stage the net"
     // rather than as a baffling classical-vs-NNUE equality further down.
     const served = await page.evaluate(async () => {
-      const { nnueNetUrl, NNUE_NET_FILE } = await import('/src/engine/nnue.ts');
+      const { nnueNetUrl, nnueEvalFileValue, nnueNetIsRemote, NNUE_NET_FILE } =
+        await import('/src/engine/nnue.ts');
       const res = await fetch(nnueNetUrl(), { method: 'HEAD' });
       return {
         url: nnueNetUrl(),
         file: NNUE_NET_FILE,
+        evalFile: nnueEvalFileValue(),
+        remote: nnueNetIsRemote(),
         status: res.status,
         bytes: Number(res.headers.get('content-length') ?? '0'),
       };
@@ -87,6 +90,18 @@ await runBrowserTest({
       served.bytes,
       `${served.url} must be the real net, not an SPA fallback — run \`npm run nnue:stage\``,
     ).toBeAtLeast(1_000_000);
+
+    // This whole file tests the SAME-ORIGIN path, so pin that the option value is
+    // still the bare filename here. `EvalFile` gained the ability to carry a full
+    // cross-origin URL for production (see `nnue-remote-net`), and the bare form
+    // is not a leftover: Stockfish resolves it next to its own worker script,
+    // which is the only spelling that survives a non-root Vite `base`
+    // (GitHub Pages). A regression that made this absolute would keep every test
+    // here green and break that deployment only.
+    expect(served.remote, 'dev serves the net from its own origin').toBe(false);
+    expect(served.evalFile, 'same-origin EvalFile is the bare filename').toBe(
+      served.file,
+    );
 
     /* ------------------------------------------------------------------ */
     /*  1 + 2. Ground truth: raw worker, both evaluators, same position    */

@@ -26,20 +26,33 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
 
-# Stockfish engine bundle: the `.js` glue, the `.wasm` payloads, AND the 40 MB
-# NNUE network (`nn-<hash>.nnue`, staged here at build time by
-# scripts/copy-nnue.mjs -- see .gitignore). Files are pinned per-build so safe to
-# mark immutable. If you swap Stockfish versions, change the filename or purge
-# the CF cache for /stockfish/* explicitly.
+# Stockfish engine bundle: the `.js` glue and the `.wasm` payloads. Files are
+# pinned per-build so safe to mark immutable. If you swap Stockfish versions,
+# change the filename or purge the CF cache for /stockfish/* explicitly.
 #
-# THE NET RELIES ON THIS BLOCK. `Cache-Control: immutable` is what turns a 40 MB
-# download into a genuinely one-time cost per device, and it is truthful here
+# THE 40 MB NNUE NETWORK IS NOT COVERED BY THIS BLOCK ON THIS HOST, because it is
+# not served from this origin. Cloudflare Pages refuses any single asset over
+# 25 MiB and the net is 38.3 MiB, so `VITE_NNUE_NET_URL` points the app at an
+# object store and `scripts/copy-nnue.mjs` skips staging it into `public/`. The
+# net's caching and CORS therefore live on THAT host's configuration, not here --
+# see DEPLOY.md § The NNUE network. This block still applies to the net when the
+# app is self-hosted somewhere without the cap and the net is staged locally,
+# which is also what `npm run dev` does.
+#
+# Wherever the net is served from, `Cache-Control: immutable` is what turns a
+# 40 MB download into a genuinely one-time cost per device, and it is truthful
 # rather than merely convenient: the net's filename contains Stockfish's own hash
-# of its contents, so a different network can only ever appear at a different
-# URL. Without this, every cold navigation would re-fetch 40 MB and NNUE would be
-# an unaffordable default instead of the right one. CORP matters for the same
-# reason it does for the `.wasm`: the engine fetches the net from inside a Worker
-# under the `COEP: require-corp` set by the `/*` block above.
+# of its contents, so a different network can only ever appear at a different URL.
+# Without it, every cold navigation would re-fetch 40 MB and NNUE would be an
+# unaffordable default instead of the right one.
+#
+# CORP here matters for the `.wasm` and `.js`, which the page loads same-origin
+# under the `COEP: require-corp` set by the `/*` block above. It is NOT what makes
+# a cross-origin net work: measured, the net needs only
+# `Access-Control-Allow-Origin` on its host, because both the app's probe and
+# Stockfish's own download are CORS-mode requests and a CORS response satisfies
+# COEP by itself. A host sending CORP but no CORS fails; CORS but no CORP works.
+# Pinned by `scripts/test/integration/nnue-remote-net.mjs`.
 #
 # IMPORTANT: do NOT redeclare `Cross-Origin-Embedder-Policy` here. The
 # `/*` block above already sets it, and Cloudflare Pages *appends* (does

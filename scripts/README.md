@@ -56,7 +56,9 @@ and paths stay right.
 
 | script | alias | what it does |
 |---|---|---|
-| `copy-nnue.mjs` | `nnue:stage` | Stages Stockfish's 40 MB NNUE network into `public/stockfish/`. Runs automatically as `predev` / `prebuild`; **not** for a bare `npx vite`, which skips lifecycle scripts. Fails the build if `node_modules` ships a different net than `NNUE_NET_FILE` in `src/engine/nnue.ts`. |
+| `copy-nnue.mjs` | `nnue:stage` | Stages Stockfish's 38.3 MiB NNUE network into `public/stockfish/`, **unless `VITE_NNUE_NET_URL` is set** — then it skips staging (and removes a stale copy), because production serves the net from an object store. Runs automatically as `predev` / `prebuild`; **not** for a bare `npx vite`, which skips lifecycle scripts. Fails the build if `node_modules` ships a different net than `NNUE_NET_FILE` in `src/engine/nnue.ts`, or if `VITE_NNUE_NET_URL` is unusable. |
+| `upload-nnue.mjs` | `nnue:upload` | Uploads the net to R2 via `wrangler`, then verifies over HTTP that a browser could load it (status, size, content-type, `Access-Control-Allow-Origin`). `-- --verify-only` skips the upload. Exits non-zero on anything that would send the app back to the classical evaluator. See DEPLOY.md § The NNUE network. |
+| `nnue-net-config.mjs` | — | Not a script: the shared build-side answer to "which net, served from where". Imported by `copy-nnue.mjs`, `upload-nnue.mjs` and the `nnueNetBuildGuard` plugin in `vite.config.ts` so all three agree — including when `VITE_NNUE_NET_URL` lives only in `.env.local`, which npm does not put in `process.env`. |
 | `build-openings.mjs` | `openings:build` | Regenerates `src/data/openings.generated.ts` from `data/openings/*.tsv`. Commit the result; a unit test fails if the two drift. |
 | `snapshot-opening-popularity.mjs` | `openings:snapshot` | Re-measures line popularity from the Lichess explorer. Slow and rate-limited; resumable, and exits `3` while work remains. |
 | `build-puzzles.mjs` | `puzzles:build` | Rebuilds the puzzle corpus into `public/puzzles/<buildId>/` + `src/data/puzzles.meta.generated.ts`. Needs `.cache/lichess_db_puzzle.csv.zst` and `zstd`. Deletes stale build dirs. |

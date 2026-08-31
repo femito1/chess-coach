@@ -165,8 +165,11 @@ endgame positions — which is where a coaching app draws its conclusions.
 
 | piece | where |
 |---|---|
-| Net filename, toggle, `nnueActive()`, `nnueNetAvailable()` | `src/engine/nnue.ts` |
+| Net filename, toggle, `nnueActive()`, `nnueNetAvailable()`, `resolveNetLocation()` | `src/engine/nnue.ts` |
 | Staging the net into `public/stockfish/` | `scripts/copy-nnue.mjs` (`prebuild`, `predev`, `npm run nnue:stage`) |
+| Uploading the net to R2 + verifying the browser can load it | `scripts/upload-nnue.mjs` (`npm run nnue:upload`) |
+| Last-resort check that no over-cap net reaches `dist/` | `nnueNetBuildGuard` in `vite.config.ts` |
+| Build-side "which net, served from where" — shared by all three above | `scripts/nnue-net-config.mjs` |
 | Evaluator ids | `NNUE_EVALUATOR_ID = 'stockfish-16-nnue'`, `CLASSICAL_EVALUATOR_ID = 'stockfish-16-classical'` |
 
 **The 40 MB net is gitignored and staged at build time.** It ships inside the
@@ -178,18 +181,48 @@ leave the app asking for a file nobody copies and every eval would quietly go
 classical. Starting Vite directly (`npx vite`) skips npm lifecycle scripts and
 therefore skips staging.
 
-**The net does not currently reach production.** Cloudflare Pages caps a
-single asset at 25 MiB; the net is 38.3 MiB (40,119,326 bytes), so the deploy
-that first staged it **failed to build** and `/stockfish/nn-*.nnue` on the live
-site answers with the SPA fallback rather than the network. The probe below
-catches that and the app runs classical there. So today NNUE is real in dev and
-in the off-laptop worker (which embeds the net in its own binary), and *not* in
-production — do not write code, or draw a conclusion about production eval
-quality, that assumes otherwise. Serving it needs a host that allows a 40 MB
-object; because the engine fetches it from inside a Worker under
-`COEP: require-corp`, an off-origin copy would also need CORS plus
-`Cross-Origin-Resource-Policy: cross-origin`. See DEPLOY.md § The NNUE network
-and the 25 MiB asset cap.
+**The net is served from two different places, decided at build time by
+`VITE_NNUE_NET_URL`.** Cloudflare Pages caps a single asset at 25 MiB and the net
+is 38.3 MiB (40,119,326 bytes), so production cannot serve it from the app's own
+origin at all:
+
+| `VITE_NNUE_NET_URL` | where the net comes from | `EvalFile` value |
+|---|---|---|
+| unset (dev default) | `public/stockfish/`, staged by `copy-nnue.mjs` | bare filename |
+| set (production) | that URL + the net filename | absolute URL |
+
+The rules live in exactly two places, and the split is deliberate:
+
+- **runtime** — `resolveNetLocation()` in `src/engine/nnue.ts`, pure and
+  unit-tested, bundled for the browser. **Forgiving**: a malformed URL logs and
+  falls back to same-origin rather than throwing, because an env-var typo must not
+  white-screen the app.
+- **build** — `scripts/nnue-net-config.mjs`, plain JS, imported by
+  `copy-nnue.mjs`, `upload-nnue.mjs` and the Vite build guard. **Fatal**: a
+  malformed URL fails the build, which is what makes the runtime's forgiveness
+  safe, since a typo can't reach production without passing through here.
+
+Runtime forgiving, build time strict. They are not shared because the build side
+runs in Node before Vite exists and cannot import a TS module that reaches
+`@/lib/usePersistedState` — but everything build-side goes through the one module,
+so `dist/` and the bundle's baked-in URL cannot disagree. That mattered
+concretely: reading `process.env` alone missed `VITE_NNUE_NET_URL` set in
+`.env.local` (npm doesn't load dotenv), which produced a bundle pointing at R2
+while `dist/` still carried the 38.3 MiB net.
+
+**A cross-origin net needs CORS and nothing else.** The instinct is that
+`COEP: require-corp` also demands
+`Cross-Origin-Resource-Policy: cross-origin` on the net's host. Measured, it does
+not: both the probe and Stockfish's own download are CORS-mode requests, and a
+CORS response satisfies COEP by itself — a host sending CORP but no CORS fails,
+CORS but no CORP works. This is load-bearing for the deployment (it is why a plain
+public R2 bucket suffices) and is pinned by
+`scripts/test/integration/nnue-remote-net.mjs` across all four header
+combinations. Do not "fix" it by adding CORP requirements to the docs.
+
+Stockfish accepts an absolute URL for `EvalFile` because it loads the net through
+`emscripten_fetch`, which passes the value to XHR verbatim. Measured: same
++377 cp on the rook endgame from either origin.
 
 **A missing net is fatal, not degrading.** Stockfish 16 calls
 `exit(EXIT_FAILURE)` at the first `go` if `Use NNUE` is on and the net did not
@@ -207,10 +240,15 @@ when NNUE was *not* requested. Infer it instead and every analysis is
 mislabelled, which then makes cloud sync's conflict rule do the wrong thing.
 
 **Handshake order** (`EngineWorker#handshake`): `uci` → `UCI_AnalyseMode true` →
-`Threads 1` → `Hash 64` → *(if NNUE)* `EvalFile <filename>` → `Use NNUE true` →
-`isready`. `EvalFile` is a **bare filename**; Stockfish resolves it next to the
-worker script, and an absolute `/stockfish/...` path would break a non-root Vite
-`base`.
+`Threads 1` → `Hash 64` → *(if NNUE)* `EvalFile <nnueEvalFileValue()>` →
+`Use NNUE true` → `isready`. That value is a **bare filename** in same-origin mode
+— Stockfish resolves it next to the worker script, and an absolute
+`/stockfish/...` path would break a non-root Vite `base` — and a **full absolute
+URL** in remote mode. Never hardcode `NNUE_NET_FILE` here: a bare filename still
+finds the dev-staged net, so the mistake passes every local test and only fails in
+production, where no same-origin copy exists. `nnue-remote-net.mjs` catches it by
+asserting the foreign host's access log shows the engine's `GET`, not just the
+probe's `HEAD`.
 
 **The eval cache key includes the evaluator.** `evalCacheRowKey()` gives NNUE
 rows `${fen}|${depth}|nnue` and leaves classical on the legacy `${fen}|${depth}`
