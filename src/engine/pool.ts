@@ -3,6 +3,7 @@ import {
   type AnalysisResult,
   type EngineObservation,
 } from './engine';
+import { intendedEvaluatorIdSync, nnuePreferenceEnabled } from './nnue';
 
 type PoolObserver = (obs: EngineObservation, workerIndex: number) => void;
 
@@ -22,16 +23,64 @@ type PoolObserver = (obs: EngineObservation, workerIndex: number) => void;
  * positions rather than making any one position faster.
  */
 
-/** How many workers to spawn by default. We cap at 4: the marginal
- *  benefit drops sharply past that for single-threaded Stockfish, and
- *  the WASM memory cost is non-trivial (~30 MB / worker). */
+/**
+ * How many workers to spawn by default, given what we can learn about the device.
+ *
+ * Pure so the `engine-nnue` integration test can drive it with synthetic inputs
+ * (it lives here rather than in its own module because a vitest unit test may not
+ * import anything that reaches Stockfish — see `vitest.config.ts`).
+ *
+ * Cores: cap at 4. The marginal benefit drops sharply past that for
+ * single-threaded Stockfish, and we leave a core for the UI thread + browser.
+ *
+ * Memory: NNUE changes the calculus, measured rather than assumed. Per-worker
+ * resident memory on this machine (headless Chromium, 4 workers, delta over the
+ * browser's own baseline):
+ *
+ *     classical   ~125 MB / worker   →  ~0.5 GB for a full pool
+ *     NNUE        ~340 MB / worker   →  ~1.4 GB for a full pool
+ *
+ * That is far more than the net's 40 MB on disk — loading it pushes each worker's
+ * WASM heap past a growth boundary, so the cost is the heap step, not the file.
+ * It is fully released on `terminate()`. 1.4 GB is unremarkable on a desktop and
+ * fatal on a phone, so when NNUE is on we shrink the pool on low-memory devices:
+ * a smaller pool analyzes more slowly, a crashed tab analyzes nothing.
+ *
+ * `navigator.deviceMemory` is Chromium-only (and deliberately coarse). Where it
+ * is missing we do NOT guess — penalising every Firefox and Safari desktop for an
+ * absent API would cost real throughput to protect a device we have no evidence
+ * about. The residual gap is iOS Safari, which reports nothing and enforces tight
+ * per-tab limits; that device's answer is the Settings toggle, which is one of the
+ * reasons it exists.
+ */
+export function defaultPoolSize(env: {
+  cores?: number;
+  /** `navigator.deviceMemory` in GB, or undefined where unsupported. */
+  memoryGb?: number;
+  /** Whether workers will load the NNUE net. */
+  nnue: boolean;
+}): number {
+  const cores = env.cores && env.cores > 0 ? env.cores : 4;
+  const byCores = Math.max(1, Math.min(4, cores - 1));
+  if (!env.nnue || typeof env.memoryGb !== 'number' || !(env.memoryGb > 0)) {
+    return byCores;
+  }
+  // ~340 MB/worker: 2 GB can afford one, 4 GB two, and anything larger is a
+  // machine where the core count is the real constraint again.
+  const byMemory = env.memoryGb <= 2 ? 1 : env.memoryGb <= 4 ? 2 : 4;
+  return Math.max(1, Math.min(byCores, byMemory));
+}
+
 const DEFAULT_POOL_SIZE = (() => {
   if (typeof navigator === 'undefined') return 2;
-  const cores = navigator.hardwareConcurrency || 4;
-  // Leave at least 2 cores for the UI thread + browser. 4 workers is a
-  // good stopping point — past that, scheduling overhead and WASM
-  // memory usage start to hurt more than the parallelism helps.
-  return Math.max(1, Math.min(4, Math.floor((cores - 1) / 1)));
+  return defaultPoolSize({
+    cores: navigator.hardwareConcurrency,
+    memoryGb: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+    // Read once at module load. A user who flips the toggle gets the new cap on
+    // the next page load; the per-worker evaluator itself updates as soon as
+    // idle workers are respawned (see `changeNnue` in SettingsPage).
+    nnue: nnuePreferenceEnabled(),
+  });
 })();
 
 export class EnginePool {
@@ -130,12 +179,15 @@ export class EnginePool {
   /**
    * Evaluator identity of the pool's workers, for `Analysis.engine`.
    *
-   * All workers run the same build, so worker 0 speaks for the pool. Returns
-   * the classical label before any handshake has completed, which matches what
-   * the bundled build actually does — see `EngineWorker.evaluatorId`.
+   * All workers run the same build and the same handshake, so worker 0 speaks
+   * for the pool. With no workers alive we fall back to the *intended*
+   * evaluator rather than a hardcoded classical label: idle teardown can empty
+   * `workers` between the last `analyze()` of a game and `analyzeGamePgn`
+   * reading `backend.id()`, and answering "classical" there would mislabel an
+   * analysis that NNUE actually produced.
    */
   evaluatorId(): string {
-    return this.workers[0]?.evaluatorId() ?? 'stockfish-16-classical';
+    return this.workers[0]?.evaluatorId() ?? intendedEvaluatorIdSync();
   }
 
   get size(): number {
@@ -228,7 +280,8 @@ export class EnginePool {
    * clear `busy[2]` — writing past the end of the array, leaving its own
    * slot stuck `true` forever. That worker then never returned to
    * rotation, `isIdle()` could never become true (so idle teardown never
-   * freed the ~30 MB WASM heap), and once enough slots leaked
+   * freed the worker's WASM heap — see `defaultPoolSize` for how much that
+   * is), and once enough slots leaked
    * `busy.indexOf(false)` returned an index past `workers`, making
    * `pump()` call `.analyze()` on `undefined` — which surfaced to the
    * user as a spuriously errored game.
@@ -284,9 +337,10 @@ export class EnginePool {
   }
 
   /** Tear down every worker. Used both by `terminate()` (called from
-   *  test cleanup) and by the queue's idle-teardown path (releases the
-   *  ~30 MB / worker WASM heap when there's nothing to analyze). The
-   *  pool transparently rehydrates on the next `analyze()` call. */
+   *  test cleanup) and by the queue's idle-teardown path (releases each
+   *  worker's WASM heap — ~125 MB classical, ~340 MB with the NNUE net
+   *  loaded, measured; see `defaultPoolSize`). The pool transparently
+   *  rehydrates on the next `analyze()` call. */
   terminate(): void {
     for (const d of this.workerObsDisposers) d();
     this.workerObsDisposers = [];

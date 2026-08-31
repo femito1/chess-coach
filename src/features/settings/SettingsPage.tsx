@@ -26,6 +26,9 @@ import {
 } from '@/engine/freePlayEngine';
 import { usePersistedState } from '@/lib/usePersistedState';
 import { MOVE_SOUNDS_PREF_KEY } from '@/audio/moveSounds';
+import { NNUE_PREF_KEY, NNUE_PREF_VERSION } from '@/engine/nnue';
+import { terminateEngineIfIdle } from '@/engine/engine';
+import { analysisPool } from '@/engine/pool';
 import { CloudSyncCard } from '@/features/sync/CloudSyncCard';
 
 export function SettingsPage() {
@@ -42,6 +45,12 @@ export function SettingsPage() {
     true,
     { isValid: (v): v is boolean => typeof v === 'boolean' },
   );
+  // Same key + version the engine handshake reads through
+  // `nnuePreferenceEnabled()`.
+  const [nnue, setNnue] = usePersistedState<boolean>(NNUE_PREF_KEY, true, {
+    version: NNUE_PREF_VERSION,
+    isValid: (v): v is boolean => typeof v === 'boolean',
+  });
   const [requeueStatus, setRequeueStatus] = useState<string | null>(null);
   const [extensionDismissedAt, setExtensionDismissedAt] = useState<number | undefined>(
     undefined,
@@ -125,6 +134,23 @@ export function SettingsPage() {
   async function changeLocale(locale: SupportedLocale): Promise<void> {
     await setLocale(locale);
     await updateSettings({ locale });
+  }
+
+  /**
+   * Flip the NNUE preference and make it bite as soon as it safely can.
+   *
+   * The preference is read at engine *start*, so a worker that is already up
+   * keeps whichever evaluator it handshook with. Terminating IDLE engines makes
+   * the next `analyze()` rehydrate them under the new setting instead of the
+   * user having to reload. Both calls are no-ops while work is in flight
+   * (`terminateEngineIfIdle` checks `isBusy`, `terminateIfIdle` checks the queue
+   * as well), so this can never cut a running analysis in half — it would come
+   * back as a spuriously errored game.
+   */
+  function changeNnue(next: boolean): void {
+    setNnue(next);
+    terminateEngineIfIdle();
+    analysisPool().terminateIfIdle();
   }
 
   async function changeFreePlayStrength(level: FreePlayStrength): Promise<void> {
@@ -303,6 +329,27 @@ export function SettingsPage() {
             );
           })}
         </div>
+      </section>
+
+      {/* Engine strength (NNUE). localStorage rather than the synced `Settings`
+       *  row for two reasons: the engine handshake reads it synchronously
+       *  before its first await, and "is this device willing to spend 40 MB"
+       *  is a per-device question — pushing a hotel-wifi decision onto the
+       *  user's desktop would be actively wrong. Default ON: a coaching app
+       *  whose engine misjudges endgames is wrong in the way that matters
+       *  most. See `src/engine/nnue.ts`. */}
+      <section className="card p-4 space-y-3">
+        <h2 className="font-medium">{t('settings.nnue.title')}</h2>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={nnue}
+            onChange={(e) => changeNnue(e.target.checked)}
+          />
+          <span>{t('settings.nnue.toggle')}</span>
+        </label>
+        <p className="text-xs text-text-muted">{t('settings.nnue.description')}</p>
+        <p className="text-[11px] text-text-muted">{t('settings.nnue.applies')}</p>
       </section>
 
       {/* Move sounds. Kept in localStorage rather than the synced `Settings`

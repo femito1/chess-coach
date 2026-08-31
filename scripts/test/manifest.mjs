@@ -33,6 +33,7 @@ export const BROWSER_TESTS = [
   { name: 'device-probe',               file: 'scripts/test/integration/device-probe.mjs',               category: 'integration' },
   { name: 'visibility-throttle',        file: 'scripts/test/integration/visibility-throttle.mjs',        category: 'integration' },
   { name: 'engine-cockpit',             file: 'scripts/test/integration/engine-cockpit.mjs',             category: 'integration' },
+  { name: 'engine-nnue',                file: 'scripts/test/integration/engine-nnue.mjs',                category: 'integration' },
 
   // --- Classification + accuracy + recompute -----------------------
   // `recompute-skip` is the strict superset of the old `recompute`
@@ -67,6 +68,7 @@ export const BROWSER_TESTS = [
   { name: 'mobile-review',              file: 'scripts/test/e2e/mobile-review.mjs',                      category: 'e2e' },
   { name: 'puzzle-library',             file: 'scripts/test/integration/puzzle-library.mjs',             category: 'integration' },
   { name: 'cloud-sync',                 file: 'scripts/test/integration/cloud-sync.mjs',                 category: 'integration' },
+  { name: 'cloud-progress',             file: 'scripts/test/integration/cloud-progress.mjs',             category: 'integration' },
   { name: 'puzzle-auto-retry',          file: 'scripts/test/e2e/puzzle-auto-retry.mjs',                  category: 'e2e' },
   { name: 'repertoire-line-auto-retry', file: 'scripts/test/e2e/repertoire-line-auto-retry.mjs',         category: 'e2e' },
   { name: 'practice-freeplay',          file: 'scripts/test/e2e/practice-freeplay.mjs',                  category: 'e2e' },

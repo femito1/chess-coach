@@ -158,6 +158,12 @@
       "moveSounds": "Tocar um som quando uma peça se move",
       "description": "Sinais de lance, captura, xeque, roque e fim de jogo em todos os tabuleiros que você joga ou navega. Salvo por dispositivo."
     },
+    "nnue": {
+      "title": "For\u00e7a do motor (NNUE)",
+      "toggle": "Usar a avalia\u00e7\u00e3o por rede neural do Stockfish",
+      "description": "A NNUE julga posi\u00e7\u00f5es calmas muito melhor que o avaliador cl\u00e1ssico que ela substitui \u2014 num final de torres ela indica +3,77 onde o cl\u00e1ssico indica +0,53. Ela precisa de um arquivo de rede de 40 MB, baixado uma \u00fanica vez por dispositivo na primeira vez que o motor roda e depois mantido em cache permanentemente. Desligue para evitar esse download numa conex\u00e3o limitada; a an\u00e1lise volta ent\u00e3o ao avaliador cl\u00e1ssico, mais fraco. Salvo por dispositivo.",
+      "applies": "Passa a valer na pr\u00f3xima vez que o motor iniciar."
+    },
     "freePlayStrength": {
       "title": "Jogo contra a engine — força padrão",
       "description": "Usado quando você clica em \"Jogar contra a engine\" após terminar uma linha de prática. Máximo é o Stockfish em força total. Os níveis menores limitam a engine via UCI_LimitStrength + Skill Level para você testar a linha em um nível mais humano. Você pode trocar a força por sessão na própria página de prática.",
@@ -894,6 +900,19 @@
     "close": "Fechar"
   },
   "sync": {
+    "cloud": {
+      "title": "Na nuvem",
+      "progress": "{{analyzed}} / {{games}} partidas analisadas",
+      "nnue": "{{nnue}} NNUE",
+      "allNnue": "todas NNUE",
+      "classicalPending": "{{n}} ainda no avaliador cl\u00e1ssico.",
+      "empty": "Nada enviado ainda \u2014 rode uma sincroniza\u00e7\u00e3o.",
+      "refresh": "Atualizar",
+      "refreshing": "Lendo\u2026",
+      "updatedAt": "Atualizado \u00e0s {{at}}",
+      "failed": "N\u00e3o foi poss\u00edvel ler os totais da nuvem.",
+      "hint": "Apenas contagens, algumas centenas de bytes por leitura. Avan\u00e7a enquanto o worker de an\u00e1lise no servidor roda; atualiza sozinho cerca de uma vez por minuto at\u00e9 a biblioteca estar toda analisada com NNUE."
+    },
     "title": "Sincronização na nuvem",
     "description": "Faz backup das partidas revisadas, das análises da engine e do seu progresso nos problemas no Supabase, para sobreviverem à limpeza do navegador e acompanharem você em outro dispositivo.",
     "syncNow": "Sincronizar agora",

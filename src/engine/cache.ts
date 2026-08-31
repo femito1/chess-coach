@@ -22,16 +22,57 @@
  *
  * `cachedAnalyze` keeps the same shape as `EnginePool.analyze`, so the
  * analyzer can swap one for the other at the call site.
+ *
+ * ── The evaluator is part of a row's identity ───────────────────────────
+ *
+ * Determinism holds per (fen, depth) *for a given evaluator*. Classical and
+ * NNUE Stockfish disagree substantially on the same position at the same depth
+ * — measured +53 cp vs +377 cp on a rook endgame — so a cache keyed on
+ * (fen, depth) alone hands classical numbers to an NNUE run, and the analyzer
+ * then stamps `engine: 'stockfish-16-nnue'` on an analysis largely made of
+ * classical evals. That is the same mislabelling the explicit `nnueEnabled`
+ * assignment in `engine.ts` exists to prevent, arriving by a different door:
+ * every user with a warm cache would get NNUE's label and classical's judgement,
+ * and cloud sync would then rank that row above genuine NNUE work.
+ *
+ * So the evaluator joins the row key, and the deeper-result scan filters on it
+ * too (it walks the `fen` index, which is evaluator-blind). Classical keeps the
+ * legacy `${fen}|${depth}` key shape so an existing cache stays valid for
+ * anyone who opts out — no invalidation, no migration.
  */
 
 import { db, type EvalCacheEntry } from '@/db/schema';
 import type { AnalysisResult } from './engine';
+import { CLASSICAL_EVALUATOR_ID, activeEvaluatorId } from './nnue';
 import { analysisPool } from './pool';
 
 export { bookFenKey, buildBookSet, isBookFen } from './book';
 
+/** In-flight dedup key. Evaluator-free on purpose: entries live for the length
+ *  of one engine job, and two concurrent callers in the same page always want
+ *  the same evaluator. */
 function cacheKey(fen: string, depth: number): string {
   return `${fen}|${depth}`;
+}
+
+/**
+ * Persistent row key. Classical rows keep the historical `${fen}|${depth}` shape
+ * so pre-NNUE cache rows keep hitting; NNUE rows get their own namespace.
+ */
+export function evalCacheRowKey(
+  fen: string,
+  depth: number,
+  evaluator: string,
+): string {
+  return evaluator === CLASSICAL_EVALUATOR_ID
+    ? `${fen}|${depth}`
+    : `${fen}|${depth}|${evaluator.replace(/^stockfish-16-/, '')}`;
+}
+
+/** A row's evaluator, defaulting absent to classical — every row written before
+ *  the net was served came from the classical build. */
+function rowEvaluator(e: EvalCacheEntry): string {
+  return e.evaluator ?? CLASSICAL_EVALUATOR_ID;
 }
 
 /** In-flight dedup: if two callers ask for the same (fen, depth) at once,
@@ -116,17 +157,20 @@ function entryToResult(e: EvalCacheEntry): AnalysisResult {
 async function lookup(
   fen: string,
   depth: number,
+  evaluator: string,
 ): Promise<AnalysisResult | null> {
-  const exact = await db.evalCache.get(cacheKey(fen, depth));
+  const exact = await db.evalCache.get(evalCacheRowKey(fen, depth, evaluator));
   if (exact) {
     void touchSavedAt(exact);
     return entryToResult(exact);
   }
-  // Look for a deeper cached result for the same FEN.
+  // Look for a deeper cached result for the same FEN. The `fen` index is
+  // evaluator-blind, so the filter must reject other evaluators' rows — without
+  // that, an NNUE run would happily accept a deeper classical result.
   const deeper = await db.evalCache
     .where('fen')
     .equals(fen)
-    .filter((e) => e.depth > depth)
+    .filter((e) => e.depth > depth && rowEvaluator(e) === evaluator)
     .first();
   if (deeper) {
     void touchSavedAt(deeper);
@@ -151,11 +195,13 @@ async function touchSavedAt(entry: EvalCacheEntry): Promise<void> {
 async function writeBack(
   fen: string,
   depth: number,
+  evaluator: string,
   result: AnalysisResult,
 ): Promise<void> {
   const entry: EvalCacheEntry = {
-    key: cacheKey(fen, depth),
+    key: evalCacheRowKey(fen, depth, evaluator),
     fen,
+    evaluator,
     // We trust the pool's reported depth (may be slightly less than the
     // requested depth if a mate was found early) but never less than 1.
     depth: Math.max(1, result.depth || depth),
@@ -237,14 +283,18 @@ export function cachedAnalyze(
   }
 
   const p = (async () => {
-    const cached = await lookup(fen, depth);
+    // Same source of truth the workers' handshake uses (`nnue.ts`), so the rows
+    // we read and write can never be labelled with an evaluator other than the
+    // one the pool is about to run. Memoized after the first call.
+    const evaluator = await activeEvaluatorId();
+    const cached = await lookup(fen, depth, evaluator);
     if (cached) {
       cacheStats.hits++;
       return cached;
     }
     cacheStats.misses++;
     const result = await analysisPool().analyze(fen, depth);
-    await writeBack(fen, depth, result);
+    await writeBack(fen, depth, evaluator, result);
     return result;
   })();
 

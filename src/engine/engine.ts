@@ -1,3 +1,10 @@
+import {
+  CLASSICAL_EVALUATOR_ID,
+  NNUE_EVALUATOR_ID,
+  NNUE_NET_FILE,
+  nnueActive,
+} from './nnue';
+
 export interface InfoLine {
   depth?: number;
   seldepth?: number;
@@ -55,24 +62,53 @@ export class EngineWorker {
   private currentFen: string | null = null;
   private currentDepth = 0;
   /**
-   * Which evaluator this engine is actually using — captured from the UCI
-   * handshake rather than assumed.
+   * Which evaluator this engine is actually using.
    *
    * This matters because the bundled WASM build ships `Use NNUE` defaulting to
-   * FALSE and no network file (the .wasm is ~575 KB against a 40 MB net), so
-   * every analysis this app has ever produced used Stockfish 16's *classical*
+   * FALSE (the .wasm is ~575 KB against a 40 MB net), so every analysis this app
+   * produced before the net was served used Stockfish 16's *classical*
    * evaluator. That is a materially weaker judge of quiet positions: on a rook
    * endgame, classical reports +0.53 where NNUE reports +3.77.
    *
    * `Analysis.engine` used to be the constant string 'stockfish-16', which did
-   * not distinguish the two and so silently claimed more than was true. Reading
+   * not distinguish the two and so silently claimed more than was true. Tracking
    * the real state here lets the analyzer stamp an honest value, and lets cloud
    * sync prefer an NNUE analysis over a classical one for the same game.
+   *
+   * MUST be kept in step with what `handshake` actually sent. Inferring it from
+   * the `option name Use NNUE … default` line alone is not enough once we set
+   * the option ourselves: that line reports the BUILD's default (always `false`
+   * here, verified), so a handshake that enables NNUE and leaves this field to
+   * the parser would report `stockfish-16-classical` for genuine NNUE work —
+   * mislabelling every analysis, and then making `diff.ts#isBetter` prefer the
+   * wrong copy on sync. Hence the explicit assignment in `handshake`.
    */
   private nnueEnabled = false;
+  /** Corroboration from the engine's own `info string`. Diagnostic. */
+  private nnueConfirmed = false;
 
-  private async init(): Promise<void> {
+  private init(): Promise<void> {
     if (this.ready) return this.ready;
+    // Assigned SYNCHRONOUSLY, before the first await inside `bootstrap`.
+    // Previously `this.ready` was only set after `startWorker` resolved, so two
+    // concurrent `analyze()` calls on the same instance (easy to trigger on the
+    // `engine` singleton from a React effect) could each spawn a Worker and leak
+    // one — a window up to the 8 s worker-start timeout wide.
+    const boot = this.bootstrap();
+    this.ready = boot;
+    // A boot that fails should be retryable rather than poisoning the instance
+    // forever with a rejected promise. Guarded on identity so a later boot's
+    // state isn't cleared by an earlier one's failure.
+    boot.catch(() => {
+      if (this.ready === boot) this.ready = null;
+    });
+    return boot;
+  }
+
+  private async bootstrap(): Promise<void> {
+    // Resolved once, up front, so every command this handshake sends agrees with
+    // what `cache.ts` uses for its row keys — see `nnue.ts`.
+    const wantNnue = await nnueActive();
 
     // Prefer the threaded build only when the page is cross-origin isolated;
     // otherwise SharedArrayBuffer exists but postMessage of wasm memory still fails.
@@ -89,8 +125,8 @@ export class EngineWorker {
     for (const file of candidates) {
       try {
         this.worker = await this.startWorker(file);
-        this.ready = this.handshake();
-        return this.ready;
+        await this.handshake(wantNnue);
+        return;
       } catch (e) {
         lastError = e;
         if (this.worker) {
@@ -144,6 +180,7 @@ export class EngineWorker {
         // Re-forward messages to the engine's listener set.
         worker.addEventListener('message', (ev: MessageEvent) => {
           const line = typeof ev.data === 'string' ? ev.data : String(ev.data);
+          this.noteLine(line);
           for (const l of this.listeners) l(line);
         });
         // Forward the first message we just saw (don't drop it).
@@ -159,6 +196,7 @@ export class EngineWorker {
       const firstMsg = (ev: MessageEvent) => {
         worker.removeEventListener('message', firstMsg);
         const line = typeof ev.data === 'string' ? ev.data : String(ev.data);
+        this.noteLine(line);
         for (const l of this.listeners) l(line);
         onFirstMessage();
       };
@@ -183,7 +221,22 @@ export class EngineWorker {
     });
   }
 
-  private handshake(): Promise<void> {
+  /**
+   * Run the UCI handshake. `wantNnue` decides whether this worker loads the
+   * NNUE network; it comes from `nnueActive()` so the preference and the net's
+   * actual availability are both accounted for.
+   *
+   * Loading NNUE is two options, in this order: `EvalFile` names the net (bare
+   * filename — Stockfish resolves it next to the worker script), then
+   * `Use NNUE true` switches the evaluator over.
+   *
+   * Stockfish's acknowledgement — `info string NNUE evaluation enabled.` versus
+   * `info string classical evaluation enabled.` — does NOT arrive here, measured:
+   * it is printed by `Eval::NNUE::verify()` at the first `go`, not at
+   * `setoption` or `isready`, so it lands long after this handshake's listener
+   * has been torn down at `readyok`. `noteLine` picks it up instead.
+   */
+  private handshake(wantNnue: boolean): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       if (!this.worker) return reject(new Error('no worker'));
       const timer = setTimeout(() => {
@@ -192,11 +245,15 @@ export class EngineWorker {
       }, 10000);
       const offReady = this.onLine((line) => {
         // `option name Use NNUE type check default <bool>` arrives during the
-        // `uci` response. Since we never set the option, its default IS the
-        // state; if a future build defaults it on, this picks that up with no
-        // code change.
-        const nnue = /^option name Use NNUE type check default (true|false)/.exec(line);
-        if (nnue) this.nnueEnabled = nnue[1] === 'true';
+        // `uci` response, and reports the BUILD's default — it is NOT an echo of
+        // what we just set (verified: it still reads `default false` on a worker
+        // that goes on to report `NNUE evaluation enabled`). So only trust it
+        // when we did not set the option ourselves; otherwise it would undo the
+        // assignment below, since the `uci` response lands after our sends.
+        if (!wantNnue) {
+          const nnue = /^option name Use NNUE type check default (true|false)/.exec(line);
+          if (nnue) this.nnueEnabled = nnue[1] === 'true';
+        }
         if (line === 'readyok') {
           clearTimeout(timer);
           offReady();
@@ -207,6 +264,12 @@ export class EngineWorker {
       this.send('setoption name UCI_AnalyseMode value true');
       this.send('setoption name Threads value 1');
       this.send('setoption name Hash value 64');
+      if (wantNnue) {
+        this.send(`setoption name EvalFile value ${NNUE_NET_FILE}`);
+        this.send('setoption name Use NNUE value true');
+        // Set explicitly, not inferred. See the note on `nnueEnabled`.
+        this.nnueEnabled = true;
+      }
       this.send('isready');
     });
   }
@@ -215,19 +278,46 @@ export class EngineWorker {
    * Evaluator identity for `Analysis.engine`, e.g. `stockfish-16-classical`.
    *
    * Only meaningful after the handshake; callers should await `analyze()` or
-   * `waitReady()` first. Defaults to the classical label because that is what
-   * the current bundled build actually does.
+   * `waitReady()` first. Defaults to the classical label, which is what a build
+   * with no net loaded actually does.
    */
   evaluatorId(): string {
-    return this.nnueEnabled ? 'stockfish-16-nnue' : 'stockfish-16-classical';
+    return this.nnueEnabled ? NNUE_EVALUATOR_ID : CLASSICAL_EVALUATOR_ID;
   }
 
   isNnueEnabled(): boolean {
     return this.nnueEnabled;
   }
 
+  /**
+   * Whether Stockfish itself has printed `info string NNUE evaluation …`.
+   *
+   * Only meaningful after the first `analyze()` — that is when Stockfish emits
+   * it (see `handshake`). Diagnostic only; `evaluatorId()` is the contract. Read
+   * by the `engine-nnue` integration test so a silent regression in net loading
+   * can't hide behind a field we set ourselves.
+   */
+  isNnueConfirmedByEngine(): boolean {
+    return this.nnueConfirmed;
+  }
+
   private send(cmd: string): void {
     this.worker?.postMessage(cmd);
+  }
+
+  /**
+   * Internal sniff of every line the worker emits, for state we need regardless
+   * of who is listening.
+   *
+   * Currently just Stockfish's own NNUE acknowledgement, which arrives at the
+   * first `go` rather than during the handshake. Kept to two cheap checks: most
+   * lines during a search start `info depth`, so the `startsWith` rejects them
+   * before any substring scan, and the whole thing short-circuits once confirmed.
+   */
+  private noteLine(line: string): void {
+    if (this.nnueConfirmed) return;
+    if (!line.startsWith('info string')) return;
+    if (line.includes('NNUE evaluation')) this.nnueConfirmed = true;
   }
 
   private onLine(cb: Listener): () => void {
@@ -398,6 +488,10 @@ export class EngineWorker {
     this.worker?.terminate();
     this.worker = null;
     this.ready = null;
+    // A rehydrated worker has confirmed nothing yet, and may not even come back
+    // on the same evaluator — the preference is re-read on the next boot.
+    this.nnueConfirmed = false;
+    this.nnueEnabled = false;
     this.listeners.clear();
     // Note: we deliberately do NOT clear `observers` here. The cockpit
     // store holds long-lived observer subscriptions across pool
@@ -441,7 +535,9 @@ export const engine = new EngineWorker();
  * Tear down the singleton `engine` worker if it hasn't been used for
  * `idleMs`. The worker rehydrates lazily on the next `analyze()` call
  * via `init()`, so this is invisible to consumers and frees the WASM
- * heap (~30 MB / NNUE net) while the user isn't on the review screen.
+ * heap while the user isn't on the review screen. Worth more than it used
+ * to be: with the NNUE net loaded a single worker holds ~340 MB resident
+ * against ~125 MB classical (measured — see `defaultPoolSize`).
  *
  * Returns true if the worker was actually terminated.
  */

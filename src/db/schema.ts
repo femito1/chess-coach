@@ -494,12 +494,26 @@ export interface RepertoireLineStats {
  *  losing user-visible state.
  */
 export interface EvalCacheEntry {
-  /** `${fen}|${depth}` — primary key. */
+  /** `${fen}|${depth}` for classical, `${fen}|${depth}|nnue` for NNUE — primary
+   *  key. Built by `evalCacheRowKey` in `src/engine/cache.ts`; see there for why
+   *  the evaluator is part of the identity. */
   key: string;
   /** Position FEN as Stockfish saw it (full FEN including counters). */
   fen: string;
   /** Search depth that produced this result. */
   depth: number;
+  /**
+   * Which evaluator produced these numbers (`Analysis.engine` values).
+   *
+   * Absent on every row written before the app served an NNUE net, which is
+   * exactly what those rows were: classical. Readers must treat `undefined` as
+   * `stockfish-16-classical` — same honest default as `diff.ts#isNnueAnalysis`.
+   *
+   * Deliberately NOT indexed, so adding it needed no Dexie version bump: the
+   * only queries are by primary key and by the existing `fen` index, and Dexie
+   * does not validate stored object shape.
+   */
+  evaluator?: string;
   bestMoveUci: string | null;
   scoreCp: number | null;
   scoreMate: number | null;

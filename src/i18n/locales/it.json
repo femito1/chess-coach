@@ -158,6 +158,12 @@
       "moveSounds": "Riproduci un suono quando un pezzo si muove",
       "description": "Segnali per mosse, catture, scacco, arrocco e fine partita su ogni scacchiera che giochi o esplori. Salvato per dispositivo."
     },
+    "nnue": {
+      "title": "Forza del motore (NNUE)",
+      "toggle": "Usa la valutazione con rete neurale di Stockfish",
+      "description": "La NNUE giudica le posizioni tranquille molto meglio del valutatore classico che sostituisce: in un finale di torri segna +3,77 dove il classico segna +0,53. Richiede un file di rete da 40 MB, scaricato una sola volta per dispositivo al primo avvio del motore e poi conservato in cache in modo permanente. Disattivala per evitare quel download su una connessione a consumo; l'analisi torna al valutatore classico, pi\u00f9 debole. Salvato per dispositivo.",
+      "applies": "Ha effetto al prossimo avvio del motore."
+    },
     "freePlayStrength": {
       "title": "Gioca contro il motore — forza predefinita",
       "description": "Usato quando clicchi su \"Gioca contro il motore\" dopo aver completato una linea di pratica. Massimo è Stockfish a piena forza. I livelli inferiori limitano il motore tramite UCI_LimitStrength + Skill Level per testare la linea a un livello più umano. Puoi sovrascrivere questo valore per sessione direttamente nella pagina di pratica.",
@@ -894,6 +900,19 @@
     }
   },
   "sync": {
+    "cloud": {
+      "title": "Nel cloud",
+      "progress": "{{analyzed}} / {{games}} partite analizzate",
+      "nnue": "{{nnue}} NNUE",
+      "allNnue": "tutte NNUE",
+      "classicalPending": "{{n}} ancora con il valutatore classico.",
+      "empty": "Niente caricato ancora \u2014 avvia una sincronizzazione.",
+      "refresh": "Aggiorna",
+      "refreshing": "Lettura\u2026",
+      "updatedAt": "Aggiornato alle {{at}}",
+      "failed": "Impossibile leggere i totali del cloud.",
+      "hint": "Solo conteggi, poche centinaia di byte per lettura. Avanza mentre il worker di analisi sul server lavora; si aggiorna da s\u00e9 circa una volta al minuto finch\u00e9 la libreria non \u00e8 tutta analizzata con NNUE."
+    },
     "title": "Sincronizzazione cloud",
     "description": "Salva le partite analizzate, le analisi del motore e i tuoi progressi sui problemi su Supabase, così sopravvivono alla cancellazione del browser e ti seguono su un altro dispositivo.",
     "syncNow": "Sincronizza ora",

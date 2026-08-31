@@ -26,9 +26,20 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
 
-# Stockfish engine bundle. Files are pinned per-build so safe to mark
-# immutable. If you swap Stockfish versions, change the filename or purge
+# Stockfish engine bundle: the `.js` glue, the `.wasm` payloads, AND the 40 MB
+# NNUE network (`nn-<hash>.nnue`, staged here at build time by
+# scripts/copy-nnue.mjs -- see .gitignore). Files are pinned per-build so safe to
+# mark immutable. If you swap Stockfish versions, change the filename or purge
 # the CF cache for /stockfish/* explicitly.
+#
+# THE NET RELIES ON THIS BLOCK. `Cache-Control: immutable` is what turns a 40 MB
+# download into a genuinely one-time cost per device, and it is truthful here
+# rather than merely convenient: the net's filename contains Stockfish's own hash
+# of its contents, so a different network can only ever appear at a different
+# URL. Without this, every cold navigation would re-fetch 40 MB and NNUE would be
+# an unaffordable default instead of the right one. CORP matters for the same
+# reason it does for the `.wasm`: the engine fetches the net from inside a Worker
+# under the `COEP: require-corp` set by the `/*` block above.
 #
 # IMPORTANT: do NOT redeclare `Cross-Origin-Embedder-Policy` here. The
 # `/*` block above already sets it, and Cloudflare Pages *appends* (does

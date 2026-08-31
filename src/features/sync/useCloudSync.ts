@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSupabase } from '@/lib/supabase';
 import { useEffectiveAuth } from '@/lib/testAuth';
 import { useQueueStore } from '@/engine/queue';
@@ -13,6 +13,11 @@ import {
   type SyncProgress,
   type SyncResult,
 } from './cloudSync';
+import {
+  fetchCloudCounts,
+  summarizeCloudProgress,
+  type CloudProgressSummary,
+} from './cloudProgress';
 
 /**
  * Cloud-sync state and triggers.
@@ -44,24 +49,50 @@ interface SyncStore {
   addCounts: (c: SyncCounts) => void;
 }
 
-export const useSyncStore = create<SyncStore>((set) => ({
-  phase: { kind: 'idle' },
-  last: null,
-  session: emptyCounts(),
-  setPhase: (phase) => set({ phase }),
-  setLast: (last) => set({ last }),
-  addCounts: (c) =>
-    set((s) => ({
-      session: {
-        gamesPushed: s.session.gamesPushed + c.gamesPushed,
-        gamesPulled: s.session.gamesPulled + c.gamesPulled,
-        analysesPushed: s.session.analysesPushed + c.analysesPushed,
-        analysesPulled: s.session.analysesPulled + c.analysesPulled,
-        attemptsPushed: s.session.attemptsPushed + c.attemptsPushed,
-        attemptsPulled: s.session.attemptsPulled + c.attemptsPulled,
-      },
-    })),
-}));
+function buildSyncStore() {
+  return create<SyncStore>((set) => ({
+    phase: { kind: 'idle' },
+    last: null,
+    session: emptyCounts(),
+    setPhase: (phase) => set({ phase }),
+    setLast: (last) => set({ last }),
+    addCounts: (c) =>
+      set((s) => ({
+        session: {
+          gamesPushed: s.session.gamesPushed + c.gamesPushed,
+          gamesPulled: s.session.gamesPulled + c.gamesPulled,
+          analysesPushed: s.session.analysesPushed + c.analysesPushed,
+          analysesPulled: s.session.analysesPulled + c.analysesPulled,
+          attemptsPushed: s.session.attemptsPushed + c.attemptsPushed,
+          attemptsPulled: s.session.attemptsPulled + c.attemptsPulled,
+        },
+      })),
+  }));
+}
+
+/**
+ * Held on `globalThis`, for the same reason `analysisPool` and `cacheStats` are.
+ *
+ * Vite can serve this module under more than one URL — HMR appends `?t=…` after
+ * an edit, and a runtime `import('/src/features/sync/useCloudSync.ts')` from a
+ * test script resolves without it. Two module instances would mean two stores,
+ * and then the app-wide `useCloudSync` hook in `AppLayout` would be driving one
+ * store while the Settings card reads the other: the card would sit at `idle`
+ * forever and never show a sync it had started. Measured while writing the
+ * `cloud-progress` test, which forces a phase from the page and needs the
+ * component to see it.
+ *
+ * A production bundle instantiates each module once, so this is belt-and-braces
+ * there — but the singleton invariant is what the card's correctness rests on,
+ * so it is worth stating in code rather than assuming.
+ */
+const SYNC_STORE_KEY = '__chessCoachSyncStore';
+type GlobalThisWithSyncStore = typeof globalThis & {
+  [SYNC_STORE_KEY]?: ReturnType<typeof buildSyncStore>;
+};
+const _g = globalThis as GlobalThisWithSyncStore;
+if (!_g[SYNC_STORE_KEY]) _g[SYNC_STORE_KEY] = buildSyncStore();
+export const useSyncStore = _g[SYNC_STORE_KEY];
 
 /** Module-level so two mounted consumers can't start overlapping runs — the
  *  engine is resumable but concurrent runs would duplicate work and could
@@ -222,4 +253,102 @@ export function useManualSync(): {
     canSync:
       Boolean(userId) && phase.kind !== 'syncing' && phase.kind !== 'checking',
   };
+}
+
+/* =======================================================================
+ *  Cloud analysis progress
+ * =======================================================================
+ */
+
+/**
+ * How often to re-read the cloud counts while they are still moving.
+ *
+ * 45 s is chosen against what is being watched: the server worker analyzes a
+ * game in tens of seconds, so a faster poll would mostly re-read the same
+ * numbers, and a slower one would make a running job look stalled. Three
+ * count-only requests per tick, and only while the card is on screen.
+ */
+const PROGRESS_POLL_MS = 45_000;
+
+export interface CloudProgressState {
+  summary: CloudProgressSummary | null;
+  loading: boolean;
+  error: string | null;
+  /** Epoch ms of the last successful read, for "updated at". */
+  refreshedAt: number | null;
+  refresh: () => void;
+}
+
+/**
+ * Read (and keep reading) the cloud's analysis totals.
+ *
+ * `enabled` must be false unless this account is actually allowlisted for sync:
+ * the hook cannot be called conditionally, but it must not issue requests that
+ * RLS will refuse, and it must not poll for accounts that will never have cloud
+ * rows. `CloudSyncCard` passes the same condition it uses to decide whether to
+ * render at all.
+ *
+ * Polling stops once the library is fully analyzed AND fully NNUE — that is the
+ * server worker's finish line, and past it there is nothing left to watch. It
+ * also refetches once whenever a local sync run finishes, which is what moves
+ * the numbers when the *user's* device is the one doing the work; that also
+ * covers the empty-cloud case without leaving a timer running for it.
+ */
+export function useCloudProgress(enabled: boolean): CloudProgressState {
+  const { userId } = useEffectiveAuth();
+  const supabase = useSupabase();
+  // Recomputed on each successful read; `null` until the first one lands.
+  const [summary, setSummary] = useState<CloudProgressSummary | null>(null);
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  /** Bumped by `refresh()` to re-run the effect on demand. */
+  const [manualTick, setManualTick] = useState(0);
+  /** Guards against a slow request overlapping the next poll tick. */
+  const inFlight = useRef(false);
+
+  // A local sync moves these numbers too, so re-read when one finishes.
+  const phaseKind = useSyncStore((s) => s.phase.kind);
+  const done = summary ? summary.complete && summary.allNnue : false;
+
+  useEffect(() => {
+    if (!enabled || !userId) return;
+    let cancelled = false;
+
+    const load = async () => {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      setLoading(true);
+      const { counts, error: err } = await fetchCloudCounts(supabase, userId);
+      inFlight.current = false;
+      if (cancelled) return;
+      setLoading(false);
+      if (counts) {
+        setSummary(summarizeCloudProgress(counts));
+        setRefreshedAt(Date.now());
+        setError(null);
+      } else {
+        // Keep the last good summary on screen rather than blanking the card;
+        // a transient offline blip shouldn't erase the readout.
+        setError(err ?? 'unknown');
+      }
+    };
+
+    void load();
+    // No timer once there is nothing left to advance.
+    if (done) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const timer = setInterval(() => void load(), PROGRESS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [enabled, userId, supabase, manualTick, done, phaseKind]);
+
+  const refresh = useCallback(() => setManualTick((n) => n + 1), []);
+
+  return { summary, loading, error, refreshedAt, refresh };
 }

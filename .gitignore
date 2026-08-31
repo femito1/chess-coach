@@ -19,3 +19,9 @@ HANDOFF-*.md
 dist-worker
 worker.env
 .env.worker
+
+# Stockfish's NNUE network, staged into public/ by scripts/copy-nnue.mjs
+# (prebuild / predev). 40 MB of binary that ships inside the `stockfish` npm
+# package -- committing it would grow every clone and every history forever,
+# for something `npm ci` already puts on disk. See the script's header.
+public/stockfish/*.nnue

@@ -282,6 +282,10 @@ function mergeRow(prev: ProfileRow | undefined, patch: Partial<ProfileRow> & { i
  * identity: no requests, no UI, no interference. A test that wants to exercise
  * sync for real should drive `runCloudSync` with its own stub rather than rely
  * on this one.
+ *
+ * The builder also has to answer *count* queries (`select('*', { count:
+ * 'exact', head: true })`) and be awaitable, because the cloud-progress readout
+ * issues those — see `emptyCloudBuilder`.
  */
 const CLOUD_SYNC_TABLES = new Set([
   'cloud_sync_allowlist',
@@ -291,12 +295,25 @@ const CLOUD_SYNC_TABLES = new Set([
 ]);
 
 function emptyCloudBuilder(): BypassFromBuilder {
+  // The empty answer, in the shape every consumer here reads it: `data` for row
+  // queries, `count` for the head-only count queries the Settings card's cloud
+  // progress readout issues (`cloudProgress.ts`).
+  const empty = { data: [], count: 0, error: null };
   const selectBuilder = {
     eq: () => selectBuilder,
     in: () => selectBuilder,
-    range: async () => ({ data: [], error: null }),
+    like: () => selectBuilder,
+    range: async () => empty,
     maybeSingle: async () => ({ data: null, error: null }),
-    then: undefined,
+    // Thenable, so `await supabase.from(t).select('*', { count: 'exact', head:
+    // true }).eq(...)` resolves instead of yielding the builder object. PostgREST
+    // builders are themselves promises; the stub has to be one too, or a count
+    // query reads `count` off a builder and renders `undefined`. Cloud sync is
+    // mounted in `AppLayout`, so this path runs in EVERY browser test.
+    then: (
+      onFulfilled?: (v: typeof empty) => unknown,
+      onRejected?: (e: unknown) => unknown,
+    ) => Promise.resolve(empty).then(onFulfilled, onRejected),
   } as unknown as BypassSelectBuilder;
   return {
     select: () => selectBuilder,

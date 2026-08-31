@@ -158,6 +158,12 @@
       "moveSounds": "Play a sound when a piece moves",
       "description": "Move, capture, check, castling and game-end cues on every board you play or step through. Stored per device."
     },
+    "nnue": {
+      "title": "Engine strength (NNUE)",
+      "toggle": "Use Stockfish's neural-network evaluation",
+      "description": "NNUE judges quiet positions far better than the classical evaluator it replaces \u2014 on a rook endgame it reports +3.77 where classical reports +0.53. It needs a 40 MB network file, downloaded once per device the first time the engine runs and then cached permanently. Turn it off to avoid that download on a metered connection; analysis then falls back to the weaker classical evaluator. Stored per device.",
+      "applies": "Takes effect the next time the engine starts."
+    },
     "freePlayStrength": {
       "title": "Play vs engine — default strength",
       "description": "Used when you click \"Play it out vs engine\" after finishing a practice line. Maximum is full-strength Stockfish. The lower levels handicap the engine via UCI_LimitStrength + Skill Level so you can pressure-test a line at a more human level. You can override this per-session on the practice page itself.",
@@ -894,6 +900,19 @@
     "close": "Close"
   },
   "sync": {
+    "cloud": {
+      "title": "In the cloud",
+      "progress": "{{analyzed}} / {{games}} games analyzed",
+      "nnue": "{{nnue}} NNUE",
+      "allNnue": "all NNUE",
+      "classicalPending": "{{n}} still on the classical evaluator.",
+      "empty": "Nothing uploaded yet \u2014 run a sync.",
+      "refresh": "Refresh",
+      "refreshing": "Reading\u2026",
+      "updatedAt": "Updated {{at}}",
+      "failed": "Couldn't read the cloud totals.",
+      "hint": "Counts only, a few hundred bytes per read. Advances while the server-side analysis worker runs; refreshes itself about once a minute until the library is fully analyzed with NNUE."
+    },
     "title": "Cloud sync",
     "description": "Backs up your reviewed games, their engine analyses, and your puzzle progress to Supabase, so they survive a cleared browser and follow you to another device.",
     "syncNow": "Sync now",
