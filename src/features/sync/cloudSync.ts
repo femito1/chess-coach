@@ -12,7 +12,6 @@ import {
   toCloudAnalysis,
   toCloudAttempt,
   toCloudGame,
-  type Plan,
   type RemoteAnalysisMeta,
   type RemoteAttemptMeta,
   type RemoteGameMeta,
