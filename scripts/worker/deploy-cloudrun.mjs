@@ -236,12 +236,11 @@ if (!project || project === '(unset)') {
 }
 
 const supabaseUrl = pick('SUPABASE_URL');
-const userId = pick('USER_ID');
+let userId = pick('USER_ID');
 const serviceRoleKey = pick('SUPABASE_SERVICE_ROLE_KEY');
 
 const missing = [
   !supabaseUrl && 'SUPABASE_URL',
-  !userId && 'USER_ID',
   !serviceRoleKey && 'SUPABASE_SERVICE_ROLE_KEY',
 ].filter(Boolean);
 
@@ -252,7 +251,8 @@ if (missing.length && !dryRun) {
       '\n' +
       '    SUPABASE_URL=https://xxxxxxxx.supabase.co\n' +
       '    SUPABASE_SERVICE_ROLE_KEY=eyJhbGci...     # Supabase → Project Settings → API\n' +
-      '    USER_ID=user_xxxxxxxxxxxx                 # your Clerk id, as in cloud_sync_allowlist\n' +
+      '\n' +
+      '  USER_ID is optional: left empty, it is looked up from cloud_sync_allowlist.\n' +
       '\n' +
       '  SUPABASE_URL is also inlined in the deployed bundle if you need to recover it:\n' +
       "    curl -s https://chess-coach-bip.pages.dev/assets/index-*.js | grep -o 'https://[a-z0-9]*\\.supabase\\.co'\n" +
@@ -260,6 +260,98 @@ if (missing.length && !dryRun) {
       '  The service_role key bypasses Row-Level Security entirely — it goes into\n' +
       '  Secret Manager here and must never be committed or sent to a browser.',
   );
+}
+
+/**
+ * Resolve and validate `USER_ID` against `cloud_sync_allowlist`.
+ *
+ * This is not convenience, it is a guard against a silent failure with no
+ * symptom. Every worker query filters on `USER_ID` explicitly (it must — the
+ * service_role key bypasses RLS), so a wrong or stale id makes the worker find
+ * zero candidate games, print "No games found", and exit **0**. On a nightly
+ * schedule that is a job which succeeds forever while doing nothing, and the only
+ * way you would notice is that your library never improves.
+ *
+ * So: look the id up when it is absent, and when it is supplied, check it is real
+ * before wiring it into a scheduled job. Also reports how many games are waiting,
+ * which is the honest answer to "how long will the backlog take".
+ */
+async function resolveUserId() {
+  const rest = async (path) => {
+    const res = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+        Prefer: 'count=exact',
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      if (res.status === 401 || res.status === 403) {
+        fail(
+          'Supabase rejected the service_role key (HTTP ' + res.status + ').\n' +
+            '  Check you copied `service_role` and not `anon` from\n' +
+            '  Project Settings → API. The anon key cannot read the allowlist.',
+        );
+      }
+      fail(`Supabase ${path} → HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
+    }
+    return res;
+  };
+
+  const res = await rest('cloud_sync_allowlist?select=user_id');
+  const rows = await res.json();
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    fail(
+      'cloud_sync_allowlist is empty, so no account is enrolled in cloud sync.\n' +
+        '  Enrol yourself first (see supabase/cloud-sync.sql), then sync once from\n' +
+        '  the app so the worker has games to read.',
+    );
+  }
+
+  if (userId) {
+    if (!rows.some((r) => r.user_id === userId)) {
+      fail(
+        `USER_ID=${userId} is not in cloud_sync_allowlist.\n` +
+          `  Enrolled ids: ${rows.map((r) => r.user_id).join(', ')}\n` +
+          '  A worker with the wrong id finds zero games and exits 0 — it would look\n' +
+          '  like a healthy nightly job doing nothing. Fix it or leave USER_ID empty\n' +
+          '  and let this script fill it in.',
+      );
+    }
+    ok(`USER_ID ${userId} is enrolled`);
+    return userId;
+  }
+
+  if (rows.length > 1) {
+    fail(
+      'cloud_sync_allowlist has more than one enrolled id, so it is ambiguous:\n' +
+        `    ${rows.map((r) => r.user_id).join('\n    ')}\n` +
+        '  Set USER_ID in worker.env to the one you want analyzed.',
+    );
+  }
+
+  const resolved = rows[0].user_id;
+  ok(`USER_ID ${resolved} (the only id in cloud_sync_allowlist)`);
+
+  // A real backlog number beats the README's worked example.
+  const games = await rest(`cloud_games?select=game_id&user_id=eq.${encodeURIComponent(resolved)}&limit=1`);
+  const total = games.headers.get('content-range')?.split('/')?.[1] ?? '?';
+  if (total === '0') {
+    info(
+      'cloud_games has 0 games for this id — sync once from the app (it syncs on\n' +
+        '            sign-in automatically) or the first run will have nothing to do.',
+    );
+  } else {
+    info(`${total} games in cloud_games — at ~32 vCPU-seconds each that is the backlog`);
+  }
+  return resolved;
+}
+
+if (!dryRun) {
+  step('resolving USER_ID against cloud_sync_allowlist');
+  userId = await resolveUserId();
 }
 
 const saEmail = `${cfg.serviceAccount}@${project}.iam.gserviceaccount.com`;
