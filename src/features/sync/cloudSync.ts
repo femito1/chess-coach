@@ -13,7 +13,6 @@ import {
   toCloudAttempt,
   toCloudGame,
   type RemoteAnalysisMeta,
-  type RemoteAttemptMeta,
   type RemoteGameMeta,
 } from './diff';
 
@@ -144,30 +143,26 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
       'game_id, depth, analyzed_at',
       userId,
     ),
-    fetchAll<RemoteAttemptMeta>(
+    // `data` (the whole PuzzleAttempt), not the metadata columns.
+    //
+    // Reconstructing an attempt from the metadata columns loses `firstSeenAt`
+    // and `msTaken`, and that broke two things at once: a restored device got
+    // `firstSeenAt` overwritten with `lastAttemptedAt`, and — because the
+    // reconstructed row never equalled the merge — every sync re-pushed every
+    // attempt forever, so the whole thing was not idempotent. Attempts are a
+    // few hundred bytes each, so fetching the real row is the honest trade:
+    // a 5 000-puzzle history is ~1 MB, once per sync, and always exact.
+    fetchAll<{ data: PuzzleAttempt }>(
       supabase,
       'cloud_puzzle_attempts',
-      'puzzle_id, attempts, solved_clean, hint_used, last_attempted_at, rating',
+      'puzzle_id, data',
       userId,
     ),
   ]);
   checkAbort(signal);
 
   const localGames = await listAllGamesLight();
-  const localAnalyses = await listAnalysesLight();
-  const localAttempts = await db.puzzleAttempts.toArray();
-
   const gamePlan = diffGames(localGames, remoteGames);
-  const analysisPlan = diffAnalyses({
-    local: localAnalyses,
-    remote: remoteAnalyses,
-    localGameStatus: new Map(localGames.map((g) => [g.id, g.analysisStatus])),
-    localGameIds: new Set(localGames.map((g) => g.id)),
-  });
-  const attemptPlan = diffAttempts(
-    localAttempts,
-    remoteAttempts.map(fromRemoteAttempt),
-  );
 
   // ---- games -------------------------------------------------------------
   const gameTotal = gamePlan.push.length + gamePlan.pull.length;
@@ -204,6 +199,26 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
   }
 
   // ---- analyses ----------------------------------------------------------
+  //
+  // The analysis plan is computed HERE, after the games phase, not alongside
+  // the game plan. `diffAnalyses` skips any cloud analysis whose game is
+  // missing locally (so an analysis can't land orphaned) — and on a fresh
+  // device every game is missing until the phase above has run. Diffing up
+  // front therefore skipped *every* analysis, and a restored device came back
+  // with its games but none of the expensive Stockfish work. Caught by
+  // `cloud-sync.mjs` asserting the restored analysis is byte-identical.
+  //
+  // Re-reading the light projection costs one IndexedDB scan and makes the
+  // "converges in a single pass" claim actually true.
+  const gamesAfterPull = await listAllGamesLight();
+  const localAnalyses = await listAnalysesLight();
+  const analysisPlan = diffAnalyses({
+    local: localAnalyses,
+    remote: remoteAnalyses,
+    localGameStatus: new Map(gamesAfterPull.map((g) => [g.id, g.analysisStatus])),
+    localGameIds: new Set(gamesAfterPull.map((g) => g.id)),
+  });
+
   const analysisTotal = analysisPlan.push.length + analysisPlan.pull.length;
   let analysisDone = 0;
   const tickAnalyses = () =>
@@ -240,6 +255,12 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
   }
 
   // ---- puzzle attempts ---------------------------------------------------
+  const localAttempts = await db.puzzleAttempts.toArray();
+  const attemptPlan = diffAttempts(
+    localAttempts,
+    remoteAttempts.map((r) => r.data),
+  );
+
   const attemptTotal = attemptPlan.push.length + attemptPlan.writeLocal.length;
   let attemptDone = 0;
   const tickAttempts = () =>
@@ -264,24 +285,6 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
 
   onProgress?.({ phase: 'done', done: 1, total: 1 });
   return { ...counts, bytesPushed, durationMs: Date.now() - startedAt };
-}
-
-function fromRemoteAttempt(r: RemoteAttemptMeta): PuzzleAttempt {
-  // The manifest carries every field of a PuzzleAttempt except `firstSeenAt`
-  // and `msTaken`, so the merge can run without downloading `data` at all —
-  // attempts are small but numerous, and this keeps a 5 000-puzzle history to
-  // one metadata request. `firstSeenAt` falls back to `last_attempted_at`,
-  // which is a safe upper bound: `mergeAttempt` takes the min, so a real
-  // earlier value on either side still wins.
-  return {
-    puzzleId: r.puzzle_id,
-    firstSeenAt: r.last_attempted_at,
-    lastAttemptedAt: r.last_attempted_at,
-    attempts: r.attempts,
-    solvedClean: r.solved_clean,
-    hintUsed: r.hint_used,
-    rating: r.rating,
-  };
 }
 
 /**

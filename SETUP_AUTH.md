@@ -12,8 +12,10 @@ the modern replacement for the deprecated "JWT template" approach. Supabase
 trusts Clerk's JWKS directly; JWT secrets are never copied between the two.
 
 Heavy user data (games, analyses, eval cache) stays in IndexedDB on the
-client. Supabase stores only the small `profiles` row, so nothing in this
-setup needs to scale with a user's game count.
+client. Supabase stores only the small `profiles` row, so nothing in steps 1-4
+needs to scale with a user's game count. Section 5 adds optional, per-account
+cloud sync for the heavy data — that one *does* scale with game count, which is
+exactly why it is gated to specific accounts.
 
 ---
 
@@ -193,6 +195,40 @@ the failure in two:
 - **It fails** → the problem is local. A malformed publishable key shows
   up as `@clerk/clerk-react: The publishableKey passed to Clerk is
   invalid` in the page-error log.
+
+## 5. Cloud sync (optional, per-account)
+
+By default Supabase holds only the small `profiles` row, and all heavy user data
+(games, analyses, puzzle progress) stays in IndexedDB on whichever device
+produced it. **Cloud sync** mirrors that heavy data to Postgres so it survives a
+cleared browser and follows you between devices.
+
+It is deliberately opt-in **per account**, enforced in the database:
+
+1. Open the **SQL Editor** in the Supabase dashboard.
+2. Paste the whole of [`supabase/cloud-sync.sql`](supabase/cloud-sync.sql) and
+   click **Run**. It is idempotent — re-running it changes nothing.
+3. The last statement prints the allowlist. You should see exactly one row, for
+   the account you want to sync. If it prints none, the lookup found no matching
+   profile; the file's closing comment explains how to insert the id by hand.
+4. Reload the app and open **Settings**. A **Cloud sync** card appears, with the
+   last run and a **Sync now** button. It appears *only* for enrolled accounts.
+
+The first sync uploads your whole reviewed library, so it can take a few minutes
+and move tens of megabytes; the card shows progress. Every sync after that moves
+only what changed.
+
+**Why the allowlist exists.** An analysis row is ~30 KB, so a thousand reviewed
+games is ~30 MB before compression. If every user of a deployed instance synced,
+Supabase's 500 MB free tier would disappear fast. Gating in RLS rather than in
+the client is the point: the publishable key ships in the browser bundle by
+design, so anyone holding it could call the REST API directly — only a database
+policy actually stops that.
+
+**What sync does not do.** There is no `delete` policy on any cloud table, so the
+mirror only ever grows. Deleting a game locally does not remove the cloud copy,
+and a later sync restores it. That is the intended behaviour for a backup; prune
+from the dashboard if you ever need to.
 
 ---
 

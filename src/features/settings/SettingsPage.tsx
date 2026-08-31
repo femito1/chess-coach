@@ -26,6 +26,7 @@ import {
 } from '@/engine/freePlayEngine';
 import { usePersistedState } from '@/lib/usePersistedState';
 import { MOVE_SOUNDS_PREF_KEY } from '@/audio/moveSounds';
+import { CloudSyncCard } from '@/features/sync/CloudSyncCard';
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
@@ -331,6 +332,8 @@ export function SettingsPage() {
        *  that collapses the card to a small "Reopen" row so it never
        *  becomes a permanent eyesore for users who don't want it.
        *  Dismissal is persisted via `Settings.extensionPromoDismissedAt`. */}
+      <CloudSyncCard />
+
       {extensionDismissedAt === undefined ? (
         <section className="card p-4 space-y-3 border-accent/40">
           <div className="flex items-start justify-between gap-3">

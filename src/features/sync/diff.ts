@@ -86,7 +86,21 @@ const emptyPlan = (): Plan => ({ push: [], pull: [] });
  * That leaves one asymmetry that does matter: whether the row has a finished
  * analysis. A game row that says `done` carries the cached accuracy and
  * brilliancy counts the Games table renders; one that says `pending` does not.
- * So when both sides have the game, the finished side wins.
+ * So when both sides have the game, the finished side generally wins.
+ *
+ * ── Except when the local side is deliberately mid-analysis ──────────────
+ *
+ * `pending` / `running` locally is not "worse information", it is a *user
+ * intent*: `requeueGame` sets exactly that state to force a re-analysis. If we
+ * pulled the cloud's `done` row over it, the game would flip back to `done`,
+ * which then makes the local game look finished to `diffAnalyses` and lets the
+ * old cloud analysis come back too — silently undoing the requeue via a path
+ * that has nothing to do with analyses. (Found exactly this way: the analysis
+ * requeue guard was correct and still unreachable, because the games phase had
+ * already rewritten the status it keys off.)
+ *
+ * `error` is different and does pull: that is a failure, not an intent, and the
+ * cloud may hold a good copy from a device where analysis succeeded.
  */
 export function diffGames(
   local: readonly LocalGameMeta[],
@@ -104,9 +118,12 @@ export function diffGames(
     }
     const localDone = g.analysisStatus === 'done';
     const remoteDone = r.analysis_status === 'done';
+    const localInProgress =
+      g.analysisStatus === 'pending' || g.analysisStatus === 'running';
+
     if (localDone && !remoteDone) plan.push.push(g.id);
-    else if (remoteDone && !localDone) plan.pull.push(g.id);
-    // Both done, or neither: equivalent for every purpose the app has.
+    else if (remoteDone && !localDone && !localInProgress) plan.pull.push(g.id);
+    // Both done, neither done, or a deliberate local requeue: leave it.
   }
 
   for (const r of remote) {

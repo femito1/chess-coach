@@ -269,9 +269,47 @@ function mergeRow(prev: ProfileRow | undefined, patch: Partial<ProfileRow> & { i
  * because all the bypass-aware code paths consume it via that interface;
  * the runtime shape is just enough to satisfy our actual call sites.
  */
+/**
+ * Cloud-sync tables, which the stub answers as "empty and not enrolled".
+ *
+ * The bypass stub throws for unknown tables on purpose — it should be loud
+ * about a call site it doesn't model. But cloud sync is mounted in `AppLayout`,
+ * so under bypass it runs in EVERY browser test, and an exception there would
+ * surface as an unhandled rejection in all of them.
+ *
+ * Answering the allowlist query with "no row" puts the sync hook into its
+ * `disabled` state, which is exactly the right behaviour for a synthetic test
+ * identity: no requests, no UI, no interference. A test that wants to exercise
+ * sync for real should drive `runCloudSync` with its own stub rather than rely
+ * on this one.
+ */
+const CLOUD_SYNC_TABLES = new Set([
+  'cloud_sync_allowlist',
+  'cloud_games',
+  'cloud_analyses',
+  'cloud_puzzle_attempts',
+]);
+
+function emptyCloudBuilder(): BypassFromBuilder {
+  const selectBuilder = {
+    eq: () => selectBuilder,
+    in: () => selectBuilder,
+    range: async () => ({ data: [], error: null }),
+    maybeSingle: async () => ({ data: null, error: null }),
+    then: undefined,
+  } as unknown as BypassSelectBuilder;
+  return {
+    select: () => selectBuilder,
+    insert: async () => ({ error: null }),
+    upsert: async () => ({ error: null }),
+    update: () => ({ eq: async () => ({ error: null }) }),
+  };
+}
+
 export function getBypassedSupabaseClient(): SupabaseClient {
   const stub = {
     from(table: string): BypassFromBuilder {
+      if (CLOUD_SYNC_TABLES.has(table)) return emptyCloudBuilder();
       if (table !== 'profiles') {
         throw new Error(`[testAuth] bypass stub does not implement table "${table}"`);
       }

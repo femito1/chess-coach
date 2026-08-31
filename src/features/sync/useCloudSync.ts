@@ -102,11 +102,23 @@ export function useCloudSync(): void {
     setPhase({ kind: 'checking' });
 
     void (async () => {
-      const { enabled, error } = await isSyncEnabled(supabase, userId);
+      // try/catch, not just the returned `error`: a Supabase client can throw
+      // synchronously from `.from()` (the E2E bypass stub does, for tables it
+      // doesn't model), and an escaping rejection here would show up as a page
+      // error in every browser test rather than as a sync state.
+      let enabled = false;
+      let error: string | undefined;
+      try {
+        const res = await isSyncEnabled(supabase, userId);
+        enabled = res.enabled;
+        error = res.error;
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      }
       if (signal.aborted) return;
       if (error) {
-        // Can't tell — most likely offline or the tables aren't created yet.
-        // Not the same as "not enrolled", so don't claim that.
+        // Can't tell — most likely offline, or the tables don't exist yet.
+        // That is not the same as "not enrolled", so don't claim that.
         setPhase({ kind: 'error', message: error });
         return;
       }

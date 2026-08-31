@@ -747,9 +747,10 @@
     "lastUpdated": "Last updated: May 2026",
     "intro": "Chess Coach is a personal chess analysis tool you run in your browser. We've kept the privacy story short on purpose: there is no Chess Coach backend that stores your data, no analytics, no advertising tracking, and no third-party data sharing.",
     "webStores": "What the web app stores",
-    "localData": "<bold>Locally in your browser (IndexedDB):</bold> the games you import, the engine evaluations Chess Coach computes for them, your repertoire trees, and which library puzzles you have solved. This data never leaves your device. The puzzle library itself is a public dataset shipped with the app — downloading it tells us nothing about you, and your solve history is not sent anywhere.",
+    "localData": "<bold>Locally in your browser (IndexedDB):</bold> the games you import, the engine evaluations Chess Coach computes for them, your repertoire trees, and which library puzzles you have solved. On most accounts this data stays on the device that produced it. The puzzle library itself is a public dataset shipped with the app — downloading it tells us nothing about you.",
     "auth": "<bold>Authentication:</bold> we use Clerk to sign you in. Clerk holds your email address and any OAuth identifiers (Google, GitHub) you choose to link. See <link>Clerk's privacy policy</link> for what they store about you.",
     "profileSync": "<bold>Profile sync (Supabase):</bold> we mirror a tiny \"profile row\" (your Clerk user id and your Chess.com username) to Supabase so different devices can recognise the same account. Game data and analyses are <em>not</em> synced — they live in IndexedDB on whichever device produced them.",
+    "cloudSync": "<bold>Cloud sync (Supabase), off by default:</bold> for specifically enabled accounts, Chess Coach also mirrors imported games, their engine analyses, and puzzle results to Supabase so they survive a cleared browser and reach your other devices. It is <em>not</em> on for an account unless it has been added to an allowlist in the database, and the database refuses the writes otherwise. When it is on, the Settings page shows a Cloud sync card with the last run and a manual trigger. Nothing is shared with anyone else either way.",
     "extStores": "What the Chrome extension stores",
     "extSyncStorage": "<bold>In <code>chrome.storage.sync</code>:</bold> your Chess.com username, the URL of your Chess Coach app, and a boolean toggle for whether to show the after-game prompt. Nothing else.",
     "extSees": "<bold>What the extension sees:</bold> only the URL and DOM of <code>chess.com</code> tabs (it has no permission for any other site by default). When you click \"Test connection\" in the options page, it will request one-time permission to fetch your configured Chess Coach URL — granted per-host with your explicit consent.",
@@ -891,5 +892,27 @@
     "nextTitle": "Next move (→)",
     "lastMove": "Last move (End)",
     "close": "Close"
+  },
+  "sync": {
+    "title": "Cloud sync",
+    "description": "Backs up your reviewed games, their engine analyses, and your puzzle progress to Supabase, so they survive a cleared browser and follow you to another device.",
+    "syncNow": "Sync now",
+    "syncing": "Syncing…",
+    "failed": "Sync failed",
+    "notYetRun": "No sync yet this session.",
+    "upToDate": "Already up to date · checked {{at}}",
+    "lastRun": "Synced at {{at}} in {{seconds}}s",
+    "games": "{{up}} games up, {{down}} down",
+    "analyses": "{{up}} analyses up, {{down}} down",
+    "puzzles": "{{up}} puzzle results up, {{down}} down",
+    "sessionTotal": "This session: {{up}} uploaded, {{down}} downloaded.",
+    "archiveNote": "The cloud copy only ever grows — deleting a game here does not remove it there, and a later sync brings it back. That is what makes it a backup; prune from the Supabase dashboard if you ever need to.",
+    "phase": {
+      "manifest": "Comparing…",
+      "games": "Games",
+      "analyses": "Analyses",
+      "attempts": "Puzzle results",
+      "done": "Finishing…"
+    }
   }
 }

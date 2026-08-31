@@ -77,6 +77,12 @@ export function PrivacyPage() {
                 components={{ bold: <strong />, em: <em /> }}
               />
             </li>
+            <li>
+              <Trans
+                i18nKey="privacy.cloudSync"
+                components={{ bold: <strong />, em: <em /> }}
+              />
+            </li>
           </ul>
 
           <h2 className="text-lg font-semibold mt-8">

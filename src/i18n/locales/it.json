@@ -747,9 +747,10 @@
     "lastUpdated": "Ultimo aggiornamento: maggio 2026",
     "intro": "Chess Coach è uno strumento personale di analisi di scacchi che gira nel tuo browser. Abbiamo scelto di tenere questa informativa breve di proposito: non c'è nessun backend di Chess Coach che memorizza i tuoi dati, niente analytics, nessun tracciamento pubblicitario, nessuna condivisione con terze parti.",
     "webStores": "Cosa salva l'app web",
-    "localData": "<bold>Localmente nel tuo browser (IndexedDB):</bold> le partite che importi, le valutazioni del motore, i tuoi alberi di repertorio e quali problemi della libreria hai risolto. Questi dati non lasciano mai il tuo dispositivo. La libreria di problemi è un dataset pubblico distribuito con l'app — scaricarla non dice nulla su di te, e la tua cronologia non viene inviata da nessuna parte.",
+    "localData": "<bold>Localmente nel tuo browser (IndexedDB):</bold> le partite che importi, le valutazioni del motore, i tuoi alberi di repertorio e quali problemi della libreria hai risolto. Sulla maggior parte degli account questi dati restano sul dispositivo che li ha prodotti. La libreria di problemi è un dataset pubblico distribuito con l'app — scaricarla non dice nulla su di te.",
     "auth": "<bold>Autenticazione:</bold> usiamo Clerk per il login. Clerk conserva il tuo indirizzo e-mail e gli identificatori OAuth (Google, GitHub) che scegli di collegare. Vedi <link>l'informativa di Clerk</link> per cosa archivia su di te.",
     "profileSync": "<bold>Sync del profilo (Supabase):</bold> rispecchiamo una piccola \"riga di profilo\" (il tuo id utente Clerk e il tuo nome utente Chess.com) su Supabase, così dispositivi diversi riconoscono lo stesso account. Le partite e le analisi <em>non</em> vengono sincronizzate — vivono nell'IndexedDB del dispositivo che le ha prodotte.",
+    "cloudSync": "<bold>Sincronizzazione cloud (Supabase), disattivata per impostazione predefinita:</bold> per gli account espressamente abilitati, Chess Coach replica anche le partite importate, le loro analisi e i risultati dei problemi su Supabase, così sopravvivono alla cancellazione del browser e raggiungono i tuoi altri dispositivi. <em>Non</em> è attiva su un account se non è stato aggiunto a una lista di autorizzazioni nel database, e altrimenti il database rifiuta le scritture. Quando è attiva, la pagina Impostazioni mostra una scheda di sincronizzazione con l'ultima esecuzione e un pulsante manuale. In nessun caso i dati sono condivisi con terzi.",
     "extStores": "Cosa salva l'estensione Chrome",
     "extSyncStorage": "<bold>In <code>chrome.storage.sync</code>:</bold> il tuo nome utente Chess.com, l'URL della tua app Chess Coach e un toggle booleano per mostrare o meno il prompt di fine partita. Nient'altro.",
     "extSees": "<bold>Cosa vede l'estensione:</bold> solo l'URL e il DOM delle schede <code>chess.com</code> (per impostazione predefinita non ha permesso su nessun altro sito). Quando clicchi \"Test connessione\" nella pagina opzioni, chiede un permesso una tantum per recuperare l'URL di Chess Coach configurato — concesso per host con il tuo consenso esplicito.",
@@ -890,6 +891,28 @@
       "sequential": "Riproduce le linee selezionate dall'alto in basso, senza saltarne alcuna.",
       "random": "Sceglie una linea a caso ogni volta, comprese quelle già fatte.",
       "repeat-until-perfect": "Continua a ciclare le linee finché ognuna non è stata giocata perfettamente almeno una volta."
+    }
+  },
+  "sync": {
+    "title": "Sincronizzazione cloud",
+    "description": "Salva le partite analizzate, le analisi del motore e i tuoi progressi sui problemi su Supabase, così sopravvivono alla cancellazione del browser e ti seguono su un altro dispositivo.",
+    "syncNow": "Sincronizza ora",
+    "syncing": "Sincronizzo…",
+    "failed": "Sincronizzazione fallita",
+    "notYetRun": "Nessuna sincronizzazione in questa sessione.",
+    "upToDate": "Già aggiornato · verificato alle {{at}}",
+    "lastRun": "Sincronizzato alle {{at}} in {{seconds}}s",
+    "games": "{{up}} partite caricate, {{down}} scaricate",
+    "analyses": "{{up}} analisi caricate, {{down}} scaricate",
+    "puzzles": "{{up}} risultati dei problemi caricati, {{down}} scaricati",
+    "sessionTotal": "Questa sessione: {{up}} caricati, {{down}} scaricati.",
+    "archiveNote": "La copia nel cloud può solo crescere — cancellare una partita qui non la rimuove là, e una sincronizzazione successiva la riporta. È questo che la rende un backup; se serve, rimuovi dal pannello Supabase.",
+    "phase": {
+      "manifest": "Confronto…",
+      "games": "Partite",
+      "analyses": "Analisi",
+      "attempts": "Risultati problemi",
+      "done": "Completamento…"
     }
   }
 }

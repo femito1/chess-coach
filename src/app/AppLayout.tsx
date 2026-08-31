@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { startAnalysisQueue } from '@/engine/queue';
 import { ProfileChip } from './ProfileChip';
 import { ProfileSyncBanner } from '@/features/auth/ProfileSyncBanner';
+import { useCloudSync } from '@/features/sync/useCloudSync';
 import { NewGamesBanner } from '@/features/import/NewGamesBanner';
 
 /** Translation-keys for nav. Kept as a typed list so the order is
@@ -32,6 +33,12 @@ export function AppLayout() {
     startAnalysisQueue();
   }, []);
 
+  // Cloud sync for the enrolled account. Mounted here (once, high in the tree)
+  // for the same reason as the profile-sync handshake: it must survive route
+  // changes, since a first upload can run for minutes. It no-ops entirely for
+  // accounts not in `cloud_sync_allowlist`.
+  useCloudSync();
+
   // Mobile menu open/closed. Drawer sits below the header on `< md`
   // viewports — at `md` and up the inline nav is rendered and this
   // state is ignored. Auto-closes whenever the route changes (the
@@ -57,7 +64,7 @@ export function AppLayout() {
           21" / ultrawide users don't get a narrow centered column
           with massive left/right gutters.
 
-          On `< md` viewports (phones), the eight nav items would wrap
+          On `< md` viewports (phones), the nav items would wrap
           past the right edge of the screen, so we render a hamburger
           button + slide-down drawer instead. The drawer is a sibling
           of the header bar (inside the same sticky <header>) so it

@@ -66,6 +66,7 @@ export const BROWSER_TESTS = [
   { name: 'mobile-audit',               file: 'scripts/test/e2e/mobile-audit.mjs',                       category: 'e2e' },
   { name: 'mobile-review',              file: 'scripts/test/e2e/mobile-review.mjs',                      category: 'e2e' },
   { name: 'puzzle-library',             file: 'scripts/test/integration/puzzle-library.mjs',             category: 'integration' },
+  { name: 'cloud-sync',                 file: 'scripts/test/integration/cloud-sync.mjs',                 category: 'integration' },
   { name: 'puzzle-auto-retry',          file: 'scripts/test/e2e/puzzle-auto-retry.mjs',                  category: 'e2e' },
   { name: 'repertoire-line-auto-retry', file: 'scripts/test/e2e/repertoire-line-auto-retry.mjs',         category: 'e2e' },
   { name: 'practice-freeplay',          file: 'scripts/test/e2e/practice-freeplay.mjs',                  category: 'e2e' },
