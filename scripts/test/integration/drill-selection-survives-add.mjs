@@ -131,17 +131,39 @@ await runBrowserTest({
     // a fixed wait that is generous on an idle machine is not generous when
     // the whole suite is competing for CPU (this test failed only inside a
     // full run for exactly that reason).
+    // Poll for BOTH halves of "the add landed", not just the first.
+    //
+    // These settle independently, and waiting only on the "not added" marker
+    // leaves a real window where the row reads as added but its checkbox has
+    // not yet re-derived to checked: the marker clears as soon as the line list
+    // rebuilds, whereas `checked` comes from the selection set, which is
+    // remapped separately once the new leaf shifts the line indices (see the
+    // index-instability note in `enumerateLines` / `remapIndices`).
+    //
+    // Under CPU contention that window is wide enough to lose: measured 1-2
+    // failures in 6 runs with the machine loaded, on this commit AND on its
+    // parent, always as `the added line joined the drill set: expected true`.
+    // So this was a latent race in the wait, not a product regression — but it
+    // is what makes this test the suite's flakiest, including in CI.
     await pollUntil(
       async () => {
-        const settled = await page.evaluate((title) => {
+        const state = await page.evaluate((title) => {
           for (const li of document.querySelectorAll('li')) {
             const label = li.querySelector('label');
             if (label?.getAttribute('title')?.trim() !== title) continue;
-            return !li.textContent.includes('not added');
+            return {
+              added: !li.textContent.includes('not added'),
+              checked: Boolean(li.querySelector('input[type=checkbox]')?.checked),
+            };
           }
-          return false;
+          return { added: false, checked: false };
         }, setup.addTitle);
-        return { done: settled, value: settled, label: `addedRowSettled=${settled}` };
+        const settled = state.added && state.checked;
+        return {
+          done: settled,
+          value: settled,
+          label: `addedRowSettled=${settled} (added=${state.added} checked=${state.checked})`,
+        };
       },
       { timeoutMs: 20_000 },
     );
