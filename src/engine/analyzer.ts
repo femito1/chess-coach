@@ -1,6 +1,6 @@
 import { Chess } from 'chess.js';
-import { analysisPool } from './pool';
-import { cachedAnalyze, cacheStats, isBookFen } from './cache';
+import { isBookFen } from './book';
+import type { AnalysisResult } from './engine';
 import { classifyMove, cpToWinrate, mateToCp, moveAccuracy } from './classify';
 import { detectMotifs } from './motifs';
 import {
@@ -10,6 +10,54 @@ import {
   extractClocks,
 } from './phase';
 import type { Analysis, Color, MoveEval } from '@/db/schema';
+
+/**
+ * The engine surface `analyzeGamePgn` needs, injectable so the analysis logic
+ * can run outside a browser.
+ *
+ * This exists so a server-side worker can reuse this file verbatim. Everything
+ * that decides what an analysis *means* — classification, motifs, phase,
+ * winrate, book detection — lives here and in its pure siblings, and none of it
+ * cares where the centipawns came from. Only the transport did: `./pool` needs
+ * `new Worker` and `./cache` imports Dexie, so a static import of either made
+ * this module unloadable under Node.
+ *
+ * The default backend is resolved by dynamic import, so those two modules are
+ * only pulled in when nobody supplies an alternative — which keeps the browser
+ * path byte-for-byte unchanged while leaving Node a way in.
+ */
+export interface EngineBackend {
+  /**
+   * Value stamped into `Analysis.engine`, identifying the evaluator — e.g.
+   * `stockfish-16-nnue` vs `stockfish-16-classical`.
+   *
+   * This used to be the hard-coded constant `'stockfish-16'`, which was
+   * inaccurate: the bundled WASM build runs with `Use NNUE` off, so every
+   * analysis was classical. Recording it honestly is what lets a stronger
+   * NNUE analysis be recognised as better than a classical one for the same
+   * game at the same depth.
+   */
+  id(): string;
+  /** Same shape as `EnginePool.analyze` and `cachedAnalyze`. */
+  analyze(fen: string, depth: number): Promise<AnalysisResult>;
+  /** UCI `ucinewgame`, to clear the transposition table between games. */
+  newGame(): Promise<void>;
+  /** Optional bookkeeping hook for a position skipped as opening book. */
+  noteBookSkip?(): void;
+}
+
+/** Browser backend: the worker pool behind the Dexie-backed eval cache. */
+async function defaultBackend(): Promise<EngineBackend> {
+  const [cache, pool] = await Promise.all([import('./cache'), import('./pool')]);
+  return {
+    id: () => pool.analysisPool().evaluatorId(),
+    analyze: (fen, depth) => cache.cachedAnalyze(fen, depth),
+    newGame: () => pool.analysisPool().newGame(),
+    noteBookSkip: () => {
+      cache.cacheStats.bookSkips++;
+    },
+  };
+}
 
 export interface AnalyzeProgress {
   ply: number;
@@ -26,7 +74,7 @@ export async function analyzeGamePgn(
   depth: number,
   onProgress?: (p: AnalyzeProgress) => void,
   signal?: { aborted: boolean },
-  opts?: { hasOpening?: boolean; timeControl?: string },
+  opts?: { hasOpening?: boolean; timeControl?: string; backend?: EngineBackend },
 ): Promise<Analysis> {
   const hasOpening = opts?.hasOpening ?? false;
   const chess = new Chess();
@@ -47,8 +95,8 @@ export async function analyzeGamePgn(
   const base = baseSecondsFromTimeControl(opts?.timeControl);
   const timeSpentPerPly = deriveTimeSpent(clocksAfter, base);
 
-  const pool = analysisPool();
-  await pool.newGame();
+  const backend = opts?.backend ?? (await defaultBackend());
+  await backend.newGame();
 
   // -- Book detection --
   // A move is "fully in book" iff both its before and after positions
@@ -88,10 +136,10 @@ export async function analyzeGamePgn(
   // finishing instantly.
   const totalTasks = needEval.size;
   let tasksDone = 0;
-  const evalByFen = new Map<string, Promise<import('./engine').AnalysisResult>>();
+  const evalByFen = new Map<string, Promise<AnalysisResult>>();
   const enqueue = (fen: string) => {
     if (evalByFen.has(fen)) return;
-    const p = cachedAnalyze(fen, depth);
+    const p = backend.analyze(fen, depth);
     p.then(() => {
       tasksDone++;
       if (totalTasks > 0) {
@@ -112,11 +160,7 @@ export async function analyzeGamePgn(
   if (totalTasks === 0 && history.length > 0) {
     onProgress?.({ ply: history.length, totalPlies: history.length });
   }
-  // Reference `pool` so that the var is recognized as used even when
-  // every call goes through `cachedAnalyze` (which dispatches via the
-  // pool internally). Keeps the explicit `await pool.newGame()` above
-  // visible without a lint complaint.
-  void pool;
+
 
   const moves: MoveEval[] = [];
   for (let i = 0; i < history.length; i++) {
@@ -136,7 +180,7 @@ export async function analyzeGamePgn(
     // for in-book plies, and the eval graph treats opening flat-zero
     // as expected (matches chess.com's review behaviour).
     if (bookMoveIdx[i]) {
-      cacheStats.bookSkips++;
+      backend.noteBookSkip?.();
       moves.push({
         ply: i + 1,
         san: move.san,
@@ -261,7 +305,7 @@ export async function analyzeGamePgn(
     gameId,
     depth,
     analyzedAt: Date.now(),
-    engine: 'stockfish-16',
+    engine: backend.id(),
     moves,
   };
 }

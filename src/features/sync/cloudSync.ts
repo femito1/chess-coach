@@ -140,7 +140,7 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
     fetchAll<RemoteAnalysisMeta>(
       supabase,
       'cloud_analyses',
-      'game_id, depth, analyzed_at',
+      'game_id, depth, analyzed_at, engine',
       userId,
     ),
     // `data` (the whole PuzzleAttempt), not the metadata columns.

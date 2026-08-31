@@ -54,6 +54,22 @@ export class EngineWorker {
   private currentJob: { cancel: () => void } | null = null;
   private currentFen: string | null = null;
   private currentDepth = 0;
+  /**
+   * Which evaluator this engine is actually using — captured from the UCI
+   * handshake rather than assumed.
+   *
+   * This matters because the bundled WASM build ships `Use NNUE` defaulting to
+   * FALSE and no network file (the .wasm is ~575 KB against a 40 MB net), so
+   * every analysis this app has ever produced used Stockfish 16's *classical*
+   * evaluator. That is a materially weaker judge of quiet positions: on a rook
+   * endgame, classical reports +0.53 where NNUE reports +3.77.
+   *
+   * `Analysis.engine` used to be the constant string 'stockfish-16', which did
+   * not distinguish the two and so silently claimed more than was true. Reading
+   * the real state here lets the analyzer stamp an honest value, and lets cloud
+   * sync prefer an NNUE analysis over a classical one for the same game.
+   */
+  private nnueEnabled = false;
 
   private async init(): Promise<void> {
     if (this.ready) return this.ready;
@@ -175,6 +191,12 @@ export class EngineWorker {
         reject(new Error('UCI handshake timeout'));
       }, 10000);
       const offReady = this.onLine((line) => {
+        // `option name Use NNUE type check default <bool>` arrives during the
+        // `uci` response. Since we never set the option, its default IS the
+        // state; if a future build defaults it on, this picks that up with no
+        // code change.
+        const nnue = /^option name Use NNUE type check default (true|false)/.exec(line);
+        if (nnue) this.nnueEnabled = nnue[1] === 'true';
         if (line === 'readyok') {
           clearTimeout(timer);
           offReady();
@@ -187,6 +209,21 @@ export class EngineWorker {
       this.send('setoption name Hash value 64');
       this.send('isready');
     });
+  }
+
+  /**
+   * Evaluator identity for `Analysis.engine`, e.g. `stockfish-16-classical`.
+   *
+   * Only meaningful after the handshake; callers should await `analyze()` or
+   * `waitReady()` first. Defaults to the classical label because that is what
+   * the current bundled build actually does.
+   */
+  evaluatorId(): string {
+    return this.nnueEnabled ? 'stockfish-16-nnue' : 'stockfish-16-classical';
+  }
+
+  isNnueEnabled(): boolean {
+    return this.nnueEnabled;
   }
 
   private send(cmd: string): void {

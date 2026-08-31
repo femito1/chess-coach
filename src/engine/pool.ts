@@ -127,6 +127,17 @@ export class EnginePool {
 
   /** Number of underlying workers currently held (may be 0 if the pool
    *  was torn down by `terminate()` and no analyze() has hit it since). */
+  /**
+   * Evaluator identity of the pool's workers, for `Analysis.engine`.
+   *
+   * All workers run the same build, so worker 0 speaks for the pool. Returns
+   * the classical label before any handshake has completed, which matches what
+   * the bundled build actually does — see `EngineWorker.evaluatorId`.
+   */
+  evaluatorId(): string {
+    return this.workers[0]?.evaluatorId() ?? 'stockfish-16-classical';
+  }
+
   get size(): number {
     return this.workers.length;
   }

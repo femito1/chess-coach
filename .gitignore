@@ -16,3 +16,6 @@ TESTING.md
 PASS*_PLAN.md
 # Agent handoff / planning docs (same convention as PASS*_PLAN.md)
 HANDOFF-*.md
+dist-worker
+worker.env
+.env.worker

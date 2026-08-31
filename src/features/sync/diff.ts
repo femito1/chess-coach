@@ -37,6 +37,10 @@ export interface RemoteAnalysisMeta {
   game_id: string;
   depth: number;
   analyzed_at: number;
+  /** `Analysis.engine`, e.g. `stockfish-16-nnue`. Older rows predate the field
+   *  and arrive null/undefined; those are treated as classical, which is what
+   *  they were. */
+  engine?: string | null;
 }
 
 export interface RemoteAttemptMeta {
@@ -60,6 +64,7 @@ export interface LocalAnalysisMeta {
   gameId: string;
   depth: number;
   analyzedAt: number;
+  engine?: string;
 }
 
 export interface Plan {
@@ -142,11 +147,12 @@ export function diffGames(
  * Analyses are the expensive artifact — the whole point of syncing — so the
  * rule is "keep the best one".
  *
- * Best means deeper first, then more recent. Depth leads because a depth-20
- * analysis is strictly more informative than a depth-16 one regardless of when
- * each was produced, and because the user can raise `engineDepth` in Settings;
- * if recency led, a shallow re-analysis on a phone would clobber a deep one
- * from a desktop.
+ * Best means NNUE over classical first, then deeper, then more recent. See
+ * `isBetter` for why the evaluator outranks depth. Depth beats recency because a
+ * depth-20 analysis is more informative than a depth-16 one regardless of when
+ * each was produced, and because `engineDepth` is user-configurable; if recency
+ * led, a shallow re-analysis on a phone would clobber a deep one from a
+ * desktop.
  *
  * ── The requeue guard ────────────────────────────────────────────────────
  *
@@ -199,21 +205,43 @@ export function diffAnalyses(args: {
 interface Ranked {
   depth: number;
   at: number;
+  nnue: boolean;
+}
+
+/**
+ * Does this analysis come from the NNUE evaluator?
+ *
+ * Absent or unrecognised means classical. That is the honest default: every
+ * analysis produced before the evaluator was recorded came from the bundled
+ * WASM build, which runs `Use NNUE` off.
+ */
+export function isNnueAnalysis(engine: string | null | undefined): boolean {
+  return typeof engine === 'string' && engine.includes('nnue');
 }
 
 function rank(x: LocalAnalysisMeta | RemoteAnalysisMeta): Ranked {
   return 'gameId' in x
-    ? { depth: x.depth, at: x.analyzedAt }
-    : { depth: x.depth, at: x.analyzed_at };
+    ? { depth: x.depth, at: x.analyzedAt, nnue: isNnueAnalysis(x.engine) }
+    : { depth: x.depth, at: x.analyzed_at, nnue: isNnueAnalysis(x.engine) };
 }
 
-/** Strictly better: deeper, or same depth and newer. */
+/**
+ * Strictly better: NNUE beats classical, then deeper, then newer.
+ *
+ * Evaluator leads depth, and that ordering is deliberate. A classical analysis
+ * at depth 20 is not better than an NNUE one at depth 18 — it is a weaker judge
+ * searching further, and it is wrong about exactly the positions that matter
+ * for coaching. Measured on a rook endgame: classical +0.53 ("equal") versus
+ * NNUE +3.77 ("winning"). Ranking depth first would let a laptop's classical
+ * re-analysis silently overwrite a server's NNUE work.
+ */
 function isBetter(
   a: LocalAnalysisMeta | RemoteAnalysisMeta,
   b: LocalAnalysisMeta | RemoteAnalysisMeta,
 ): boolean {
   const x = rank(a);
   const y = rank(b);
+  if (x.nnue !== y.nnue) return x.nnue;
   if (x.depth !== y.depth) return x.depth > y.depth;
   return x.at > y.at;
 }

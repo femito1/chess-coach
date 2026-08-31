@@ -113,9 +113,14 @@ create table if not exists public.cloud_games (
 create table if not exists public.cloud_analyses (
   user_id     text        not null,
   game_id     text        not null,
-  -- Conflict resolution, in this order: deeper analysis wins, then newer.
+  -- Conflict resolution, in this order: NNUE beats classical, then deeper,
+  -- then newer. See `isBetter` in src/features/sync/diff.ts.
   depth       int         not null,
   analyzed_at bigint      not null,
+  -- Which evaluator produced this, e.g. `stockfish-16-nnue`. Nullable because
+  -- rows written before this column existed came from the browser's classical
+  -- build; null is read as classical, which is what they were.
+  engine      text,
   move_count  int         not null,
   updated_at  timestamptz not null default now(),
   data        jsonb       not null,
@@ -138,6 +143,11 @@ create table if not exists public.cloud_puzzle_attempts (
 
 -- `user_id` leads every primary key, so the PK index already serves
 -- "everything for this user". No extra indexes needed.
+
+-- Additive migration, for a project that ran an earlier version of this file.
+-- `create table if not exists` above is a no-op on an existing table, so the
+-- new column has to be added explicitly.
+alter table public.cloud_analyses add column if not exists engine text;
 
 -- ---------------------------------------------------------------------------
 -- 4. RLS

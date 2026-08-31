@@ -6,6 +6,7 @@ import {
   diffAnalyses,
   diffAttempts,
   diffGames,
+
   mergeAttempt,
   type LocalAnalysisMeta,
   type LocalGameMeta,
@@ -21,16 +22,21 @@ const rg = (game_id: string, analysis_status: string): RemoteGameMeta => ({
   game_id,
   analysis_status,
 });
-const la = (gameId: string, depth: number, analyzedAt: number): LocalAnalysisMeta => ({
-  gameId,
-  depth,
-  analyzedAt,
-});
-const ra = (game_id: string, depth: number, analyzed_at: number): RemoteAnalysisMeta => ({
-  game_id,
-  depth,
-  analyzed_at,
-});
+const la = (
+  gameId: string,
+  depth: number,
+  analyzedAt: number,
+  engine?: string,
+): LocalAnalysisMeta => ({ gameId, depth, analyzedAt, engine });
+const ra = (
+  game_id: string,
+  depth: number,
+  analyzed_at: number,
+  engine?: string | null,
+): RemoteAnalysisMeta => ({ game_id, depth, analyzed_at, engine });
+
+const NNUE = 'stockfish-16-nnue';
+const CLASSICAL = 'stockfish-16-classical';
 
 function analysisArgs(
   local: LocalAnalysisMeta[],
@@ -170,6 +176,51 @@ describe('diffAnalyses', () => {
     expect(diffAnalyses(analysisArgs([la('a', 16, 100)], [ra('a', 16, 100)]))).toEqual({
       push: [],
       pull: [],
+    });
+  });
+
+  describe('evaluator outranks depth', () => {
+    // The bundled WASM build runs `Use NNUE` off, so every browser analysis is
+    // classical — a materially weaker judge of quiet positions (measured: a rook
+    // endgame at +0.53 classical vs +3.77 NNUE). A deeper classical search is
+    // therefore NOT better than a shallower NNUE one, and ranking depth first
+    // would let a laptop silently overwrite the server's stronger work.
+    it('prefers NNUE over classical even at lower depth', () => {
+      expect(
+        diffAnalyses(analysisArgs([la('a', 12, 1, NNUE)], [ra('a', 24, 999, CLASSICAL)])),
+      ).toEqual({ push: ['a'], pull: [] });
+      expect(
+        diffAnalyses(analysisArgs([la('a', 24, 999, CLASSICAL)], [ra('a', 12, 1, NNUE)])),
+      ).toEqual({ push: [], pull: ['a'] });
+    });
+
+    it('treats a missing engine as classical', () => {
+      // Rows written before the evaluator was recorded came from the classical
+      // build; reading null as classical is the honest default, not a guess.
+      expect(
+        diffAnalyses(analysisArgs([la('a', 16, 1, NNUE)], [ra('a', 16, 999, null)])),
+      ).toEqual({ push: ['a'], pull: [] });
+      expect(
+        diffAnalyses(analysisArgs([la('a', 16, 1)], [ra('a', 16, 2, NNUE)])),
+      ).toEqual({ push: [], pull: ['a'] });
+    });
+
+    it('falls back to depth when both are NNUE', () => {
+      expect(
+        diffAnalyses(analysisArgs([la('a', 20, 1, NNUE)], [ra('a', 18, 999, NNUE)])),
+      ).toEqual({ push: ['a'], pull: [] });
+    });
+
+    it('falls back to recency when evaluator and depth match', () => {
+      expect(
+        diffAnalyses(analysisArgs([la('a', 18, 500, NNUE)], [ra('a', 18, 100, NNUE)])),
+      ).toEqual({ push: ['a'], pull: [] });
+    });
+
+    it('does nothing when both sides are the same NNUE analysis', () => {
+      expect(
+        diffAnalyses(analysisArgs([la('a', 18, 7, NNUE)], [ra('a', 18, 7, NNUE)])),
+      ).toEqual({ push: [], pull: [] });
     });
   });
 
