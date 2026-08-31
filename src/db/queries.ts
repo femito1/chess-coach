@@ -607,6 +607,12 @@ export async function requeueGamesByScope(scope: RequeueScope): Promise<number> 
       await db.games.update(g.id, {
         analysisStatus: 'pending',
         analysisError: undefined,
+        // Deliberate, user-initiated "redo these", so it earns the sync requeue
+        // guard. Deliberately NOT stamped by `resetRunningToPending` (crash
+        // recovery), `requeueStaleErrors` or `requeueAllErrors`: those want a
+        // working analysis, and a cloud copy is exactly that, so suppressing the
+        // pull there would be a loss rather than a protection.
+        requeuedAt: now,
       });
       await db.analyses.delete(g.id);
     }
@@ -629,7 +635,15 @@ export async function requeueAllErrors(): Promise<number> {
 }
 
 export async function requeueGame(gameId: string): Promise<void> {
-  await db.games.update(gameId, { analysisStatus: 'pending', analysisError: undefined });
+  // `requeuedAt` is what lets cloud sync distinguish this from a game that was
+  // simply never analyzed — without it the sync guard blocks every pull. Stamped
+  // BEFORE deleting the analysis so a sync racing this can never see the game
+  // pending with no stamp.
+  await db.games.update(gameId, {
+    analysisStatus: 'pending',
+    analysisError: undefined,
+    requeuedAt: Date.now(),
+  });
   await db.analyses.delete(gameId);
 }
 

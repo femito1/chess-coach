@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { db, type Analysis, type Game, type PuzzleAttempt } from '@/db/schema';
 import { listAllGamesLight, listAnalysesLight } from '@/db/queries';
+import { computeAccuracy, countUserBrilliancies } from '@/engine/analyzer';
 import {
   BATCH_ANALYSES,
   BATCH_ATTEMPTS,
@@ -38,6 +39,10 @@ export interface SyncCounts {
   analysesPulled: number;
   attemptsPushed: number;
   attemptsPulled: number;
+  /** Games whose local `analysisStatus` a pulled analysis settled to `done`.
+   *  Not a transfer count — it is how many games the local queue no longer has
+   *  to re-analyze — so `countsTotal` deliberately leaves it out. */
+  gamesSettled: number;
 }
 
 export interface SyncResult extends SyncCounts {
@@ -54,6 +59,7 @@ export const emptyCounts = (): SyncCounts => ({
   analysesPulled: 0,
   attemptsPushed: 0,
   attemptsPulled: 0,
+  gamesSettled: 0,
 });
 
 export function countsTotal(c: SyncCounts): number {
@@ -217,6 +223,7 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
     remote: remoteAnalyses,
     localGameStatus: new Map(gamesAfterPull.map((g) => [g.id, g.analysisStatus])),
     localGameIds: new Set(gamesAfterPull.map((g) => g.id)),
+    localRequeuedAt: new Map(gamesAfterPull.map((g) => [g.id, g.requeuedAt])),
   });
 
   const analysisTotal = analysisPlan.push.length + analysisPlan.pull.length;
@@ -240,6 +247,11 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
     for (const _ of rows) tickAnalyses();
   }
 
+  // Games whose local status still says they need analysing, so a pulled analysis
+  // can settle them. Read once rather than per chunk.
+  const statusBefore = new Map(gamesAfterPull.map((g) => [g.id, g.analysisStatus]));
+  const colorById = new Map(gamesAfterPull.map((g) => [g.id, g.userColor]));
+
   for (const ids of chunk(analysisPlan.pull, BATCH_ANALYSES)) {
     checkAbort(signal);
     const { data, error } = await supabase
@@ -250,6 +262,40 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
     if (error) throw new Error(`pull analyses: ${describe(error)}`);
     const rows = (data ?? []).map((r) => (r as { data: Analysis }).data);
     if (rows.length > 0) await db.analyses.bulkPut(rows);
+
+    // ---- settle the game rows the analyses just answered -----------------
+    //
+    // Writing the analysis alone is not enough, and the gap was invisible: the
+    // game stays `pending`, so the local queue analyses it AGAIN — spending
+    // hours reproducing work that just arrived, and clobbering a depth-18 NNUE
+    // analysis with a shallower local one, which the next sync then has to pull
+    // back. Two full round trips to converge on what we already had.
+    //
+    // `accuracy` and `brilliantCount` are recomputed here rather than read from
+    // `cloud_games` because that row is only pulled when the game itself is a
+    // pull candidate, which it usually is not — the local copy is fine. They are
+    // derived from the analysis we just stored, by the same functions the queue
+    // uses, so the dashboard tiles agree either way.
+    const settle = rows.filter((a) => {
+      const st = statusBefore.get(a.gameId);
+      return st !== undefined && st !== 'done';
+    });
+    if (settle.length > 0) {
+      await db.transaction('rw', db.games, async () => {
+        for (const a of settle) {
+          const color = colorById.get(a.gameId);
+          await db.games.update(a.gameId, {
+            analysisStatus: 'done',
+            analysisError: undefined,
+            accuracy: computeAccuracy(a.moves),
+            ...(color ? { brilliantCount: countUserBrilliancies(a.moves, color) } : {}),
+          });
+          statusBefore.set(a.gameId, 'done');
+        }
+      });
+      counts.gamesSettled += settle.length;
+    }
+
     counts.analysesPulled += rows.length;
     for (const _ of rows) tickAnalyses();
   }

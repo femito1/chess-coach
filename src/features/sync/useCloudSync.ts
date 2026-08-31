@@ -65,6 +65,7 @@ function buildSyncStore() {
           analysesPulled: s.session.analysesPulled + c.analysesPulled,
           attemptsPushed: s.session.attemptsPushed + c.attemptsPushed,
           attemptsPulled: s.session.attemptsPulled + c.attemptsPulled,
+          gamesSettled: s.session.gamesSettled + c.gamesSettled,
         },
       })),
   }));

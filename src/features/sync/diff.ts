@@ -154,7 +154,7 @@ export function diffGames(
  * led, a shallow re-analysis on a phone would clobber a deep one from a
  * desktop.
  *
- * ── The requeue guard ────────────────────────────────────────────────────
+ * ── The requeue guard, and why status alone is not enough ────────────────
  *
  * `requeueGame` deliberately DELETES the local analysis and sets the game back
  * to `pending` so the engine redoes it. To a naive diff that looks exactly
@@ -162,9 +162,30 @@ export function diffGames(
  * would download the very row the user just threw away — silently undoing the
  * requeue, every time.
  *
- * So a pull is suppressed while the local game is `pending` or `running`. Once
- * the re-analysis finishes, the local row exists again and the normal
- * depth/recency comparison takes over and pushes it up.
+ * The guard originally keyed on status alone: no pull while `pending` or
+ * `running`. That was correct while every writer was a device that analyzed its
+ * own games — "pending here but analyzed in the cloud" could only mean a requeue.
+ *
+ * **The off-laptop worker broke that assumption**, and the failure was total. A
+ * game that has simply never been analyzed on this device is also `pending`, and
+ * once a server analyzes games the laptop never touched that is the *normal*
+ * case, not an edge case. Observed: 1 785 games analyzed at depth 18 in the
+ * cloud, every one of them `pending` locally, and sync pulled **nothing** while
+ * the laptop re-analyzed the whole library itself. The sync UI truthfully
+ * reported the cloud analyses existed, which made it look like a transfer bug.
+ *
+ * So the guard now needs to tell "pending because the user threw an analysis
+ * away" from "pending because nothing has ever analyzed it". `Game.requeuedAt`
+ * is that discriminator, and comparing it against the remote analysis's
+ * timestamp gets all three cases right:
+ *
+ *   - never requeued (no stamp)            → pull; there is nothing to protect
+ *   - requeued, remote analysis is OLDER   → suppress; this is the discarded row
+ *   - requeued, remote analysis is NEWER   → pull; someone else did the work the
+ *                                            requeue asked for, and better
+ *
+ * That last case matters on a device whose own queue is idle: suppressing it
+ * would strand the game `pending` forever.
  */
 export function diffAnalyses(args: {
   local: readonly LocalAnalysisMeta[];
@@ -175,8 +196,12 @@ export function diffAnalyses(args: {
    *  never imported is skipped — the game itself pulls first, and the next
    *  sync picks up its analysis. Keeps an analysis from arriving orphaned. */
   localGameIds: ReadonlySet<string>;
+  /** `Game.requeuedAt` per game id, absent for games never requeued. The
+   *  discriminator that stops the requeue guard from blocking every
+   *  never-analyzed game — see the note above. */
+  localRequeuedAt: ReadonlyMap<string, number | undefined>;
 }): Plan {
-  const { local, remote, localGameStatus, localGameIds } = args;
+  const { local, remote, localGameStatus, localGameIds, localRequeuedAt } = args;
   const plan = emptyPlan();
   const remoteById = new Map(remote.map((r) => [r.game_id, r]));
   const localById = new Map(local.map((a) => [a.gameId, a]));
@@ -195,7 +220,13 @@ export function diffAnalyses(args: {
     if (localById.has(r.game_id)) continue;
     if (!localGameIds.has(r.game_id)) continue;
     const status = localGameStatus.get(r.game_id);
-    if (status === 'pending' || status === 'running') continue; // requeue guard
+    if (status === 'pending' || status === 'running') {
+      const requeuedAt = localRequeuedAt.get(r.game_id);
+      // Only a deliberate requeue earns the guard, and only against analyses
+      // that predate it. `>=` rather than `>` so an analysis stamped in the same
+      // millisecond as the requeue is treated as the discarded one.
+      if (requeuedAt !== undefined && requeuedAt >= r.analyzed_at) continue;
+    }
     plan.pull.push(r.game_id);
   }
 

@@ -61,6 +61,20 @@ export interface Game {
   importedAt: number;
   analysisStatus: AnalysisStatus;
   analysisError?: string;
+  /**
+   * When this game was last deliberately requeued (`requeueGame` /
+   * `requeueGamesByScope`), if ever.
+   *
+   * Exists solely so cloud sync can tell "pending because the user threw an
+   * analysis away" from "pending because nothing has ever analyzed it". Those look
+   * identical from `analysisStatus` alone, and conflating them made sync refuse to
+   * pull any analysis the off-laptop worker produced — see the requeue-guard note
+   * in `src/features/sync/diff.ts`.
+   *
+   * Not indexed, so it needs no Dexie version bump: it is read via the
+   * `listAllGamesLight` projection, never queried on.
+   */
+  requeuedAt?: number;
   accuracy?: { white: number; black: number };
   /** Cached per-game stats derived from PGN clocks at analysis time so
    *  the dashboard's "Hours played" tile doesn't have to re-parse every

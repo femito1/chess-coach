@@ -42,6 +42,7 @@ function analysisArgs(
   local: LocalAnalysisMeta[],
   remote: RemoteAnalysisMeta[],
   games: Array<[string, AnalysisStatus]> = [],
+  requeuedAt: Array<[string, number]> = [],
 ) {
   const ids = new Set<string>([
     ...local.map((a) => a.gameId),
@@ -50,7 +51,13 @@ function analysisArgs(
   ]);
   const status = new Map<string, AnalysisStatus>(games);
   for (const id of ids) if (!status.has(id)) status.set(id, 'done');
-  return { local, remote, localGameStatus: status, localGameIds: ids };
+  return {
+    local,
+    remote,
+    localGameStatus: status,
+    localGameIds: ids,
+    localRequeuedAt: new Map<string, number>(requeuedAt),
+  };
 }
 
 /* =======================================================================
@@ -226,12 +233,47 @@ describe('diffAnalyses', () => {
 
   describe('requeue guard', () => {
     it('does not resurrect an analysis for a game the user requeued', () => {
-      // `requeueGame` deletes the local analysis and sets the game to pending.
-      // Pulling here would silently undo that, every single sync.
+      // `requeueGame` deletes the local analysis, sets the game to pending, and
+      // stamps `requeuedAt`. Pulling the row they just threw away would silently
+      // undo that, every single sync. The remote analysis here predates the
+      // requeue, which is what identifies it as that row.
       for (const status of ['pending', 'running'] as AnalysisStatus[]) {
-        const plan = diffAnalyses(analysisArgs([], [ra('a', 16, 100)], [['a', status]]));
+        const plan = diffAnalyses(
+          analysisArgs([], [ra('a', 16, 100)], [['a', status]], [['a', 200]]),
+        );
         expect(plan.pull, `status=${status}`).toEqual([]);
       }
+    });
+
+    it('PULLS a pending game that was never analyzed here', () => {
+      // The regression that broke the off-laptop worker in practice.
+      //
+      // Before `requeuedAt` existed, the guard keyed on status alone. But a game
+      // that has simply never been analyzed on this device is ALSO `pending`, and
+      // that is the normal case once a server analyzes games the laptop never
+      // touched: 1 785 games analyzed in the cloud, every one of them `pending`
+      // locally, and sync refused to pull a single analysis while the laptop
+      // ground through re-analyzing all of them itself.
+      //
+      // No `requeuedAt` stamp means it was never requeued, so there is nothing to
+      // protect and the cloud analysis is pure gain.
+      for (const status of ['pending', 'running'] as AnalysisStatus[]) {
+        const plan = diffAnalyses(
+          analysisArgs([], [ra('fresh', 18, 100, NNUE)], [['fresh', status]]),
+        );
+        expect(plan.pull, `status=${status}`).toEqual(['fresh']);
+      }
+    });
+
+    it('pulls an analysis produced AFTER the requeue', () => {
+      // Requeued at 200, then the server analyzed it at 900. That is new work,
+      // not the row the user discarded — exactly what they asked for, done better
+      // elsewhere. Suppressing it would strand the game pending forever on a
+      // device whose queue is idle.
+      const plan = diffAnalyses(
+        analysisArgs([], [ra('a', 18, 900, NNUE)], [['a', 'pending']], [['a', 200]]),
+      );
+      expect(plan.pull).toEqual(['a']);
     });
 
     it('resumes normal behaviour once the re-analysis lands', () => {
@@ -258,6 +300,7 @@ describe('diffAnalyses', () => {
       remote: [ra('ghost', 16, 100)],
       localGameStatus: new Map(),
       localGameIds: new Set(),
+      localRequeuedAt: new Map(),
     });
     expect(plan.pull).toEqual([]);
   });
@@ -505,6 +548,7 @@ describe('toCloudAnalysis', () => {
       remote: [{ game_id: row.game_id, depth: row.depth, analyzed_at: row.analyzed_at, engine: row.engine }],
       localGameStatus: new Map([['g1', 'done' as AnalysisStatus]]),
       localGameIds: new Set(['g1']),
+      localRequeuedAt: new Map(),
     });
     expect(plan).toEqual({ push: [], pull: [] });
   });

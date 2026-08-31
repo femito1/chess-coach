@@ -144,6 +144,26 @@ sits at the top of the run loop, so the current analysis finishes and only the
 *next* game is withheld. The store still reports `running: true` with a
 `currentGameId` while paused.
 
+**A cloud analysis for a game this device never analyzed must still pull.** The
+requeue guard in `diffAnalyses` originally suppressed any pull while the local game
+was `pending` or `running`, because `requeueGame` deletes the local analysis and
+sets `pending` — and pulling would undo that. That was sound while every writer
+analyzed its own games. The off-laptop worker broke it completely: a
+never-analyzed game is *also* `pending`, and once a server analyzes games the
+laptop never touched that is the normal case. Observed in production — 1 785 games
+analyzed at depth 18 in the cloud, all `pending` locally, **zero** analyses pulled,
+while the laptop re-analyzed the whole library. `Game.requeuedAt` is the
+discriminator: no stamp means nothing to protect, a stamp older than the remote
+analysis means someone did the work better elsewhere.
+
+**Pulling an analysis also settles the game row.** Writing the analysis alone left
+`analysisStatus: 'pending'`, so the local queue re-analyzed a game whose analysis
+had just arrived and clobbered depth-18 NNUE with a shallower local pass — which
+the next sync then pulled back. `accuracy` and `brilliantCount` are recomputed from
+the pulled analysis because `cloud_games` is only fetched when the *game* is a pull
+candidate, which it usually isn't. Both halves pinned separately by
+`cloud-sync.mjs` § 5b.
+
 **Opening a review preempts the queue.** `requestAnalysisNow(gameId)` in
 `queue.ts` puts a game at the front and aborts whatever is running; the review
 page calls it whenever it lands on a game with no analysis row. Without it the
