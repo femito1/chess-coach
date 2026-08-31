@@ -78,7 +78,19 @@ await runBrowserTest({
     await sleep(1200);
     const drawerOk = await exerciseHamburger(page);
     expect(drawerOk.open, 'drawer opened').toBe(true);
-    expect(drawerOk.items, 'drawer item count').toBeAtLeast(8);
+    // Compare against the nav definition rather than a literal. The point of
+    // this check is "the drawer surfaces EVERY nav item", and a hard-coded
+    // count doesn't say that — it says "8", which went stale the moment the
+    // Weaknesses item was removed (8 -> 7) and failed for a reason that had
+    // nothing to do with the drawer.
+    const navItemCount = await page.evaluate(async () => {
+      const { NAV_ITEMS } = await import('/src/app/AppLayout.tsx');
+      return NAV_ITEMS.length;
+    });
+    expect(navItemCount, 'nav definition is non-empty').toBeAtLeast(1);
+    expect(drawerOk.items, `drawer shows all ${navItemCount} nav items`).toBe(
+      navItemCount,
+    );
     expect(drawerOk.closed, 'drawer closed after second click').toBe(true);
     // Re-open and shoot so /tmp/mobile-360-drawer-open.png shows the
     // drawer in its visible state (the test above closes it again to

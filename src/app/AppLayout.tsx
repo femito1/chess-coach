@@ -12,7 +12,11 @@ import { NewGamesBanner } from '@/features/import/NewGamesBanner';
  *  stable and a missing translation surfaces at compile time as a
  *  TypeScript error rather than a runtime "key.path" string. The
  *  `to` paths are language-agnostic — only the label is translated. */
-const NAV_ITEMS: { to: string; key: string }[] = [
+/** Exported so `scripts/test/e2e/mobile-audit.mjs` can assert the mobile
+ *  drawer surfaces *every* nav item, rather than hard-coding a count that
+ *  silently goes stale whenever this list changes (it did: removing the
+ *  Weaknesses item took the list from 8 to 7 and broke that assertion). */
+export const NAV_ITEMS: { to: string; key: string }[] = [
   { to: '/dashboard', key: 'nav.dashboard' },
   { to: '/import', key: 'nav.import' },
   { to: '/games', key: 'nav.games' },
