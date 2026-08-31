@@ -1,6 +1,11 @@
 // Phase-2 smoke test: pushes a PGN with %clk through the full analyzer,
 // verifies motifs/phase/clocks land in the Analysis record, and exercises
-// the aggregator + puzzle generator + repertoire store.
+// the mistake aggregator + repertoire store.
+//
+// Puzzle generation used to be exercised here too. The Puzzles page now
+// serves the bundled Lichess corpus instead of mining the user's own games,
+// so that generator is gone; the replacement has its own coverage in
+// `puzzle-library.mjs` plus the unit tier.
 
 import { runBrowserTest, expect } from '../harness.mjs';
 
@@ -28,10 +33,7 @@ await runBrowserTest({
     const { db } = await import('/src/db/schema.ts');
     const { analyzeGamePgn, computeAccuracy } = await import('/src/engine/analyzer.ts');
     const { aggregateMistakes } = await import(
-      '/src/features/weaknesses/aggregate.ts'
-    );
-    const { selectPuzzleCandidates, buildPuzzle } = await import(
-      '/src/features/puzzles/generate.ts'
+      '/src/features/puzzles/mistakes.ts'
     );
     const {
       createRepertoire,
@@ -50,14 +52,12 @@ await runBrowserTest({
       'rw',
       db.games,
       db.analyses,
-      db.puzzles,
       db.repertoires,
       db.repertoireNodes,
       db.repertoireCards,
       async () => {
         await db.games.clear();
         await db.analyses.clear();
-        await db.puzzles.clear();
         await db.repertoires.clear();
         await db.repertoireNodes.clear();
         await db.repertoireCards.clear();
@@ -105,13 +105,6 @@ await runBrowserTest({
     const analyses = new Map((await db.analyses.toArray()).map((a) => [a.gameId, a]));
     const agg = aggregateMistakes(games, analyses);
 
-    // Puzzle generation.
-    const cands = selectPuzzleCandidates(game, analysis, 100);
-    const puzzles = cands
-      .map((c) => buildPuzzle(game, analysis, c.ply, c.motifs))
-      .filter(Boolean);
-    for (const p of puzzles) await db.puzzles.put(p);
-
     // Repertoire round-trip.
     const rep = await createRepertoire({ name: 'Test rep', color: 'white' });
     const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -133,14 +126,6 @@ await runBrowserTest({
           endgame: agg.byPhase.endgame.count,
         },
       },
-      puzzleCount: puzzles.length,
-      puzzleSample: puzzles[0]
-        ? {
-            fen: puzzles[0].fen,
-            solutionSan: puzzles[0].solutionSan,
-            motifs: puzzles[0].motifs,
-          }
-        : null,
       repertoire: {
         id: rep.id,
         rootChildren: kids.map((k) => k.moveSan),

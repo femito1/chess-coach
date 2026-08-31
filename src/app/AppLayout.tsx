@@ -16,7 +16,6 @@ const NAV_ITEMS: { to: string; key: string }[] = [
   { to: '/dashboard', key: 'nav.dashboard' },
   { to: '/import', key: 'nav.import' },
   { to: '/games', key: 'nav.games' },
-  { to: '/weaknesses', key: 'nav.weaknesses' },
   { to: '/puzzles', key: 'nav.puzzles' },
   { to: '/repertoire', key: 'nav.repertoire' },
   { to: '/openings', key: 'nav.openings' },
@@ -45,7 +44,7 @@ export function AppLayout() {
       {/* Tightened chrome: the page used to ship with `h-14` (56 px)
           header + `py-8` (64 px combined) main padding, which pushed
           the first row of every page ~120 px below the viewport top.
-          On data-dense pages (Review, Weaknesses, Puzzles) that left
+          On data-dense pages (Review, Puzzles, Repertoire) that left
           the actual board / first card cramped against the bottom of
           the viewport. Slimming the header to `h-12` and the main
           padding to `pt-5 pb-12` reclaims ~24 px above the fold
@@ -68,12 +67,16 @@ export function AppLayout() {
             <span className="text-accent">♞</span> {t('nav.appName')}
           </Link>
           {/* Desktop inline nav: visible at `lg` and up (1024 px). The
-              eight items + logo + profile chip need ≥ ~880 px to fit on
-              one row; at the previous `md:` (768 px) breakpoint the
-              header overflowed by ~114 px and pushed every page off the
-              right edge in tablet portrait. Audited via the
-              `mobile-audit` test across 360 / 375 / 390 / 768 / Pixel-7
-              viewports. */}
+              items + logo + profile chip need ≥ ~880 px to fit on one
+              row; at the previous `md:` (768 px) breakpoint the header
+              overflowed by ~114 px and pushed every page off the right
+              edge in tablet portrait. Audited via the `mobile-audit`
+              test across 360 / 375 / 390 / 768 / Pixel-7 viewports.
+
+              Dropping the Weaknesses item took this from eight entries
+              to seven, so there is now more headroom at `lg` than the
+              audit measured — the breakpoint is deliberately left where
+              it is rather than lowered on an untested margin. */}
           <nav className="hidden lg:flex items-center gap-1 text-sm">
             {NAV_ITEMS.map((item) => (
               <NavItem key={item.to} to={item.to}>

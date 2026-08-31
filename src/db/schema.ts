@@ -560,11 +560,54 @@ export interface PositionNote {
   gameIds?: string[];
 }
 
+/* =======================================================================
+ *  Puzzle library attempts
+ * =======================================================================
+ *
+ *  Progress against the bundled Lichess puzzle corpus (see
+ *  `src/features/puzzles/corpus.ts`).
+ *
+ *  Only the user's own progress is persisted here — never puzzle content.
+ *  The corpus ships as immutable, content-hashed TSV shards under
+ *  `public/puzzles/<buildId>/`, so it's already cached by the browser and
+ *  by Cloudflare; copying it into IndexedDB would duplicate megabytes for
+ *  nothing and force a migration on every corpus refresh.
+ *
+ *  Deliberately stores raw attempt facts rather than an SM-2 schedule.
+ *  Spaced repetition can be layered on top later by deriving a schedule
+ *  from these fields, with no data migration — whereas baking `SrsState`
+ *  in now would commit us to one algorithm before we know the page is
+ *  even used that way.
+ */
+export interface PuzzleAttempt {
+  /** Lichess puzzle id (5 chars) — primary key. */
+  puzzleId: string;
+  firstSeenAt: number;
+  lastAttemptedAt: number;
+  /** Total times this puzzle has been served and answered. */
+  attempts: number;
+  /** True iff solved on the first try with no hint and no wrong move.
+   *  This — not `attempts > 0` — is what retires a puzzle from the queue,
+   *  so a puzzle you fumbled comes back around. */
+  solvedClean: boolean;
+  /** Whether a hint was ever used on this puzzle. Kept separate from
+   *  `solvedClean` so the UI can distinguish "solved with help" from
+   *  "failed" when showing history. */
+  hintUsed: boolean;
+  /** Wall-clock ms from first render to solve, on the most recent
+   *  attempt. Absent when the user navigated away mid-puzzle. */
+  msTaken?: number;
+  /** Rating of the puzzle at attempt time, denormalized so progress
+   *  stats don't need to re-fetch shards to know what you solved. */
+  rating: number;
+}
+
 export class CoachDB extends Dexie {
   games!: EntityTable<Game, 'id'>;
   analyses!: EntityTable<Analysis, 'gameId'>;
   settings!: EntityTable<Settings, 'key'>;
   puzzles!: EntityTable<Puzzle, 'id'>;
+  puzzleAttempts!: EntityTable<PuzzleAttempt, 'puzzleId'>;
   repertoires!: EntityTable<Repertoire, 'id'>;
   repertoireNodes!: EntityTable<RepertoireNode, 'id'>;
   repertoireCards!: EntityTable<RepertoireCard, 'id'>;
@@ -802,6 +845,42 @@ export class CoachDB extends Dexie {
       analyses: 'gameId, analyzedAt, depth',
       settings: 'key',
       puzzles: 'id, gameId, generatedAt, *motifs, *tags, [srs.dueAt+id]',
+      repertoires: 'id, color, updatedAt',
+      repertoireNodes: 'id, repertoireId, fen, parentFen',
+      repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',
+      repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
+      notes: 'fenKey, updatedAt',
+      evalCache: 'key, fen, depth, savedAt',
+      importRecords:
+        'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
+    });
+
+    // v12: adds `puzzleAttempts` for the rebuilt Puzzles page, which now
+    // serves the bundled Lichess corpus instead of positions mined from
+    // the user's own games.
+    //
+    // No upgrade hook: this only ADDS a store, and Dexie creates new
+    // object stores on version bump without touching existing ones.
+    //
+    // The legacy `puzzles` store is deliberately left in the schema even
+    // though nothing writes it any more. Dropping a store destroys its
+    // rows irreversibly, and a user who liked their old
+    // generated-from-your-blunders puzzle history would have no way back.
+    // It costs nothing to keep; remove it in a later version once the new
+    // page has clearly replaced it.
+    this.version(12).stores({
+      games:
+        'id, url, username, endTime, analysisStatus, timeClass, eco, result',
+      analyses: 'gameId, analyzedAt, depth',
+      settings: 'key',
+      puzzles: 'id, gameId, generatedAt, *motifs, *tags, [srs.dueAt+id]',
+      // NOTE: `solvedClean` is deliberately NOT indexed. IndexedDB cannot
+      // use booleans as keys — Dexie silently skips such rows rather than
+      // erroring, so a `where('solvedClean')` query would quietly return
+      // nothing. The table only ever holds puzzles the user has actually
+      // attempted (thousands, not the 191k corpus), so the solved-set is
+      // built with a full scan + JS filter in `attempts.ts` instead.
+      puzzleAttempts: 'puzzleId, lastAttemptedAt, rating',
       repertoires: 'id, color, updatedAt',
       repertoireNodes: 'id, repertoireId, fen, parentFen',
       repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',

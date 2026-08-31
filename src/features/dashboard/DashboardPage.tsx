@@ -19,10 +19,18 @@ export function DashboardPage() {
   // writes through `useLiveQuery`.
   const counts = useThrottledLiveQuery(() => countByStatus(), [], 1500);
   const games = useThrottledLiveQuery(() => listGamesLight(), [], 1500);
-  const duePuzzles = useThrottledLiveQuery(
+  // Puzzles solved from the bundled library. Replaces the old
+  // "due puzzles" count, which was an SM-2 schedule over positions mined
+  // from the user's own blunders — a model the Puzzles page no longer
+  // uses. `puzzleAttempts` only holds puzzles actually attempted, so this
+  // scan is over thousands of rows at most, not the 191k corpus.
+  const solvedPuzzles = useThrottledLiveQuery(
     async () => {
-      const ps = await db.puzzles.toArray();
-      return ps.filter((p) => isDue(p.srs)).length;
+      let n = 0;
+      await db.puzzleAttempts.each((a) => {
+        if (a.solvedClean) n++;
+      });
+      return n;
     },
     [],
     1500,
@@ -97,21 +105,17 @@ export function DashboardPage() {
         onRetryErrors={() => void requeueAllErrors()}
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <Link to="/weaknesses" className="card p-4 hover:border-accent/60 transition-colors">
-          <div className="text-xs text-text-muted">{t('dashboard.studyCards.study')}</div>
-          <div className="text-lg font-semibold">{t('dashboard.studyCards.weaknesses')}</div>
-          <div className="text-xs text-text-muted mt-1">
-            {t('dashboard.studyCards.weaknessesDesc')}
-          </div>
-        </Link>
+      {/* Two study cards since the Weaknesses page was removed — its
+          diagnosis now feeds the Puzzles page's Recommended tab rather
+          than a standalone report. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Link to="/puzzles" className="card p-4 hover:border-accent/60 transition-colors">
           <div className="text-xs text-text-muted">{t('dashboard.studyCards.drill')}</div>
           <div className="text-lg font-semibold">
             {t('dashboard.studyCards.puzzles')}{' '}
-            {duePuzzles ? (
+            {solvedPuzzles ? (
               <span className="text-accent">
-                {t('dashboard.studyCards.puzzlesDue', { count: duePuzzles })}
+                {t('dashboard.studyCards.puzzlesSolved', { count: solvedPuzzles })}
               </span>
             ) : null}
           </div>

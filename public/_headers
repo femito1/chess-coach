@@ -49,6 +49,31 @@
   Cross-Origin-Resource-Policy: same-origin
   Cache-Control: public, max-age=31536000, immutable
 
+# Puzzle corpus shards (e.g. /puzzles/7cff561b0a88/b12-0.tsv), ~50 files of
+# ~360 KB fetched on demand by the Puzzles page.
+#
+# `Cache-Control` is the load-bearing line here. `immutable` is honest for
+# these files because the path contains a content hash of the whole corpus
+# (PUZZLE_BUILD_ID): refreshed data always lands on new URLs, so a cached
+# shard can never be decoded against a newer theme vocabulary, and a returning
+# user re-reads shards from disk cache instead of the network.
+#
+# CORP is defensive, NOT required — measured, not assumed. Under the
+# `COEP: require-corp` set by the `/*` block above, a same-origin `fetch()` of
+# a shard succeeds with or without this header (verified against a production
+# build served with these exact headers: 200, full body, in both
+# configurations). CORP is only enforced for CROSS-origin subresources, so the
+# same-origin case passes the check either way. It is kept for consistency with
+# the blocks above and so that moving the corpus to a separate asset host later
+# doesn't silently start failing.
+#
+# The "do NOT redeclare COEP here" rule from the Stockfish block still applies:
+# Cloudflare Pages appends per-route headers to the wildcard rather than
+# replacing them, so repeating COEP would emit it twice.
+/puzzles/*
+  Cross-Origin-Resource-Policy: same-origin
+  Cache-Control: public, max-age=31536000, immutable
+
 # index.html and any other top-level HTML must NOT be cached by the
 # browser, otherwise users keep loading the previous deploy's bundle
 # references after we ship a new build.

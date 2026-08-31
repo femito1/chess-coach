@@ -18,7 +18,8 @@
     "extension:screenshots": "node scripts/screenshot-extension.mjs",
     "extension:build": "node scripts/build-extension-icons.mjs && node scripts/build-extension.mjs",
     "openings:snapshot": "node scripts/snapshot-opening-popularity.mjs",
-    "openings:build": "node scripts/build-openings.mjs"
+    "openings:build": "node scripts/build-openings.mjs",
+    "puzzles:build": "node scripts/build-puzzles.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.6",

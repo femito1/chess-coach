@@ -34,7 +34,6 @@ const ROUTES = [
   { path: '/import',        label: 'import'        },
   { path: '/review-by-url', label: 'review-by-url' },
   { path: '/games',         label: 'games'         },
-  { path: '/weaknesses',    label: 'weaknesses'    },
   { path: '/puzzles',       label: 'puzzles'       },
   { path: '/repertoire',    label: 'repertoire'    },
   { path: '/repertoire',    label: 'repertoire'    },

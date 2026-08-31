@@ -3,6 +3,33 @@ import { MOTIF_ORDER } from '@/engine/motifs';
 import { moveAccuracy } from '@/engine/classify';
 
 /**
+ * Extracts the user's own mistakes from analyzed games.
+ *
+ * This module used to live at `src/features/weaknesses/aggregate.ts` and
+ * back the Weaknesses page. That page is gone — it was a read-only report
+ * that told you "you miss forks" and then left you to do something about
+ * it. The *diagnosis* was the valuable half, so it moved here: it is now
+ * the input to the Puzzles page's Recommended tab, which turns "you miss
+ * forks" into a queue of fork puzzles at your level (`recommend.ts`).
+ *
+ * Two entry points, with different consumers:
+ *
+ *  - `buildMistakes` — the flat `MistakeRow[]`. Load-bearing: Recommended
+ *    scores motifs off it.
+ *  - `aggregateMistakes` — the roll-up the old page rendered. No UI reads
+ *    it today; it's kept because it's the readable seam that
+ *    `scripts/test/integration/phase2.mjs` uses to assert the analyzer
+ *    actually writes motifs, phases and clocks into `Analysis`, and
+ *    because a "your weaknesses at a glance" summary is a plausible
+ *    addition to the Recommended tab.
+ *
+ * Doc comments below still mention "the weaknesses page" where they
+ * describe why a field exists; those are accurate history for fields whose
+ * shape that page determined (`fenBefore`, `evalCpBefore`, `bestMoveUci`
+ * all exist to feed inline mini-boards).
+ */
+
+/**
  * Game shape consumed by the aggregator. Excludes `pgn` so callers can
  * pass either the full `Game` or the light projection (`GameLight`).
  * The aggregator never reads PGN — it only joins game metadata against

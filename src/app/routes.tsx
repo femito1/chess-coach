@@ -8,7 +8,6 @@ import { ImportAndReviewPage } from '@/features/import/ImportAndReviewPage';
 import { GamesPage } from '@/features/games/GamesPage';
 import { ReviewPage } from '@/features/review/ReviewPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
-import { WeaknessesPage } from '@/features/weaknesses/WeaknessesPage';
 import { PuzzlesPage } from '@/features/puzzles/PuzzlesPage';
 import { RepertoirePage } from '@/features/repertoire/RepertoirePage';
 import { RepertoireTrainer } from '@/features/repertoire/RepertoireTrainer';
@@ -72,7 +71,6 @@ export const router = createBrowserRouter([
                   { path: 'review-by-url', element: <ImportAndReviewPage /> },
                   { path: 'games', element: <GamesPage /> },
                   { path: 'review/:id', element: <ReviewPage /> },
-                  { path: 'weaknesses', element: <WeaknessesPage /> },
                   { path: 'puzzles', element: <PuzzlesPage /> },
                   { path: 'repertoire', element: <RepertoirePage /> },
                   { path: 'repertoire/:id/train', element: <RepertoireTrainer /> },
