@@ -236,14 +236,32 @@ step('setting the CORS rule');
 // Stockfish's own net download are CORS-mode requests, and a CORS response
 // satisfies `COEP: require-corp` by itself — so no CORP, no custom domain, no
 // Transform Rule is needed. See DEPLOY.md § The only header that matters is CORS.
-const corsPolicy = [
-  {
-    AllowedOrigins: corsOrigins,
-    AllowedMethods: ['GET', 'HEAD'],
-    AllowedHeaders: ['*'],
-    MaxAgeSeconds: 86400,
-  },
-];
+//
+// NOTE THE SHAPE. R2 accepts two different JSON schemas for the same policy, and
+// they are not interchangeable:
+//
+//   wrangler / the R2 API   { "rules": [ { "allowed": { "origins", "methods",
+//                                          "headers" }, "maxAgeSeconds" } ] }
+//   the dashboard's paste   [ { "AllowedOrigins", "AllowedMethods", … } ]   (S3 style)
+//
+// Feeding the dashboard's PascalCase form to wrangler fails with "must contain a
+// 'rules' array". If you copy a policy out of an S3 tutorial or the R2 dashboard,
+// it needs translating first.
+const corsPolicy = {
+  rules: [
+    {
+      allowed: {
+        origins: corsOrigins,
+        methods: ['GET', 'HEAD'],
+        // Not load-bearing: a GET/HEAD with no custom request headers is a
+        // "simple" request and never triggers a preflight. Kept permissive so a
+        // future caller that does send a header doesn't fail mysteriously.
+        headers: ['*'],
+      },
+      maxAgeSeconds: 86400,
+    },
+  ],
+};
 const corsFile = join(repoRoot, '.r2-cors.json');
 if (dryRun) {
   info(`would write ${corsFile}:`);
