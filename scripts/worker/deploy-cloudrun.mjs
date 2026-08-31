@@ -75,6 +75,21 @@ const DEFAULTS = {
   serviceAccount: 'chess-coach-worker',
   /** Off the hour on purpose: :00 is where every cron in the world piles up. */
   schedule: '17 4 * * *',
+  /**
+   * Cloud Scheduler defaults to UTC, which quietly makes "run at 04:17" mean
+   * something else wherever you live — 06:17 in Rome in summer, and a different
+   * offset in winter, so the job also drifts across the DST boundary. Detected
+   * from the host so the schedule means what it reads.
+   */
+  timeZone:
+    process.env.TZ ||
+    (() => {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Etc/UTC';
+      } catch {
+        return 'Etc/UTC';
+      }
+    })(),
   cpu: '8',
   memory: '16Gi',
   depth: '18',
@@ -262,7 +277,11 @@ console.log(`[deploy] image        ${image}`);
 console.log(`[deploy] resources    ${cfg.cpu} vCPU / ${cfg.memory}, CONCURRENCY=${concurrency}`);
 console.log(`[deploy] engine       depth ${cfg.depth}, ${cfg.evaluator}`);
 console.log(`[deploy] task timeout ${cfg.taskTimeout} (resumable; see the header)`);
-console.log(`[deploy] schedule     ${makeSchedule ? `${cfg.schedule} (created paused)` : 'none (--no-schedule)'}`);
+console.log(
+  `[deploy] schedule     ${
+    makeSchedule ? `${cfg.schedule} ${cfg.timeZone} (created paused)` : 'none (--no-schedule)'
+  }`,
+);
 if (dryRun) console.log('[deploy] DRY RUN — nothing will be created');
 
 /* -------------------------------------------------------------- 0. auth --- */
@@ -439,6 +458,7 @@ if (makeSchedule) {
     'scheduler', 'jobs', 'create', 'http', `${cfg.job}-nightly`,
     `--location=${cfg.region}`,
     `--schedule=${cfg.schedule}`,
+    `--time-zone=${cfg.timeZone}`,
     `--uri=${uri}`,
     '--http-method=POST',
     `--oauth-service-account-email=${saEmail}`,
@@ -454,6 +474,7 @@ if (makeSchedule) {
       'scheduler', 'jobs', 'update', 'http', `${cfg.job}-nightly`,
       `--location=${cfg.region}`,
       `--schedule=${cfg.schedule}`,
+      `--time-zone=${cfg.timeZone}`,
       `--uri=${uri}`,
       `--oauth-service-account-email=${saEmail}`,
       `--project=${project}`,
@@ -467,7 +488,7 @@ if (makeSchedule) {
       'scheduler', 'jobs', 'pause', `${cfg.job}-nightly`,
       `--location=${cfg.region}`, `--project=${project}`,
     ], { capture: true, label: 'pausing the scheduler job' });
-    ok(`${cfg.job}-nightly created PAUSED (${cfg.schedule})`);
+    ok(`${cfg.job}-nightly created PAUSED (${cfg.schedule} ${cfg.timeZone})`);
   }
 }
 
