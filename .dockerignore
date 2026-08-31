@@ -1,0 +1,36 @@
+# Build context for scripts/worker/Dockerfile.
+#
+# Without this the context is ~330 MB — node_modules, dist/, the 38 MiB NNUE net
+# staged into public/stockfish/, and ~18 MB of puzzle shards — none of which the
+# Dockerfile COPYs. It costs little locally but is a real upload when the image is
+# built by Cloud Build or pushed from a laptop, and a fat context slows every
+# rebuild.
+#
+# The Dockerfile only needs: package*.json, tsconfig*.json, src/, scripts/.
+
+node_modules
+dist
+dist-worker
+dist-extension
+.git
+.github
+.cache
+.vite
+.cursor
+
+# public/ is not COPYd at all: the worker uses a native Stockfish binary with the
+# net embedded, so it needs neither the staged .nnue nor the puzzle corpus.
+public
+
+# Secrets and local config must never enter an image layer.
+.env
+.env.*
+worker.env
+.env.worker
+
+# Docs, tests fixtures and screenshots the worker image has no use for.
+*.md
+!scripts/worker/README.md
+extension-test-*.png
+*.tsbuildinfo
+*.log

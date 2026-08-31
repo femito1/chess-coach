@@ -51,6 +51,11 @@ laptop re-analysis can never silently overwrite the server's better work.
 
 ## Setup
 
+> **Running it automatically on Cloud Run?** Skip to
+> [Automatic: scheduled Cloud Run job](#automatic-scheduled-cloud-run-job). The
+> section below is the manual path, and worth reading first because the scheduled
+> setup runs the same verification steps.
+
 ### 1. Prerequisites
 
 - A Linux box with a few cores. Any provider; nothing here is
@@ -190,6 +195,140 @@ worker prints a running estimate — rather than trusting this paragraph.
 
 That is pennies of compute on any hourly VM, and the box can be destroyed the
 moment it finishes.
+
+## Automatic: scheduled Cloud Run job
+
+```bash
+npm run worker:deploy -- --dry-run    # prints every command, changes nothing
+npm run worker:deploy
+```
+
+One command stands the whole thing up. Then the loop needs no human in it:
+
+```
+   app (any device)  ──▶  cloud_games          uploads new PGNs on sign-in and
+          ▲                    │                whenever the analysis queue goes
+          │                    ▼                idle — already automatic, no button
+          │             Cloud Scheduler
+          │                    │  nightly
+          │                    ▼
+          │             Cloud Run job  ──▶  cloud_analyses
+          └────────────────────────────────────┘
+                     results arrive on the next app open
+```
+
+### Why Cloud Run jobs
+
+The workload is a burst: CPU-bound, no inbound ports, resumable, idle most of the
+time. Cloud Run jobs scale to zero and bill by the second, and the free tier
+(~200 000 vCPU-seconds/month) covers a full-library NNUE re-analysis with room
+over — this work costs roughly **32 vCPU-seconds per game**, so ~1 800 games is
+~58 000. There is also no VM to remember to destroy, which is the usual way the
+"just rent a box for an hour" approach turns into a monthly bill.
+
+### What the script creates
+
+| # | resource | notes |
+|---|---|---|
+| 1 | four APIs enabled | run, artifactregistry, secretmanager, cloudscheduler |
+| 2 | Artifact Registry repo | `chess-coach` |
+| 3 | the worker image | built `--platform linux/amd64` and pushed |
+| 4 | Secret Manager secret | the Supabase `service_role` key |
+| 5 | service account | exactly two roles (see below) |
+| 6 | two Cloud Run jobs | `chess-coach-analysis` and `…-verify` |
+| 7 | Cloud Scheduler trigger | **created paused** — see below |
+
+Idempotent: re-running is how you ship a new image or change the schedule.
+
+### Configuration
+
+Reads `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `USER_ID` from the same
+`worker.env` the manual path uses, or from the environment. Useful flags:
+
+```bash
+npm run worker:deploy -- --region=us-central1
+npm run worker:deploy -- --schedule="17 4 * * *"   # cron, off the hour on purpose
+npm run worker:deploy -- --cpu=4 --memory=8Gi
+npm run worker:deploy -- --no-schedule             # job only, no trigger
+```
+
+### Six decisions worth understanding before you change them
+
+**`--tasks=1`, always.** The worker has no lease or claiming — it selects every
+candidate game itself — so *N* parallel tasks would each analyze the same games
+and burn *N* times the compute for identical results. Parallelism belongs inside
+the task, via `CONCURRENCY` engine processes.
+
+**`CONCURRENCY` is pinned, not inferred.** The worker defaults it to
+`os.cpus().length - 1`, and inside a container `os.cpus()` reports the **host's**
+core count rather than the cgroup limit. Left to guess, an 8-vCPU job could spawn
+dozens of Stockfish processes and thrash. The script sets it to `cpu - 1`.
+
+**`--task-timeout=2h`, deliberately short.** The worker is resumable by
+construction — every analysis is written the moment it finishes — so a task that
+times out loses nothing and the next execution continues. That makes a short
+timeout *safer* than a long one: a hung engine on 8 vCPU burns 28 800
+vCPU-seconds an hour against a ~200 000/month free tier, so a 24-hour timeout (the
+Cloud Run maximum) would let one stuck run blow the budget where two hours cannot.
+Two hours is also roughly what a ~1 800-game backlog needs, so the normal case
+finishes in one go anyway.
+
+**The schedule is created paused.** An unpaused trigger would run an unverified
+backlog overnight, and the whole point of `worker:verify` is that a wrong binary
+produces numbers which are not comparable with the rest of your library. Resume it
+once you have verified.
+
+**The verify job gets no credentials.** Verified by running it: the verifier reads
+only `STOCKFISH_PATH` and never touches the database, so binding an
+RLS-bypassing key to it would be gratuitous. It is a separate job rather than an
+execution override because `gcloud run jobs execute` can override env vars and
+args but *not* the container command.
+
+**Two IAM roles, no more.** `secretmanager.secretAccessor` scoped to that one
+secret, and `run.invoker` so Cloud Scheduler can start the job.
+
+### Bring it up in this order
+
+```bash
+# 1. prove the engine agrees with the browser
+gcloud run jobs execute chess-coach-analysis-verify --region=europe-west1 --wait
+
+# 2. see the plan without running an engine
+gcloud run jobs execute chess-coach-analysis --update-env-vars=DRY_RUN=1 --region=europe-west1 --wait
+
+# 3. a real throughput number on 20 games
+gcloud run jobs execute chess-coach-analysis --update-env-vars=LIMIT=20 --region=europe-west1 --wait
+
+# 4. the backlog
+gcloud run jobs execute chess-coach-analysis --region=europe-west1
+
+# 5. hand it over to the schedule
+gcloud scheduler jobs resume chess-coach-analysis-nightly --location=europe-west1
+```
+
+`--update-env-vars` on `execute` is an **execution override** — it does not mutate
+the deployed job, so these smoke tests leave the nightly config alone.
+
+Logs: `gcloud beta run jobs logs tail chess-coach-analysis --region=europe-west1`.
+
+### Then turn off analysis on your laptop
+
+This is the switch that actually stops your laptop working:
+**Settings → "Analyze new games automatically" → off.**
+
+Without it the laptop still analyzes every new game itself, racing the server for
+the same work. Nothing breaks — cloud sync prefers the server's NNUE analysis over
+a local classical one even at lower depth — but the fans stay on, which was the
+thing you were trying to avoid.
+
+### Cost, and a guard
+
+A nightly run that finds nothing costs a few vCPU-seconds. The one-time backlog is
+~58 000 of a ~200 000 monthly allowance. So this should be $0 indefinitely.
+
+Set a budget alert anyway (`console.cloud.google.com/billing`) so a surprise is an
+email rather than an invoice. Note that Cloud Run needs a billing account attached
+even to use the free tier.
 
 ## After it finishes
 

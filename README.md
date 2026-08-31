@@ -92,6 +92,7 @@ Keyboard: `←`/`→` step through moves, `Home`/`End` jump to start/end.
 | `npm run openings:build` | Regenerate `src/data/openings.generated.ts` from the committed TSVs. |
 | `npm run openings:snapshot` | Re-measure line popularity from the Lichess explorer (slow, rate-limited). |
 | `npm run worker:build` / `worker:verify` / `worker:run` | Off-laptop analysis worker. **Always `worker:verify` before a bulk run.** |
+| `npm run worker:deploy` | Deploy the worker as a scheduled Cloud Run job so analysis happens automatically and off your laptop. `-- --dry-run` shows every command. See `scripts/worker/README.md`. |
 | `npm run extension:build` | Build the Chrome extension zip. |
 | `npm run extension:screenshots` | Regenerate the extension's store screenshots. |
 | `npm run preview` | Serve a built `dist/`. |

@@ -27,7 +27,8 @@
     "puzzles:build": "node scripts/build-puzzles.mjs",
     "worker:build": "node scripts/worker/build.mjs",
     "worker:run": "node dist-worker/worker.mjs",
-    "worker:verify": "node dist-worker/verify.mjs"
+    "worker:verify": "node dist-worker/verify.mjs",
+    "worker:deploy": "node scripts/worker/deploy-cloudrun.mjs"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.6",
