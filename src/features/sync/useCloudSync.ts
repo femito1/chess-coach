@@ -98,7 +98,25 @@ export const useSyncStore = _g[SYNC_STORE_KEY];
 /** Module-level so two mounted consumers can't start overlapping runs — the
  *  engine is resumable but concurrent runs would duplicate work and could
  *  interleave writes confusingly. */
+/**
+ * The sync currently running, so concurrent triggers coalesce instead of
+ * hammering Supabase — the hook fires on sign-in and again whenever the analysis
+ * queue goes idle, and those can land together.
+ *
+ * `inFlightSignal` is the other half, and it is load-bearing. Coalescing onto a
+ * pass that is ALREADY ABORTED silently drops the request: the aborted pass
+ * resolves, `isAbort` maps it to `phase: 'ready'` (which is indistinguishable
+ * from a clean no-op sync), and nothing was transferred. That happens for real,
+ * because Clerk resolves `isLoaded` / `userId` in stages: the first effect run
+ * starts a sync, the second run aborts it and calls `startSync` again — and the
+ * retry used to receive the dying promise instead of starting a pass of its own.
+ *
+ * The user-visible symptom is exactly the kind that wastes an evening: sync does
+ * nothing, reports success, and whether it happens depends on network timing.
+ */
 let inFlight: Promise<void> | null = null;
+let inFlightSignal: { aborted: boolean } | null = null;
+let inFlightToken: symbol | null = null;
 
 /**
  * Mount once, high in the tree (`AppLayout`), alongside `useProfileSync`.
@@ -189,40 +207,72 @@ export async function startSync(args: {
   supabase: Parameters<typeof runCloudSync>[0]['supabase'];
   userId: string;
   signal?: { aborted: boolean };
+  /** Set by the Settings button. A deliberate click must always produce a sync,
+   *  even if one is already running — otherwise "Sync now" is a no-op at exactly
+   *  the moment the user reaches for it because something looks wrong. */
+  force?: boolean;
 }): Promise<void> {
-  if (inFlight) return inFlight;
+  const running = inFlight;
+  if (running) {
+    const stale = inFlightSignal?.aborted === true;
+    if (!stale && !args.force) return running;
+    // Either the running pass is already aborted (its result is worthless) or the
+    // user asked explicitly. Queue behind it rather than dropping the request.
+    const chained = running.catch(() => {}).then(() => runOnce(args));
+    inFlight = chained;
+    return chained;
+  }
+  const started = runOnce(args);
+  inFlight = started;
+  return started;
+}
+
+async function runOnce(args: {
+  supabase: Parameters<typeof runCloudSync>[0]['supabase'];
+  userId: string;
+  signal?: { aborted: boolean };
+}): Promise<void> {
   const { setPhase, setLast, addCounts } = useSyncStore.getState();
 
-  inFlight = (async () => {
-    setPhase({
-      kind: 'syncing',
-      progress: { phase: 'manifest', done: 0, total: 0 },
-    });
-    try {
-      const result = await runCloudSync({
-        supabase: args.supabase,
-        userId: args.userId,
-        signal: args.signal,
-        onProgress: (progress) => setPhase({ kind: 'syncing', progress }),
-      });
-      setLast({ ...result, at: Date.now() });
-      addCounts(result);
-      setPhase({ kind: 'ready' });
-    } catch (err) {
-      if (isAbort(err)) {
-        setPhase({ kind: 'ready' });
-        return;
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      // eslint-disable-next-line no-console
-      console.error('[cloud-sync] failed:', err);
-      setPhase({ kind: 'error', message });
-    } finally {
-      inFlight = null;
-    }
-  })();
+  // An ownership token rather than comparing promise identity: a chained pass may
+  // already have taken the slot by the time this one's `finally` runs, and
+  // clearing it unconditionally would let the next trigger start a third
+  // concurrent sync while a successor is still queued.
+  const token = Symbol('sync');
+  inFlightToken = token;
+  inFlightSignal = args.signal ?? null;
 
-  return inFlight;
+  setPhase({ kind: 'syncing', progress: { phase: 'manifest', done: 0, total: 0 } });
+  try {
+    const result = await runCloudSync({
+      supabase: args.supabase,
+      userId: args.userId,
+      signal: args.signal,
+      onProgress: (progress) => setPhase({ kind: 'syncing', progress }),
+    });
+    setLast({ ...result, at: Date.now() });
+    addCounts(result);
+    setPhase({ kind: 'ready' });
+  } catch (err) {
+    if (isAbort(err)) {
+      // Deliberately NOT an error state — an abort is usually the effect
+      // re-running under us. But it is also not success: nothing was
+      // transferred, which is why `startSync` refuses to coalesce onto an
+      // already-aborted pass.
+      setPhase({ kind: 'ready' });
+      return;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.error('[cloud-sync] failed:', err);
+    setPhase({ kind: 'error', message });
+  } finally {
+    if (inFlightToken === token) {
+      inFlight = null;
+      inFlightSignal = null;
+      inFlightToken = null;
+    }
+  }
 }
 
 /** For the Settings card's "Sync now" button. */
@@ -242,7 +292,10 @@ export function useManualSync(): {
 
   const syncNow = useCallback(() => {
     if (!userId) return;
-    void startSync({ supabase, userId });
+    // `force`: a deliberate click must always produce a sync pass. Without it the
+    // click is silently swallowed whenever one is already running — which is
+    // precisely when a user reaches for the button, because something looks wrong.
+    void startSync({ supabase, userId, force: true });
   }, [supabase, userId]);
 
   return {

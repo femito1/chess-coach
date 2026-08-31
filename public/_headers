@@ -98,10 +98,67 @@
   Cross-Origin-Resource-Policy: same-origin
   Cache-Control: public, max-age=31536000, immutable
 
-# index.html and any other top-level HTML must NOT be cached by the
-# browser, otherwise users keep loading the previous deploy's bundle
-# references after we ship a new build.
+# The SPA document must NOT be cached by the browser, or users keep loading the
+# previous deploy's bundle references after we ship a new build.
+#
+# ── Why every route is listed, rather than just `/` ──────────────────────
+#
+# `_headers` matches the **request** path, not the path `_redirects` rewrites to.
+# So listing only `/` and `/index.html` protected exactly the two URLs nobody
+# navigates to directly: every real entry point is a deep route, and those fell
+# through to Cloudflare's default. Measured on production:
+#
+#     /            no-cache, no-store, must-revalidate   ← this block
+#     /index.html  no-cache, no-store, must-revalidate   ← this block
+#     /settings    public, max-age=0, must-revalidate    ← CF default
+#     /games       public, max-age=0, must-revalidate    ← CF default
+#     /review/abc  public, max-age=0, must-revalidate    ← CF default
+#
+# The symptom is a deploy that appears not to take effect: a normal reload on
+# /settings or /games can keep running the old bundle, while a hard reload picks
+# up the new one — which reads as random flakiness rather than as caching, and
+# sent us chasing a sync bug that was really a stale bundle.
+#
+# ── Why not just `/*` ───────────────────────────────────────────────────
+#
+# Because Cloudflare Pages *appends* per-route headers to the wildcard rather
+# than replacing them (see the Stockfish block above for the COEP incident this
+# rule came from). A `Cache-Control` on `/*` would therefore emit TWO
+# `Cache-Control` values on `/assets/*` and `/stockfish/*` — one `immutable`, one
+# `no-store` — and which one wins is not something to leave to chance on the
+# 40 MB engine payloads.
+#
+# So: enumerated, and kept in step with `src/app/routes.tsx`. **Adding a route
+# there means adding it here**, or that route silently loses the protection.
+/
+  Cache-Control: no-cache, no-store, must-revalidate
 /index.html
   Cache-Control: no-cache, no-store, must-revalidate
-/
+/dashboard
+  Cache-Control: no-cache, no-store, must-revalidate
+/games
+  Cache-Control: no-cache, no-store, must-revalidate
+/import
+  Cache-Control: no-cache, no-store, must-revalidate
+/onboarding
+  Cache-Control: no-cache, no-store, must-revalidate
+/openings
+  Cache-Control: no-cache, no-store, must-revalidate
+/practice
+  Cache-Control: no-cache, no-store, must-revalidate
+/privacy
+  Cache-Control: no-cache, no-store, must-revalidate
+/puzzles
+  Cache-Control: no-cache, no-store, must-revalidate
+/repertoire
+  Cache-Control: no-cache, no-store, must-revalidate
+/repertoire/*
+  Cache-Control: no-cache, no-store, must-revalidate
+/review-by-url
+  Cache-Control: no-cache, no-store, must-revalidate
+/review/*
+  Cache-Control: no-cache, no-store, must-revalidate
+/settings
+  Cache-Control: no-cache, no-store, must-revalidate
+/sign-in/*
   Cache-Control: no-cache, no-store, must-revalidate
