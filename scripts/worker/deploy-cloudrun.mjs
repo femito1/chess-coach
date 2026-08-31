@@ -134,6 +134,13 @@ function run(cmd, args, { capture = false, tolerate = null, stdin = null, label,
   const err = `${res.stdout ?? ''}${res.stderr ?? ''}`;
   if (res.status !== 0) {
     if (tolerate && tolerate.test(err)) return { tolerated: true, stdout: res.stdout ?? '' };
+    if (/invalid_grant|refreshing your current auth tokens/i.test(err)) {
+      fail(
+        `${label ?? shown} failed because the gcloud credential expired mid-run.\n` +
+          '  Run `gcloud auth login`, then re-run this script — it is idempotent, so\n' +
+          '  whatever already succeeded is left alone.',
+      );
+    }
     if (/PERMISSION_DENIED|does not have permission/i.test(err)) {
       fail(
         `${label ?? shown} was denied.\n` +
@@ -267,6 +274,27 @@ step('checking gcloud auth');
   });
   const account = who.stdout.trim();
   if (!account) fail('no active gcloud account. Run `gcloud auth login`.');
+
+  // `auth list` is NOT sufficient, measured: it reports a stored account without
+  // validating its refresh token, so an expired credential shows as ACTIVE and the
+  // first real API call then dies with `invalid_grant` — after the script has
+  // already started enabling APIs. Minting a token is the cheapest call that
+  // actually proves the credential works.
+  const token = spawnSync('gcloud', ['auth', 'print-access-token'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    stdio: ['inherit', 'pipe', 'pipe'],
+  });
+  if (token.status !== 0) {
+    const err = `${token.stdout ?? ''}${token.stderr ?? ''}`;
+    fail(
+      `the gcloud credential for ${account} is present but not usable.\n` +
+        (/invalid_grant/i.test(err)
+          ? '  The refresh token has expired or been revoked (invalid_grant).\n'
+          : '') +
+        '  Run `gcloud auth login`, then re-run this script.',
+    );
+  }
   ok(`authenticated as ${account}`);
 }
 
