@@ -69,7 +69,11 @@ NNUE network is 38.3 MiB (40,119,326 bytes), and `prebuild` stages it into
 `public/stockfish/` on every build, from where Vite copies it into `dist/`. The
 result is a **failing deployment**: the live site keeps serving the last build
 that predates the network, and `curl` on `/stockfish/nn-*.nnue` returns the
-SPA fallback HTML rather than the file.
+SPA fallback HTML rather than the file. Two of those three are directly
+observable — the deploy of the commit that first staged the net failed while its
+parent succeeded, and the file is not served. That the cap is the *reason* is an
+inference from it being the only published limit the file breaks, so read the
+dashboard build log before acting on it.
 
 Nothing crashes when the network is absent — `nnueNetAvailable()` in
 `src/engine/nnue.ts` probes for it and falls back to Stockfish's classical
