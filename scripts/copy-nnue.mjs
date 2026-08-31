@@ -82,6 +82,24 @@ function shippedNets() {
   return entries.filter((f) => f.endsWith('.nnue'));
 }
 
+/**
+ * Vite's mode, which decides whether `.env.production` is consulted.
+ *
+ * Defaults to `development` deliberately. The dangerous default is the other way
+ * round: if a bare `npm run nnue:stage` read `.env.production`, it would see the
+ * object-store URL and DELETE the net this developer just asked it to stage.
+ * `prebuild` passes `--mode=production` explicitly, and the Vite build guard
+ * catches the one path that bypasses `prebuild` entirely.
+ */
+const mode = (() => {
+  const arg = process.argv.slice(2).find((a) => a.startsWith('--mode='));
+  const value = arg ? arg.slice('--mode='.length) : 'development';
+  if (value !== 'production' && value !== 'development') {
+    fail(`--mode must be production or development, got ${JSON.stringify(value)}`);
+  }
+  return value;
+})();
+
 const want = readNetFileName(repoRoot);
 const shipped = shippedNets();
 const to = join(destDir, want);
@@ -102,7 +120,7 @@ if (!shipped.includes(want)) {
 // script and the Vite build guard cannot disagree about whether the net is
 // remote — including when the variable lives only in `.env.local`, which npm
 // does not put in `process.env`.
-const target = netTarget(repoRoot, want);
+const target = netTarget(repoRoot, mode, want);
 
 if (target.remote && target.error) {
   fail(

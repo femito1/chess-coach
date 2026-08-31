@@ -25,7 +25,7 @@ const PAGES_ASSET_CAP_BYTES = 25 * 1024 * 1024;
  * self-hosting somewhere without a 25 MiB cap is a legitimate configuration and
  * the net genuinely belongs in `dist/` there.
  */
-const nnueNetBuildGuard = {
+const nnueNetBuildGuard = (mode: string) => ({
   name: 'nnue-net-build-guard',
   apply: 'build' as const,
   closeBundle() {
@@ -34,7 +34,7 @@ const nnueNetBuildGuard = {
     // put that in `process.env`. Reading it the narrow way would let a local
     // production build ship a bundle pointing at R2 *and* a 38.3 MiB net in
     // `dist/` — over the cap and baffling to debug.
-    const target = netTarget(__dirname);
+    const target = netTarget(__dirname, mode === 'development' ? 'development' : 'production');
     const remote = target.remote && !target.error ? target.url : null;
     const dir = path.resolve(__dirname, 'dist', 'stockfish');
 
@@ -90,7 +90,7 @@ const nnueNetBuildGuard = {
       );
     }
   },
-};
+});
 
 function mib(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
@@ -146,8 +146,12 @@ const crossOriginIsolationHeaders = {
   },
 };
 
-export default defineConfig({
-  plugins: [react(), crossOriginIsolationHeaders, nnueNetBuildGuard],
+// A function, not an object, purely so the NNUE guard can see Vite's `mode`:
+// `.env.production` is only read in production, and the guard has to agree with
+// that or it would strip the net from a dev-mode build (or leave it in a
+// production one). See scripts/nnue-net-config.mjs.
+export default defineConfig(({ mode }) => ({
+  plugins: [react(), crossOriginIsolationHeaders, nnueNetBuildGuard(mode)],
   base: process.env.GITHUB_PAGES ? '/chess-coach/' : '/',
   resolve: {
     alias: {
@@ -171,4 +175,4 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['stockfish'],
   },
-});
+}));

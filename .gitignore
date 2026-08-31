@@ -10,6 +10,11 @@ extension-test-*.png
 .env
 .env.*
 !.env.example
+# Committed production build config: the R2 URL for the NNUE net. Not a secret —
+# every VITE_* value is inlined into the client bundle anyway. Vite reads it only
+# for `vite build`, so `npm run dev` still uses the locally staged net. Written by
+# `npm run nnue:setup`; a real env var (e.g. in Cloudflare Pages) overrides it.
+!.env.production
 PROJECT_STATUS.md
 CLAUDE.md
 PASS*_PLAN.md

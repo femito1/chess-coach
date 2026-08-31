@@ -160,72 +160,82 @@ what the browser would see: status, `content-length` against the net in
 non-zero on anything that would send the app back to classical. Run it after any
 bucket change and after any Stockfish upgrade.
 
-### Setting it up on R2 (~10 minutes)
+### Setting it up on R2 (one command)
 
 R2 is the path of least resistance on an account that already has Pages: no egress
-fees, and `wrangler` is already an `npx` away.
+fees, and `wrangler` can do every step.
 
-1. **Create the bucket.**
-   ```bash
-   npx wrangler login
-   npx wrangler r2 bucket create chess-coach-nnue
-   ```
+**One prerequisite the CLI cannot do for you:** R2 is a one-time account-level
+opt-in. Until it is enabled, every R2 API call returns `error 10042` —
+`Please enable R2 through the Cloudflare Dashboard`. Enable it at
+**dash.cloudflare.com → R2**. The free tier covers this easily but Cloudflare
+still wants a card on file. Then:
 
-2. **Turn on public access.** Dashboard → **R2** → `chess-coach-nnue` →
-   **Settings** → **Public Development URL** → *Allow Access*. Copy the
-   `https://pub-<hash>.r2.dev` URL it gives you.
+```bash
+npx wrangler login          # once, if `npx wrangler whoami` says you're not logged in
+npm run nnue:setup          # everything else
+```
 
-   That URL is not derivable from the bucket name — read it off the dashboard,
-   the same lesson as the Pages hostname above. A bucket whose public access is
-   still **disabled** answers **404**, not 403, so a forgotten toggle looks
-   exactly like a failed upload.
+`npm run nnue:setup -- --dry-run` prints every command it would run and changes
+nothing — worth doing first. What it does:
 
-3. **Add a CORS rule.** Same Settings page → **CORS Policy** → *Add*. The app
-   origin only, not `*` — nothing else needs to read this bucket:
-   ```json
-   [
-     {
-       "AllowedOrigins": [
-         "https://chess-coach-bip.pages.dev",
-         "http://localhost:5173"
-       ],
-       "AllowedMethods": ["GET", "HEAD"],
-       "AllowedHeaders": ["*"],
-       "MaxAgeSeconds": 86400
-     }
-   ]
-   ```
-   Preview deploys get their own `*.pages.dev` hostname per branch, so if you
-   want NNUE on previews too, either add a wildcard origin or accept that
-   previews run classical. Previews running classical is a reasonable choice —
-   just know which one you picked.
+| step | command |
+|---|---|
+| create the bucket | `wrangler r2 bucket create chess-coach-nnue` |
+| enable public access | `wrangler r2 bucket dev-url enable` |
+| **read** the public URL | `wrangler r2 bucket dev-url get` |
+| set the CORS rule | `wrangler r2 bucket cors set` |
+| upload the net | `wrangler r2 object put` (via `npm run nnue:upload`) |
+| verify a browser can load it | HTTP HEAD with a real cross-origin `Origin` |
+| record the URL | writes `VITE_NNUE_NET_URL` to `.env.production` |
 
-4. **Upload the net and verify it.**
-   ```bash
-   VITE_NNUE_NET_URL=https://pub-<hash>.r2.dev npm run nnue:upload
-   ```
-   Uploads from `node_modules/stockfish/src/` with
-   `Cache-Control: public, max-age=31536000, immutable` and
-   `Content-Type: application/octet-stream`, then runs the verification above.
-   `immutable` is truthful, not merely convenient: the filename carries
-   Stockfish's own hash of the weights, so different weights can only ever appear
-   at a different URL. Without it every cold page load re-downloads 38.3 MiB and
-   NNUE-by-default stops being defensible.
+It **reads** the `pub-<hash>.r2.dev` URL rather than constructing it, for the same
+reason you must not guess the Pages hostname (§ Production host): the hash is
+account-specific. It is idempotent — re-running is how you recover a
+half-finished setup, and how you re-upload after a Stockfish upgrade changes the
+net's filename.
 
-5. **Set the variable in Pages.** Dashboard → the `chess-coach` project →
-   **Settings** → **Environment variables**. Add `VITE_NNUE_NET_URL` to
-   **Production** and (if you want it) **Preview**. It is read at build time, so
-   it only takes effect on the next deploy.
+Useful flags:
 
-6. **Redeploy and confirm in the browser**, not in the build log. On the live
-   site, open the console and run an analysis:
-   - no `[engine] NNUE net not served …` warning;
-   - the network panel shows one 38.3 MiB GET to `pub-<hash>.r2.dev`, and
-     `(disk cache)` on the next reload;
-   - `await (await import('/src/engine/nnue.ts')).activeEvaluatorId()` — actually
-     unavailable on a production bundle, so instead check that a freshly analyzed
-     game's `Analysis.engine` reads `stockfish-16-nnue` (Settings → the engine
-     card shows the active evaluator).
+```bash
+npm run nnue:setup -- --dry-run
+npm run nnue:setup -- --bucket=my-nets
+npm run nnue:setup -- --origin=https://chess.example.com   # repeatable; replaces the defaults
+npm run nnue:setup -- --no-write-env                        # just print the value
+```
+
+The default CORS origins are `https://chess-coach-bip.pages.dev` and
+`http://localhost:5173`. Preview deploys get a per-branch `*.pages.dev` hostname,
+so previews run classical unless you add their origin too — a reasonable choice
+either way, as long as you know which one you picked.
+
+#### Why the URL goes in `.env.production`, not the Pages dashboard
+
+`wrangler pages` has **no command for build-time environment variables**. It has
+`pages secret put`, but that is for runtime Function secrets, not for a `VITE_*`
+value that has to be inlined at build time — and this URL is not a secret in any
+case: every `VITE_*` variable ends up readable in the client bundle.
+
+So the URL lives in `.env.production`, which is Vite's documented home for
+non-secret build configuration. That has three advantages over a dashboard
+setting: it needs no out-of-band step, it is reviewable in the diff, and CI and
+local production builds pick it up automatically.
+
+**A real environment variable still outranks the file**, so you can override it
+per-environment in the Pages dashboard later without touching code. Vite's
+precedence, highest first: process environment → `.env.production.local` →
+`.env.production` → `.env.local` → `.env`.
+
+`.env.production` is deliberately un-gitignored (see `.gitignore`) — **commit it**,
+or production builds won't see the URL.
+
+**Mode matters, and it is load-bearing.** Vite reads `.env.production` only for
+`vite build`, never for `npm run dev`. That is exactly what we want: production
+loads the net from R2 while dev keeps using the copy staged into
+`public/stockfish/`, so local analysis stays offline-capable and costs no
+bandwidth. `predev` passes `--mode=development` to `copy-nnue.mjs` and `prebuild`
+passes `--mode=production`; `engine-nnue` asserts dev still resolves the net
+same-origin, so a regression that leaked the production URL into dev goes red.
 
 ### Cost
 
@@ -254,15 +264,18 @@ this section rather than leave it to rot:
 The short path from nothing to a live app plus Chrome extension. Each
 step links to the section that goes deep:
 
-1. **Put the NNUE net on R2 first** ("The NNUE network and the 25 MiB
-   asset cap" above, ~10 min). Do this before the first deploy rather
-   than after: without `VITE_NNUE_NET_URL` the build stages a 38.3 MiB
-   asset that Pages refuses outright, so deploy #1 fails for a reason
-   that has nothing to do with anything else you are setting up.
+1. **Put the NNUE net on R2 first** — enable R2 in the dashboard, then
+   `npm run nnue:setup` ("The NNUE network and the 25 MiB asset cap"
+   above). Do this before the first deploy rather than after: without
+   `VITE_NNUE_NET_URL` the build stages a 38.3 MiB asset that Pages
+   refuses outright, so deploy #1 fails for a reason that has nothing to
+   do with anything else you are setting up.
 2. **Deploy the app** (§1–§3): create the CF Pages project, paste in the
-   three Clerk + Supabase env vars plus `VITE_NNUE_NET_URL`, deploy.
-   Then read the assigned hostname off the project page rather than
-   assuming it — and add it to the bucket's CORS rule.
+   three Clerk + Supabase env vars, deploy. `VITE_NNUE_NET_URL` is not
+   one of them — `nnue:setup` committed it to `.env.production`. Then
+   read the assigned hostname off the project page rather than assuming
+   it, and if it differs from the CORS default, re-run
+   `npm run nnue:setup -- --origin=<that hostname>`.
 3. **Verify the deploy** (§3): one console check
    (`crossOriginIsolated === true`), one `npm run nnue:upload --
    --verify-only`, one hard-refresh check, one sign-in round-trip. Five

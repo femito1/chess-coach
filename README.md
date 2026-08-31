@@ -83,7 +83,8 @@ Keyboard: `←`/`→` step through moves, `Home`/`End` jump to start/end.
 | `npm run build` | `tsc -b && vite build` (`prebuild` stages the NNUE net). |
 | `npm run typecheck` | `tsc -b --noEmit`. |
 | `npm run nnue:stage` | Copy Stockfish's 38.3 MiB NNUE net into `public/stockfish/`. Skipped when `VITE_NNUE_NET_URL` is set. |
-| `npm run nnue:upload` | Upload the net to R2 and verify a browser can load it. `-- --verify-only` just checks. Needed because production can't serve a 38.3 MiB asset — see DEPLOY.md. |
+| `npm run nnue:setup` | One-shot R2 setup via `wrangler`: bucket, public access, CORS, upload, verify, and write `VITE_NNUE_NET_URL` to `.env.production`. `-- --dry-run` shows the commands. Needed because Pages can't serve a 38.3 MiB asset — see DEPLOY.md. |
+| `npm run nnue:upload` | Just the upload + verify half. `-- --verify-only` checks a live bucket without uploading. |
 | `npm test` | Unit + integration (the default gate). |
 | `npm run test:unit` / `:integration` / `:e2e` / `:live` / `:all` | Test tiers — see `TESTING.md`. |
 | `npm run test:watch` | Vitest watch mode. |

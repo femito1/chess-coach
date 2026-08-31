@@ -88,7 +88,11 @@ for (const a of args) {
 // Resolved through the same module `copy-nnue.mjs` and the Vite build guard use,
 // so this script cannot verify a different URL than the app is built with —
 // which would prove nothing at all.
-const target = netTarget(repoRoot);
+// Always `production`: this script exists to manage the net the DEPLOYED app
+// fetches, so it must read the same files a production build does — including
+// `.env.production`. Reading development config here would verify a URL nothing
+// deployed ever requests.
+const target = netTarget(repoRoot, 'production');
 const want = target.netFile;
 
 if (!target.remote) {

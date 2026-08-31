@@ -167,9 +167,10 @@ endgame positions — which is where a coaching app draws its conclusions.
 |---|---|
 | Net filename, toggle, `nnueActive()`, `nnueNetAvailable()`, `resolveNetLocation()` | `src/engine/nnue.ts` |
 | Staging the net into `public/stockfish/` | `scripts/copy-nnue.mjs` (`prebuild`, `predev`, `npm run nnue:stage`) |
-| Uploading the net to R2 + verifying the browser can load it | `scripts/upload-nnue.mjs` (`npm run nnue:upload`) |
+| Standing up the R2 bucket end to end via `wrangler` | `scripts/setup-r2-nnue.mjs` (`npm run nnue:setup`) |
+| Uploading the net + verifying the browser can load it | `scripts/upload-nnue.mjs` (`npm run nnue:upload`) |
 | Last-resort check that no over-cap net reaches `dist/` | `nnueNetBuildGuard` in `vite.config.ts` |
-| Build-side "which net, served from where" — shared by all three above | `scripts/nnue-net-config.mjs` |
+| Build-side "which net, served from where" — shared by all of the above | `scripts/nnue-net-config.mjs` |
 | Evaluator ids | `NNUE_EVALUATOR_ID = 'stockfish-16-nnue'`, `CLASSICAL_EVALUATOR_ID = 'stockfish-16-classical'` |
 
 **The 40 MB net is gitignored and staged at build time.** It ships inside the
@@ -190,6 +191,20 @@ origin at all:
 |---|---|---|
 | unset (dev default) | `public/stockfish/`, staged by `copy-nnue.mjs` | bare filename |
 | set (production) | that URL + the net filename | absolute URL |
+
+The production value lives in a **committed `.env.production`**, not in the Pages
+dashboard: it is not a secret (every `VITE_*` is inlined into the client bundle),
+`wrangler pages` has no build-variable command anyway, and a committed file is
+reviewable and picked up by CI. A real environment variable still outranks it, so
+per-environment overrides remain possible.
+
+**Vite's mode is load-bearing here.** `.env.production` is read for `vite build`
+and *not* for `npm run dev`, which is what keeps dev on the locally staged net —
+offline-capable and free. Every build-side consumer therefore takes an explicit
+mode (`predev` → `development`, `prebuild` → `production`, and the Vite plugin gets
+Vite's own `mode`). Get it wrong in one direction and dev pulls 38.3 MiB per engine
+start; wrong in the other and a production build ships an over-cap asset.
+`engine-nnue` asserts dev resolves the net same-origin, so a leak goes red.
 
 The rules live in exactly two places, and the split is deliberate:
 

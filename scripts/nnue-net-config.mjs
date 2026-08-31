@@ -42,28 +42,39 @@ export function readNetFileName(repoRoot) {
 }
 
 /**
- * `VITE_NNUE_NET_URL` as Vite would see it: the process environment first, then
- * `.env.local`.
+ * `VITE_NNUE_NET_URL` as Vite would see it, for a given mode.
  *
- * Reading `.env.local` matters and is easy to skip. Vite loads it automatically
- * and bakes `VITE_*` into the bundle, but npm does not put it in `process.env` —
- * so a script that only checks `process.env` would conclude "same-origin" and
- * stage a 38.3 MiB net into a bundle that is meanwhile pointing at an object
- * store. Only this one key is parsed; anything more deserves a dotenv dependency
- * we don't otherwise need.
+ * Reading the dotenv files matters and is easy to skip. Vite loads them
+ * automatically and bakes `VITE_*` into the bundle, but npm does not put them in
+ * `process.env` — so a script that only checked `process.env` would conclude
+ * "same-origin" and stage a 38.3 MiB net into a bundle that is meanwhile pointing
+ * at an object store. Only this one key is parsed; anything more deserves a dotenv
+ * dependency we don't otherwise need.
  *
- * Returns `{ value, from }` so callers can say *where* a bad value came from,
- * or null when it is genuinely unset.
+ * **`mode` is load-bearing, not decoration.** Vite only reads `.env.[mode]` in
+ * that mode, and the whole design leans on it: `.env.production` carries the
+ * object-store URL, while `npm run dev` must NOT see it — otherwise every local
+ * engine start would pull 38.3 MiB across the network instead of using the staged
+ * copy, and dev would stop working offline. Hence `predev` passes
+ * `--mode=development` and `prebuild` passes `--mode=production`.
+ *
+ * Precedence matches Vite's, highest first: the real process environment, then
+ * `.env.[mode].local`, `.env.[mode]`, `.env.local`, `.env`. The process
+ * environment winning is what lets a Cloudflare Pages variable override a
+ * committed `.env.production` with no code change.
+ *
+ * Returns `{ value, from }` so callers can say *where* a bad value came from, or
+ * null when it is genuinely unset.
  */
-function readConfiguredNetUrl(repoRoot) {
+function readConfiguredNetUrl(repoRoot, mode) {
   const fromEnv = (process.env.VITE_NNUE_NET_URL ?? '').trim();
   if (fromEnv) return { value: fromEnv, from: 'environment' };
 
-  // Vite's own precedence: `.env.local` wins over `.env`.
-  for (const name of ['.env.local', '.env']) {
+  for (const name of [`.env.${mode}.local`, `.env.${mode}`, '.env.local', '.env']) {
     const path = join(repoRoot, name);
     if (!existsSync(path)) continue;
     for (const line of readFileSync(path, 'utf8').split('\n')) {
+      if (/^\s*#/.test(line)) continue;
       const m = /^\s*VITE_NNUE_NET_URL\s*=\s*(.*?)\s*$/.exec(line);
       if (m && m[1]) {
         return { value: m[1].replace(/^["']|["']$/g, ''), from: name };
@@ -130,14 +141,23 @@ function resolveRemoteNetUrl(raw, netFile) {
 /**
  * The whole build-side question in one call: is the net remote, and where?
  *
+ * `mode` is Vite's mode — `'production'` for a build, `'development'` for the dev
+ * server. See `readConfiguredNetUrl`: passing the wrong one makes dev fetch the
+ * net over the network, or makes a production build ship an over-cap asset.
+ *
  * `{ remote: false }` when unset, `{ remote: true, url, from }` when usable, and
  * `{ remote: true, error, from }` when configured but broken — callers must handle
  * that third case rather than treating it as same-origin, since a broken remote
  * URL is a misconfiguration to report, not a request for local staging.
  */
-export function netTarget(repoRoot, netFile = readNetFileName(repoRoot)) {
-  const configured = readConfiguredNetUrl(repoRoot);
-  if (!configured) return { remote: false, netFile };
+export function netTarget(repoRoot, mode, netFile = readNetFileName(repoRoot)) {
+  if (mode !== 'production' && mode !== 'development') {
+    throw new Error(
+      `netTarget: mode must be 'production' or 'development', got ${JSON.stringify(mode)}`,
+    );
+  }
+  const configured = readConfiguredNetUrl(repoRoot, mode);
+  if (!configured) return { remote: false, netFile, mode };
   const resolved = resolveRemoteNetUrl(configured.value, netFile);
-  return { remote: true, netFile, from: configured.from, ...resolved };
+  return { remote: true, netFile, mode, from: configured.from, ...resolved };
 }
