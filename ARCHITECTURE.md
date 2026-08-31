@@ -555,8 +555,8 @@ NNUE analysis.
 ## Off-laptop analysis worker
 
 `scripts/worker/` analyzes `cloud_games` with native Stockfish 16 on a box you
-provision and writes `cloud_analyses`; the laptop collects the results through
-cloud sync. **Full docs: `scripts/worker/README.md`.** Two things that must not
+provision, writes `cloud_analyses` and stamps a summary back onto `cloud_games`;
+the laptop collects the results through cloud sync. **Full docs: `scripts/worker/README.md`.** Two things that must not
 be missed:
 
 - **It is code, not a running service.** No server exists until someone

@@ -115,8 +115,8 @@ The harness's `expect()` is deliberately minimal: `toBe`, `toEqual`,
 ## Seeding synthetic analyses
 
 `recomputeClassificationsAndAccuracies` owns `MoveEval.classification`,
-`.motifs` and `.accuracy` and re-derives them from stored FENs about a second
-after page load, so it will overwrite whatever you seeded. **Stamp the version
+`.motifs` and `.accuracy` and re-derives them from stored FENs shortly after
+page load, so it will overwrite whatever you seeded. **Stamp the version
 markers while `games` is empty, navigate to a fresh document, and only then
 seed** — stamping after seeding does not work. See ARCHITECTURE.md § Boot-time
 passes for why, and `scripts/test/integration/puzzle-library.mjs` for the
