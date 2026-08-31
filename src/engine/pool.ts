@@ -4,6 +4,7 @@ import {
   type EngineObservation,
 } from './engine';
 import { intendedEvaluatorIdSync, nnuePreferenceEnabled } from './nnue';
+import { persistedStorageKey, readPersistedValue } from '@/lib/usePersistedState';
 
 type PoolObserver = (obs: EngineObservation, workerIndex: number) => void;
 
@@ -71,7 +72,55 @@ export function defaultPoolSize(env: {
   return Math.max(1, Math.min(byCores, byMemory));
 }
 
-const DEFAULT_POOL_SIZE = (() => {
+/**
+ * How many engine workers this device should run — a PER-DEVICE preference, for
+ * the same reason the NNUE toggle is one (see `nnue.ts`): the right answer is a
+ * property of the hardware in your hands, and syncing "this laptop has 8 GB" to a
+ * phone would be actively wrong. Hence localStorage, not the Dexie `Settings` row.
+ *
+ * `null` means "auto" — `defaultPoolSize()` decides. That is the default, and it
+ * stays conservative.
+ *
+ * ── Why this is a setting rather than a better guess ─────────────────────
+ *
+ * Measured on a 12-core / 7.7 GB laptop, one 59-ply game, depth 18 NNUE,
+ * threaded build:
+ *
+ *     4 workers   9 716 ms
+ *     6 workers   7 593 ms      ← 22% faster
+ *     8 workers 122 000 ms      ← swapping; 12× WORSE than 6
+ *
+ * So the curve has a cliff, not a plateau, and where the cliff sits depends on
+ * free memory — which the browser will not tell us. `navigator.deviceMemory`
+ * reports TOTAL memory rounded to a power of two and capped at 8, and says
+ * nothing about what the rest of the system is using right now. Auto therefore
+ * cannot safely reach for 6: it would be a 22% gain on an idle machine and a 12×
+ * loss on a busy one. A human who knows their machine can make that call; a
+ * heuristic reading `deviceMemory === 8` cannot.
+ */
+export const ENGINE_WORKERS_PREF_KEY = 'engine.workers';
+export const ENGINE_WORKERS_PREF_VERSION = 1;
+/** Values the Settings dropdown offers. Anything else is treated as auto. */
+export const ENGINE_WORKERS_CHOICES = [1, 2, 4, 6, 8] as const;
+
+function isWorkerChoice(raw: unknown): raw is number | null {
+  if (raw === null) return true;
+  return (
+    typeof raw === 'number' &&
+    (ENGINE_WORKERS_CHOICES as readonly number[]).includes(raw)
+  );
+}
+
+/** The device's explicit choice, or null for auto. Read synchronously. */
+export function preferredWorkerCount(): number | null {
+  return readPersistedValue<number | null>(
+    persistedStorageKey(ENGINE_WORKERS_PREF_KEY, ENGINE_WORKERS_PREF_VERSION),
+    null,
+    isWorkerChoice,
+  );
+}
+
+const AUTO_POOL_SIZE = (() => {
   if (typeof navigator === 'undefined') return 2;
   return defaultPoolSize({
     cores: navigator.hardwareConcurrency,
@@ -82,6 +131,25 @@ const DEFAULT_POOL_SIZE = (() => {
     nnue: nnuePreferenceEnabled(),
   });
 })();
+
+/**
+ * The cap a freshly created pool starts at: the device's explicit choice if it
+ * has one, otherwise the auto heuristic.
+ *
+ * A function rather than a constant so a Settings change takes effect on the next
+ * pool construction without a reload — and so `effectivePoolSize()` is the single
+ * answer both the pool and the Settings UI read, instead of two places deriving
+ * it and drifting.
+ */
+export function effectivePoolSize(): number {
+  return preferredWorkerCount() ?? AUTO_POOL_SIZE;
+}
+
+/** The auto heuristic's answer, for a Settings UI that wants to say what "auto"
+ *  currently resolves to. */
+export function autoPoolSize(): number {
+  return AUTO_POOL_SIZE;
+}
 
 export class EnginePool {
   private workers: EngineWorker[];
@@ -109,7 +177,7 @@ export class EnginePool {
    *  one observer here. */
   private poolObservers: Set<PoolObserver>;
 
-  constructor(size: number = DEFAULT_POOL_SIZE) {
+  constructor(size: number = effectivePoolSize()) {
     this.maxWorkers = size;
     // Workers are created lazily — `EngineWorker` is cheap to construct
     // (no Worker spawned until the first `analyze` / `newGame`), but

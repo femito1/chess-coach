@@ -88,6 +88,13 @@ pins the boot-pass version gates (including that an empty DB must not stamp);
 `cloud-sync` pins the three ordering rules in ARCHITECTURE.md § Cloud sync;
 `puzzle-library` is the worked example of seeding synthetic analyses safely.
 
+`analysis-priority` pins demand-driven queueing: that the game you are viewing is
+analyzed ahead of newer pending ones, that re-requesting the in-flight game does
+*not* abort it (which would livelock the review page), and that a preempted game
+returns to `pending` rather than `error`. It drives the queue's own chooser through
+a test seam rather than reimplementing "priority first, else newest" — a
+hand-rolled copy would pass even if the pump ignored priority entirely.
+
 `nnue-remote-net` pins the production NNUE deployment: it starts its own HTTP
 server on an ephemeral port to play the part of the object store, with CORS and
 CORP separately switchable, and asserts that the app loads the net cross-origin

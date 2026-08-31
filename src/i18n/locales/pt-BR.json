@@ -159,10 +159,20 @@
       "description": "Sinais de lance, captura, xeque, roque e fim de jogo em todos os tabuleiros que você joga ou navega. Salvo por dispositivo."
     },
     "nnue": {
-      "title": "For\u00e7a do motor (NNUE)",
-      "toggle": "Usar a avalia\u00e7\u00e3o por rede neural do Stockfish",
-      "description": "A NNUE julga posi\u00e7\u00f5es calmas muito melhor que o avaliador cl\u00e1ssico que ela substitui \u2014 num final de torres ela indica +3,77 onde o cl\u00e1ssico indica +0,53. Ela precisa de um arquivo de rede de 40 MB, baixado uma \u00fanica vez por dispositivo na primeira vez que o motor roda e depois mantido em cache permanentemente. Desligue para evitar esse download numa conex\u00e3o limitada; a an\u00e1lise volta ent\u00e3o ao avaliador cl\u00e1ssico, mais fraco. Salvo por dispositivo.",
-      "applies": "Passa a valer na pr\u00f3xima vez que o motor iniciar."
+      "title": "Força do motor (NNUE)",
+      "toggle": "Usar a avaliação por rede neural do Stockfish",
+      "description": "A NNUE julga posições calmas muito melhor que o avaliador clássico que ela substitui — num final de torres ela indica +3,77 onde o clássico indica +0,53. Ela precisa de um arquivo de rede de 40 MB, baixado uma única vez por dispositivo na primeira vez que o motor roda e depois mantido em cache permanentemente. Desligue para evitar esse download numa conexão limitada; a análise volta então ao avaliador clássico, mais fraco. Salvo por dispositivo.",
+      "applies": "Passa a valer na próxima vez que o motor iniciar."
+    },
+    "workers": {
+      "title": "Processos do motor",
+      "auto": "Automático ({{n}})",
+      "workers": "{{n}} processos",
+      "one": "1 processo",
+      "description": "Quantos processos do Stockfish analisam uma partida em paralelo. Mais processos são mais rápidos até a memória acabar, e então ficam drasticamente mais lentos — medido em um notebook de 12 núcleos / 8 GB na profundidade 18: 4 processos 9,7 s, 6 processos 7,6 s, 8 processos dois minutos porque começou a usar swap. O automático permanece conservador porque o navegador informa a memória total, nunca a livre, então não sabe qual é a sua folga. Aumente se a análise parecer lenta e houver RAM sobrando; reduza se o ruído das ventoinhas incomodar. Armazenado por dispositivo.",
+      "applies": "Passa a valer na próxima análise.",
+      "slowBuildTitle": "A análise está cerca de 11× mais lenta do que deveria",
+      "slowBuild": "Esta página não está cross-origin isolated, então o Stockfish caiu para a build de thread único. Medido na mesma partida na profundidade 18: 9,7 s com threads contra 110 s sem. A build rápida precisa dos cabeçalhos COOP e COEP de public/_headers — confirme que estão publicados e que nenhum proxy os está removendo."
     },
     "freePlayStrength": {
       "title": "Jogo contra a engine — força padrão",
@@ -905,13 +915,13 @@
       "progress": "{{analyzed}} / {{games}} partidas analisadas",
       "nnue": "{{nnue}} NNUE",
       "allNnue": "todas NNUE",
-      "classicalPending": "{{n}} ainda no avaliador cl\u00e1ssico.",
-      "empty": "Nada enviado ainda \u2014 rode uma sincroniza\u00e7\u00e3o.",
+      "classicalPending": "{{n}} ainda no avaliador clássico.",
+      "empty": "Nada enviado ainda — rode uma sincronização.",
       "refresh": "Atualizar",
-      "refreshing": "Lendo\u2026",
-      "updatedAt": "Atualizado \u00e0s {{at}}",
-      "failed": "N\u00e3o foi poss\u00edvel ler os totais da nuvem.",
-      "hint": "Apenas contagens, algumas centenas de bytes por leitura. Avan\u00e7a enquanto o worker de an\u00e1lise no servidor roda; atualiza sozinho cerca de uma vez por minuto at\u00e9 a biblioteca estar toda analisada com NNUE."
+      "refreshing": "Lendo…",
+      "updatedAt": "Atualizado às {{at}}",
+      "failed": "Não foi possível ler os totais da nuvem.",
+      "hint": "Apenas contagens, algumas centenas de bytes por leitura. Avança enquanto o worker de análise no servidor roda; atualiza sozinho cerca de uma vez por minuto até a biblioteca estar toda analisada com NNUE."
     },
     "title": "Sincronização na nuvem",
     "description": "Faz backup das partidas revisadas, das análises da engine e do seu progresso nos problemas no Supabase, para sobreviverem à limpeza do navegador e acompanharem você em outro dispositivo.",

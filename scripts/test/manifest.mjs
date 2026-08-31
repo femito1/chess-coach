@@ -35,6 +35,7 @@ export const BROWSER_TESTS = [
   { name: 'engine-cockpit',             file: 'scripts/test/integration/engine-cockpit.mjs',             category: 'integration' },
   { name: 'engine-nnue',                file: 'scripts/test/integration/engine-nnue.mjs',                category: 'integration' },
   { name: 'nnue-remote-net',            file: 'scripts/test/integration/nnue-remote-net.mjs',            category: 'integration' },
+  { name: 'analysis-priority',          file: 'scripts/test/integration/analysis-priority.mjs',          category: 'integration' },
 
   // --- Classification + accuracy + recompute -----------------------
   // `recompute-skip` is the strict superset of the old `recompute`

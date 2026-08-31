@@ -161,8 +161,18 @@
     "nnue": {
       "title": "Forza del motore (NNUE)",
       "toggle": "Usa la valutazione con rete neurale di Stockfish",
-      "description": "La NNUE giudica le posizioni tranquille molto meglio del valutatore classico che sostituisce: in un finale di torri segna +3,77 dove il classico segna +0,53. Richiede un file di rete da 40 MB, scaricato una sola volta per dispositivo al primo avvio del motore e poi conservato in cache in modo permanente. Disattivala per evitare quel download su una connessione a consumo; l'analisi torna al valutatore classico, pi\u00f9 debole. Salvato per dispositivo.",
+      "description": "La NNUE giudica le posizioni tranquille molto meglio del valutatore classico che sostituisce: in un finale di torri segna +3,77 dove il classico segna +0,53. Richiede un file di rete da 40 MB, scaricato una sola volta per dispositivo al primo avvio del motore e poi conservato in cache in modo permanente. Disattivala per evitare quel download su una connessione a consumo; l'analisi torna al valutatore classico, più debole. Salvato per dispositivo.",
       "applies": "Ha effetto al prossimo avvio del motore."
+    },
+    "workers": {
+      "title": "Processi del motore",
+      "auto": "Automatico ({{n}})",
+      "workers": "{{n}} processi",
+      "one": "1 processo",
+      "description": "Quanti processi Stockfish analizzano una partita in parallelo. Più processi sono più veloci finché la memoria basta, poi diventano drasticamente più lenti — misurato su un portatile 12 core / 8 GB a profondità 18: 4 processi 9,7 s, 6 processi 7,6 s, 8 processi due minuti perché è iniziato lo swap. L'automatico resta prudente perché il browser riporta la memoria totale, mai quella libera, quindi non può conoscere il margine disponibile. Aumentalo se l'analisi sembra lenta e hai RAM in abbondanza; riducilo se le ventole danno fastidio. Memorizzato per dispositivo.",
+      "applies": "Ha effetto dalla prossima analisi.",
+      "slowBuildTitle": "L'analisi è circa 11 volte più lenta del previsto",
+      "slowBuild": "Questa pagina non è cross-origin isolated, quindi Stockfish è ripiegato sulla build a thread singolo. Misurato sulla stessa partita a profondità 18: 9,7 s con i thread contro 110 s senza. La build veloce richiede le intestazioni COOP e COEP di public/_headers — verifica che siano pubblicate e che nessun proxy le rimuova."
     },
     "freePlayStrength": {
       "title": "Gioca contro il motore — forza predefinita",
@@ -906,12 +916,12 @@
       "nnue": "{{nnue}} NNUE",
       "allNnue": "tutte NNUE",
       "classicalPending": "{{n}} ancora con il valutatore classico.",
-      "empty": "Niente caricato ancora \u2014 avvia una sincronizzazione.",
+      "empty": "Niente caricato ancora — avvia una sincronizzazione.",
       "refresh": "Aggiorna",
-      "refreshing": "Lettura\u2026",
+      "refreshing": "Lettura…",
       "updatedAt": "Aggiornato alle {{at}}",
       "failed": "Impossibile leggere i totali del cloud.",
-      "hint": "Solo conteggi, poche centinaia di byte per lettura. Avanza mentre il worker di analisi sul server lavora; si aggiorna da s\u00e9 circa una volta al minuto finch\u00e9 la libreria non \u00e8 tutta analizzata con NNUE."
+      "hint": "Solo conteggi, poche centinaia di byte per lettura. Avanza mentre il worker di analisi sul server lavora; si aggiorna da sé circa una volta al minuto finché la libreria non è tutta analizzata con NNUE."
     },
     "title": "Sincronizzazione cloud",
     "description": "Salva le partite analizzate, le analisi del motore e i tuoi progressi sui problemi su Supabase, così sopravvivono alla cancellazione del browser e ti seguono su un altro dispositivo.",

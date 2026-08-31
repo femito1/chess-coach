@@ -96,6 +96,19 @@ interface QueueModuleState {
   started: boolean;
   visibilityAttached: boolean;
   priorMaxWorkers: number | null;
+  /**
+   * Game ids the user is actually looking at, newest request first.
+   *
+   * Deliberately in-memory and not a column on `Game`. It is a statement about
+   * *this moment* — which review page is open — not a property of the game, and
+   * it should not survive a reload: after a reload the review page mounts again
+   * and asks again. A persisted priority flag would instead rot, and would sync
+   * to other devices where it means nothing.
+   */
+  priority: string[];
+  /** Abort handle for the game currently being analyzed, so a demand request can
+   *  preempt it. Null when the queue is idle. */
+  inFlight: { gameId: string; signal: { aborted: boolean } } | null;
 }
 function queueModuleState(): QueueModuleState {
   const g = globalThis as typeof globalThis & {
@@ -106,6 +119,8 @@ function queueModuleState(): QueueModuleState {
       started: false,
       visibilityAttached: false,
       priorMaxWorkers: null,
+      priority: [],
+      inFlight: null,
     };
   }
   return g[QUEUE_STATE_KEY];
@@ -232,6 +247,7 @@ export async function startAnalysisQueue(): Promise<void> {
 
 async function runLoop(): Promise<void> {
   const store = useQueueStore.getState;
+  const qstate = queueModuleState();
   // Track when we first noticed the queue was empty so we can free the
   // engine pool's workers after a grace period (see IDLE_TEARDOWN_MS).
   let idleSince: number | null = null;
@@ -247,7 +263,7 @@ async function runLoop(): Promise<void> {
         continue;
       }
 
-      const game = await nextPendingGame();
+      const game = await nextGameToAnalyze();
       if (!game) {
         useQueueStore.setState({
           running: false,
@@ -288,6 +304,12 @@ async function runLoop(): Promise<void> {
       const settings = await getSettings();
       await setAnalysisStatus(game.id, 'running');
 
+      // Published so `requestAnalysisNow` can abandon this game if the user
+      // opens a different one. Cleared in `finally`, so an early return or throw
+      // can never leave a stale handle that would abort the *next* game.
+      const signal = { aborted: false };
+      qstate.inFlight = { gameId: game.id, signal };
+
       try {
         const analysis = await analyzeGamePgn(
           game.id,
@@ -296,7 +318,7 @@ async function runLoop(): Promise<void> {
           ({ ply, totalPlies }) => {
             useQueueStore.getState().setProgress(ply, totalPlies);
           },
-          undefined,
+          signal,
           {
             hasOpening: Boolean(game.eco || game.opening),
             timeControl: game.timeControl,
@@ -323,9 +345,22 @@ async function runLoop(): Promise<void> {
           userPlyCount: timeStats.userPlyCount,
           brilliantCount: countUserBrilliancies(analysis.moves, game.userColor),
         });
+        // Finished normally — it is no longer something the user is waiting on.
+        const done = qstate.priority.indexOf(game.id);
+        if (done !== -1) qstate.priority.splice(done, 1);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await setAnalysisStatus(game.id, 'error', msg);
+        if (signal.aborted) {
+          // Preempted, not broken. Back to `pending` so it is picked up again
+          // later; recording an error here would surface a scary "analysis
+          // failed" on a game whose analysis we cancelled on purpose, and
+          // `requeueStaleErrors` would then have to undo it.
+          await setAnalysisStatus(game.id, 'pending');
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          await setAnalysisStatus(game.id, 'error', msg);
+        }
+      } finally {
+        qstate.inFlight = null;
       }
     } catch (err) {
       console.error('[queue] runLoop iteration failed; backing off', err);
@@ -359,6 +394,113 @@ function sleep(ms: number): Promise<void> {
  *  Browser-only — `document` is undefined under SSR / vitest jsdom
  *  configs that don't include it, so we no-op cleanly there.
  */
+
+/**
+ * "I am looking at this game — analyze it next."
+ *
+ * Called by the review page when it lands on a game with no analysis. Two things
+ * happen: the id goes to the front of the queue, and if a *different* game is
+ * mid-analysis it is abandoned so the workers switch over immediately.
+ *
+ * ── Why preempting is nearly free ────────────────────────────────────────
+ *
+ * Abandoning a half-analyzed game normally means throwing away work. Here it does
+ * not: `cachedAnalyze` persists every finished position to `evalCache` as it
+ * completes, keyed by (fen, depth, evaluator). So the abandoned game keeps
+ * whatever positions it already evaluated, and when the queue comes back to it
+ * those are cache hits. The only loss is the single position in flight per worker.
+ *
+ * That is what makes "jump the queue" the right call rather than a trade-off.
+ * Without it, opening an older unanalyzed game means waiting for every newer
+ * pending game first — `nextPendingGame` is strictly newest-first — which on a
+ * fresh import is minutes, not seconds.
+ *
+ * Idempotent and cheap: requesting the game already at the front, or the game
+ * already being analyzed, does nothing.
+ */
+export function requestAnalysisNow(gameId: string): void {
+  const qstate = queueModuleState();
+
+  // Already the one being worked on — nothing to do. Importantly this is checked
+  // BEFORE the preempt below, or a review page re-render would abort the very
+  // analysis it is waiting for, forever.
+  if (qstate.inFlight?.gameId === gameId) return;
+
+  const at = qstate.priority.indexOf(gameId);
+  if (at !== -1) qstate.priority.splice(at, 1);
+  qstate.priority.unshift(gameId);
+  // Bounded: this is a "recently viewed" list, not a backlog. Ten is far more
+  // than a user can be looking at, and it stops a long browsing session from
+  // accumulating an unbounded array of ids that will never be prioritized again.
+  if (qstate.priority.length > 10) qstate.priority.length = 10;
+
+  if (qstate.inFlight) {
+    console.info(
+      `[queue] preempting ${qstate.inFlight.gameId} for ${gameId} (user is viewing it)`,
+    );
+    qstate.inFlight.signal.aborted = true;
+  }
+}
+
+/** Test/diagnostic seam: the current priority list, newest request first. */
+export function _priorityIds(): string[] {
+  return [...queueModuleState().priority];
+}
+
+/**
+ * Test seam: run the pump's own game chooser.
+ *
+ * Exported so `analysis-priority.mjs` asserts against the real selection path
+ * rather than a reimplementation of it — a hand-rolled copy of "priority first,
+ * else newest" would pass even if the pump ignored the priority list entirely.
+ */
+export function _nextGameToAnalyzeForTest() {
+  return nextGameToAnalyze();
+}
+
+/** Test seam: pretend a game is mid-analysis, so preemption can be exercised
+ *  without running a real multi-second analysis. */
+export function _setInFlightForTest(
+  v: { gameId: string; signal: { aborted: boolean } } | null,
+): void {
+  queueModuleState().inFlight = v;
+}
+
+/**
+ * Next game to analyze: anything the user is looking at, else newest-first.
+ *
+ * A priority id is dropped once it is no longer analyzable (done, or deleted), so
+ * the list drains itself rather than needing separate cleanup.
+ */
+async function nextGameToAnalyze() {
+  const qstate = queueModuleState();
+  while (qstate.priority.length > 0) {
+    const id = qstate.priority[0];
+    const game = await db.games.get(id);
+    if (game && game.analysisStatus !== 'done') return game;
+    qstate.priority.shift();
+  }
+  return nextPendingGame();
+}
+
+/**
+ * Apply a new engine-worker cap to the live pool.
+ *
+ * Lives here rather than in the Settings page because of the visibility throttle
+ * below: while the tab is hidden the pool is deliberately shrunk to 1 and
+ * `priorMaxWorkers` holds the cap to restore. Calling `pool.setMaxWorkers()`
+ * directly in that state would be undone the moment the user came back to the
+ * tab — the change would appear to work and then silently revert. So when hidden
+ * we rewrite the remembered value and leave the pool throttled.
+ */
+export function applyWorkerCount(n: number): void {
+  const qstate = queueModuleState();
+  if (qstate.priorMaxWorkers !== null) {
+    qstate.priorMaxWorkers = Math.max(1, Math.floor(n));
+    return;
+  }
+  analysisPool().setMaxWorkers(n);
+}
 
 function attachVisibilityThrottle(): void {
   const qstate = queueModuleState();

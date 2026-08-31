@@ -144,6 +144,52 @@ sits at the top of the run loop, so the current analysis finishes and only the
 *next* game is withheld. The store still reports `running: true` with a
 `currentGameId` while paused.
 
+**Opening a review preempts the queue.** `requestAnalysisNow(gameId)` in
+`queue.ts` puts a game at the front and aborts whatever is running; the review
+page calls it whenever it lands on a game with no analysis row. Without it the
+queue is strictly newest-first (`nextPendingGame` walks `endTime` in reverse), so
+opening an *older* unanalyzed game means waiting behind every newer pending one —
+minutes after a fresh import, for a review that takes ~10 s on its own.
+
+Preempting is nearly free, and that is the whole reason it is allowed:
+`cachedAnalyze` persists each finished position to `evalCache` as it completes, so
+an abandoned game keeps its evaluated positions and resumes from them later. The
+loss is one position per worker.
+
+Two invariants that are easy to break:
+
+- **Re-requesting the in-flight game must be a no-op.** The review page's effect
+  re-runs on re-render; if that preempted the game it is waiting for, the analysis
+  would abort and restart forever and never finish. `requestAnalysisNow` checks
+  `inFlight?.gameId` *before* it aborts anything.
+- **A preempted game goes back to `pending`, never `error`.** `analyzeGamePgn`
+  throws `aborted` when its signal trips, and the queue's catch would otherwise
+  record a scary "analysis failed" on a game we cancelled deliberately —
+  which `requeueStaleErrors` would then have to undo.
+
+Both pinned by `analysis-priority.mjs`.
+
+**Worker count is a per-device setting, not a smarter heuristic.** Measured on a
+12-core / 7.7 GB laptop, one 59-ply game at depth 18 NNUE through the real
+analyzer: **4 workers 11.2 s, 6 workers 7.7 s, 8 workers ~122 s** — the last
+because it starts swapping. The curve has a cliff, and where the cliff sits
+depends on *free* memory, which the browser will not report:
+`navigator.deviceMemory` gives total memory rounded to a power of two and capped
+at 8. So `defaultPoolSize()` stays conservative and
+`preferredWorkerCount()` (localStorage, like the NNUE toggle) lets a human who
+knows their machine take the 31%. `effectivePoolSize()` is the one answer both the
+pool and the Settings UI read.
+
+**The single-threaded fallback is an 11× cliff, so it is surfaced.** Measured on
+the same game at depth 18: `stockfish-nnue-16.js` 9.7 s versus
+`stockfish-nnue-16-single.js` 110 s. The threaded build needs `SharedArrayBuffer`,
+which needs cross-origin isolation, so anything that strips COOP/COEP silently
+makes analysis eleven times slower — which users experience as "the app is
+broken" with nothing saying why. `activeEngineBuild()` records which build booted,
+`canUseThreadedEngine()` answers before one has, and Settings shows a warning.
+`vite.config.ts` sets the headers on the **preview** server too, so
+`npm run preview` doesn't misrepresent production.
+
 **`analyzeGamePgn` takes an injectable `EngineBackend`** (`src/engine/analyzer.ts`)
 so the same analysis code runs under Node for the off-laptop worker. The browser
 default backend is resolved by **dynamic** import:

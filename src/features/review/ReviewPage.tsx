@@ -18,6 +18,7 @@ import { MoveInsight } from './MoveInsight';
 import { classifyMove } from '@/engine/classify';
 import { tClassification } from '@/i18n/chess';
 import { EngineCockpit } from '@/engine/EngineCockpit';
+import { requestAnalysisNow } from '@/engine/queue';
 
 export function ReviewPage() {
   const { t } = useTranslation();
@@ -38,6 +39,35 @@ export function ReviewPage() {
     // intentionally depends on length only so we don't re-jump when the user navigates
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game?.id, rs.mainlineFens.length]);
+
+  /**
+   * Looking at a game with no analysis is the strongest possible signal about
+   * what to analyze next, so say so.
+   *
+   * Without this the queue is strictly newest-first, so opening an older
+   * unanalyzed game means waiting behind every newer pending one — minutes after
+   * a fresh import, for a game that takes ~10 s on its own. `requestAnalysisNow`
+   * moves it to the front and preempts whatever is running; the abandoned game
+   * keeps its finished positions in `evalCache`, so almost nothing is wasted.
+   *
+   * Keyed on the analysis being absent rather than on `analysisStatus`, because
+   * the row we actually need is the analysis: a game marked `done` whose analysis
+   * row went missing (a partial sync, a manual delete) should also be re-requested
+   * rather than showing an empty review forever.
+   *
+   * `useLiveQuery` returns undefined while loading, so wait for `game` to arrive
+   * before concluding anything is missing.
+   */
+  const gameId = game?.id;
+  const needsAnalysis = Boolean(game) && !analysis && game?.analysisStatus !== 'error';
+  useEffect(() => {
+    if (!gameId || !needsAnalysis) return;
+    requestAnalysisNow(gameId);
+    // Depends on the two BOOLEAN facts, not on the live-query objects: `game` and
+    // `analysis` get fresh identities on every Dexie poll, which would re-run this
+    // several times a second. `requestAnalysisNow` is idempotent so that would be
+    // harmless, but noisy in the console and pointless work.
+  }, [gameId, needsAnalysis]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {

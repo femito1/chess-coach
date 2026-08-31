@@ -98,19 +98,36 @@ function mib(bytes: number): string {
 
 // Enables SharedArrayBuffer so threaded Stockfish can run in dev / self-hosted.
 // GitHub Pages can't send these headers; we fall back to single-threaded there.
+//
+// Applied to BOTH the dev server and `vite preview`. Preview matters more than it
+// looks: without these headers the engine silently falls back to the
+// single-threaded build, which is ~11x slower at depth 18 (measured: 9.7 s vs
+// 110 s on the same 60-position game). So a `npm run preview` sanity-check of a
+// production build would misrepresent production badly — appearing to show that
+// analysis is unusably slow, or hiding that it is fast.
+type HeaderServer = {
+  middlewares: {
+    use: (
+      fn: (
+        req: { url?: string },
+        res: { setHeader: (k: string, v: string) => void },
+        next: () => void,
+      ) => void,
+    ) => void;
+  };
+};
+
 const crossOriginIsolationHeaders = {
   name: 'cross-origin-isolation',
-  configureServer(server: {
-    middlewares: {
-      use: (
-        fn: (
-          req: { url?: string },
-          res: { setHeader: (k: string, v: string) => void },
-          next: () => void,
-        ) => void,
-      ) => void;
-    };
-  }) {
+  configureServer(server: HeaderServer) {
+    applyIsolationHeaders(server);
+  },
+  configurePreviewServer(server: HeaderServer) {
+    applyIsolationHeaders(server);
+  },
+};
+
+function applyIsolationHeaders(server: HeaderServer) {
     server.middlewares.use((req, res, next) => {
       res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
       res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
@@ -143,8 +160,7 @@ const crossOriginIsolationHeaders = {
       }
       next();
     });
-  },
-};
+}
 
 // A function, not an object, purely so the NNUE guard can see Vite's `mode`:
 // `.env.production` is only read in production, and the guard has to agree with

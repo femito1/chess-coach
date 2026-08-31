@@ -161,8 +161,18 @@
     "nnue": {
       "title": "Engine strength (NNUE)",
       "toggle": "Use Stockfish's neural-network evaluation",
-      "description": "NNUE judges quiet positions far better than the classical evaluator it replaces \u2014 on a rook endgame it reports +3.77 where classical reports +0.53. It needs a 40 MB network file, downloaded once per device the first time the engine runs and then cached permanently. Turn it off to avoid that download on a metered connection; analysis then falls back to the weaker classical evaluator. Stored per device.",
+      "description": "NNUE judges quiet positions far better than the classical evaluator it replaces — on a rook endgame it reports +3.77 where classical reports +0.53. It needs a 40 MB network file, downloaded once per device the first time the engine runs and then cached permanently. Turn it off to avoid that download on a metered connection; analysis then falls back to the weaker classical evaluator. Stored per device.",
       "applies": "Takes effect the next time the engine starts."
+    },
+    "workers": {
+      "title": "Engine workers",
+      "auto": "Auto ({{n}})",
+      "workers": "{{n}} workers",
+      "one": "1 worker",
+      "description": "How many Stockfish processes analyse a game in parallel. More is faster until you run out of memory, and then it is dramatically slower — measured on a 12-core / 8 GB laptop at depth 18, 4 workers took 9.7 s, 6 took 7.6 s, and 8 took two minutes because it started swapping. Auto stays conservative because the browser reports total memory, never free memory, so it cannot know your headroom. Raise it if analysis feels slow and your machine has RAM to spare; lower it if the fans annoy you. Stored per device.",
+      "applies": "Takes effect on the next analysis.",
+      "slowBuildTitle": "Analysis is running ~11× slower than it should",
+      "slowBuild": "This page is not cross-origin isolated, so Stockfish fell back to its single-threaded build. Measured on the same game at depth 18: 9.7 s threaded versus 110 s single-threaded. The fast build needs the COOP and COEP headers from public/_headers to reach the browser — check that they are deployed and that no proxy is stripping them."
     },
     "freePlayStrength": {
       "title": "Play vs engine — default strength",
@@ -906,9 +916,9 @@
       "nnue": "{{nnue}} NNUE",
       "allNnue": "all NNUE",
       "classicalPending": "{{n}} still on the classical evaluator.",
-      "empty": "Nothing uploaded yet \u2014 run a sync.",
+      "empty": "Nothing uploaded yet — run a sync.",
       "refresh": "Refresh",
-      "refreshing": "Reading\u2026",
+      "refreshing": "Reading…",
       "updatedAt": "Updated {{at}}",
       "failed": "Couldn't read the cloud totals.",
       "hint": "Counts only, a few hundred bytes per read. Advances while the server-side analysis worker runs; refreshes itself about once a minute until the library is fully analyzed with NNUE."

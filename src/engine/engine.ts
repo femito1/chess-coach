@@ -126,6 +126,7 @@ export class EngineWorker {
       try {
         this.worker = await this.startWorker(file);
         await this.handshake(wantNnue);
+        noteEngineBuild(file);
         return;
       } catch (e) {
         lastError = e;
@@ -530,6 +531,67 @@ export class EngineWorker {
     if (!this.currentJob) return;
     this.currentJob.cancel();
     this.currentJob = null;
+  }
+}
+
+/**
+ * Which Stockfish build is actually running, once one has started.
+ *
+ * This exists because the fallback is a **performance cliff, not a degradation**.
+ * Measured on the same 60-position game at depth 18 with 4 workers:
+ *
+ *     stockfish-nnue-16.js         (threaded)    9 716 ms
+ *     stockfish-nnue-16-single.js  (fallback)  110 199 ms   ← 11.3× slower
+ *
+ * The threaded build needs `SharedArrayBuffer`, which needs the page to be
+ * cross-origin isolated (COOP `same-origin` + COEP `require-corp`). If those
+ * headers ever stop arriving — a proxy that strips them, an embedded context, a
+ * host misconfiguration — analysis silently keeps working and becomes eleven
+ * times slower. Users experience that as "the app is broken", and nothing in the
+ * UI would have said why.
+ *
+ * So we record it and let the UI say so. Null until the first worker boots.
+ */
+export type EngineBuild = 'threaded' | 'single';
+
+let activeBuild: EngineBuild | null = null;
+let warnedAboutFallback = false;
+
+/** The build in use, or null if no worker has started yet. */
+export function activeEngineBuild(): EngineBuild | null {
+  return activeBuild;
+}
+
+/** Whether the page can run the fast build at all. Cheap and synchronous, so the
+ *  UI can warn before any analysis has been started. */
+export function canUseThreadedEngine(): boolean {
+  return (
+    typeof SharedArrayBuffer !== 'undefined' &&
+    typeof crossOriginIsolated !== 'undefined' &&
+    crossOriginIsolated === true
+  );
+}
+
+/** Test seam: forget the recorded build so a test can assert a fresh boot. */
+export function _resetEngineBuild(): void {
+  activeBuild = null;
+  warnedAboutFallback = false;
+}
+
+function noteEngineBuild(file: string): void {
+  activeBuild = file.includes('-single') ? 'single' : 'threaded';
+  if (activeBuild === 'single' && !warnedAboutFallback) {
+    warnedAboutFallback = true;
+    console.warn(
+      '[engine] running the SINGLE-THREADED Stockfish build — measured ~11x slower ' +
+        'than the threaded one at depth 18.\n' +
+        `         crossOriginIsolated=${
+          typeof crossOriginIsolated === 'undefined' ? 'undefined' : crossOriginIsolated
+        }, SharedArrayBuffer=${typeof SharedArrayBuffer !== 'undefined'}\n` +
+        '         The threaded build needs COOP: same-origin + COEP: require-corp on ' +
+        'this document. Check that public/_headers is deployed and that nothing ' +
+        'downstream strips those headers.',
+    );
   }
 }
 

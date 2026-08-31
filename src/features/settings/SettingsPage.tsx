@@ -27,6 +27,14 @@ import {
 import { usePersistedState } from '@/lib/usePersistedState';
 import { MOVE_SOUNDS_PREF_KEY } from '@/audio/moveSounds';
 import { NNUE_PREF_KEY, NNUE_PREF_VERSION } from '@/engine/nnue';
+import {
+  ENGINE_WORKERS_CHOICES,
+  ENGINE_WORKERS_PREF_KEY,
+  ENGINE_WORKERS_PREF_VERSION,
+  autoPoolSize,
+} from '@/engine/pool';
+import { activeEngineBuild, canUseThreadedEngine } from '@/engine/engine';
+import { applyWorkerCount } from '@/engine/queue';
 import { terminateEngineIfIdle } from '@/engine/engine';
 import { analysisPool } from '@/engine/pool';
 import { CloudSyncCard } from '@/features/sync/CloudSyncCard';
@@ -51,6 +59,17 @@ export function SettingsPage() {
     version: NNUE_PREF_VERSION,
     isValid: (v): v is boolean => typeof v === 'boolean',
   });
+  // Per-device, same reasoning as the NNUE toggle. `null` = auto.
+  const [workers, setWorkers] = usePersistedState<number | null>(
+    ENGINE_WORKERS_PREF_KEY,
+    null,
+    {
+      version: ENGINE_WORKERS_PREF_VERSION,
+      isValid: (v): v is number | null =>
+        v === null ||
+        (typeof v === 'number' && (ENGINE_WORKERS_CHOICES as readonly number[]).includes(v)),
+    },
+  );
   const [requeueStatus, setRequeueStatus] = useState<string | null>(null);
   const [extensionDismissedAt, setExtensionDismissedAt] = useState<number | undefined>(
     undefined,
@@ -350,6 +369,52 @@ export function SettingsPage() {
         </label>
         <p className="text-xs text-text-muted">{t('settings.nnue.description')}</p>
         <p className="text-[11px] text-text-muted">{t('settings.nnue.applies')}</p>
+      </section>
+
+      {/* Engine worker count. A setting rather than a smarter heuristic because
+       *  the performance curve has a CLIFF, not a plateau: measured at depth 18
+       *  on a 12-core/8 GB laptop, 4 workers took 9.7 s, 6 took 7.6 s, and 8 took
+       *  two minutes once it started swapping. Auto can't safely reach for 6
+       *  because the browser exposes total memory (`deviceMemory`, rounded to a
+       *  power of two and capped at 8) and never free memory — so it cannot tell
+       *  an idle machine from a loaded one. A human can. See `pool.ts`. */}
+      <section className="card p-4 space-y-3">
+        <h2 className="font-medium">{t('settings.workers.title')}</h2>
+        <select
+          className="input text-sm"
+          value={workers === null ? 'auto' : String(workers)}
+          onChange={(e) => {
+            const raw = e.target.value;
+            const next = raw === 'auto' ? null : Number(raw);
+            setWorkers(next);
+            // Apply to the live pool so it bites on the next analysis rather than
+            // after a reload. `setMaxWorkers` terminates idle workers above the
+            // new cap immediately and grows lazily, so this is safe mid-session.
+            applyWorkerCount(next ?? autoPoolSize());
+          }}
+        >
+          <option value="auto">{t('settings.workers.auto', { n: autoPoolSize() })}</option>
+          {ENGINE_WORKERS_CHOICES.map((n) => (
+            <option key={n} value={String(n)}>
+              {n === 1 ? t('settings.workers.one') : t('settings.workers.workers', { n })}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-text-muted">{t('settings.workers.description')}</p>
+        <p className="text-[11px] text-text-muted">{t('settings.workers.applies')}</p>
+
+        {/* The fallback build is an 11x slowdown, and nothing else in the UI
+         *  would ever say so — analysis just feels broken. Shown whenever the
+         *  page can't be cross-origin isolated, or a worker has already booted
+         *  on the slow build. */}
+        {(!canUseThreadedEngine() || activeEngineBuild() === 'single') && (
+          <div className="rounded border border-blunder/40 bg-blunder/5 p-3 space-y-1">
+            <div className="text-sm font-medium text-blunder">
+              {t('settings.workers.slowBuildTitle')}
+            </div>
+            <p className="text-xs text-text-muted">{t('settings.workers.slowBuild')}</p>
+          </div>
+        )}
       </section>
 
       {/* Move sounds. Kept in localStorage rather than the synced `Settings`
