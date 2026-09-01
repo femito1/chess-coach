@@ -33,10 +33,23 @@ export function PrepGapsCard({ games }: { games: readonly GameForGaps[] }) {
     [games],
   );
 
+  // Keyed on the candidates' *content*, not the array's identity. While the
+  // analyser is writing, the dashboard's games projection changes reference
+  // every 1.5 s, which recreates `candidates` and would resubscribe this
+  // query — re-reading two dozen PGNs each time — even though the ranking
+  // is usually identical. The signature makes a resubscribe happen only
+  // when a candidate actually enters, leaves, or changes record.
+  const candidateSignature = candidates
+    .map((c) => `${c.key}:${c.games}:${c.losses}`)
+    .join('|');
+
   const gaps = useThrottledLiveQuery(
     () => resolvePrepGaps(candidates),
-    [candidates],
-    1500,
+    [candidateSignature],
+    // Slower than the dashboard's 1.5 s on purpose. Prep gaps move when you
+    // finish a game or edit a repertoire, not within a second, and each pass
+    // reads PGNs — so this card should not run at chart cadence.
+    4000,
   );
 
   // Nothing worth saying: too few games, no losing openings, or every

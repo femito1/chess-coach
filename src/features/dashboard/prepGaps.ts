@@ -303,6 +303,7 @@ function definingPosition(
 
 async function resolveCandidate(
   candidate: GapCandidate,
+  prepped: Map<string, boolean>,
 ): Promise<PrepGap | null> {
   let identity: { family: string; variation: string } | null = null;
 
@@ -315,9 +316,19 @@ async function resolveCandidate(
     if (!matched) continue;
     const defining = definingPosition(matched, candidate.groupName);
     if (!defining) continue;
+    // A candidate's samples almost always resolve to the *same* defining
+    // position — they were grouped by opening — and `findNodeByFen` scans
+    // the repertoires for a colour on every call. Cache per pass so three
+    // samples cost one lookup instead of three.
+    const cacheKey = `${candidate.color}|${defining.fen}`;
+    let inPrep = prepped.get(cacheKey);
+    if (inPrep === undefined) {
+      inPrep = (await findNodeByFen(defining.fen, candidate.color)) !== null;
+      prepped.set(cacheKey, inPrep);
+    }
     // One sample finding the position in your prep settles it. Claiming a
     // gap you don't have is the worse error of the two.
-    if (await findNodeByFen(defining.fen, candidate.color)) return null;
+    if (inPrep) return null;
     identity ??= { family: matched.family, variation: defining.variation };
   }
 
@@ -342,9 +353,12 @@ async function resolveCandidate(
 export async function resolvePrepGaps(
   candidates: ReadonlyArray<GapCandidate>,
 ): Promise<PrepGap[]> {
+  // Shared across the whole pass, not per candidate: two candidates in the
+  // same family often share a defining position.
+  const prepped = new Map<string, boolean>();
   const out: PrepGap[] = [];
   for (const candidate of candidates) {
-    const gap = await resolveCandidate(candidate);
+    const gap = await resolveCandidate(candidate, prepped);
     if (gap) out.push(gap);
   }
   return out;
