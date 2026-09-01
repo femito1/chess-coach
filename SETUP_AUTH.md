@@ -207,7 +207,12 @@ It is deliberately opt-in **per account**, enforced in the database:
 
 1. Open the **SQL Editor** in the Supabase dashboard.
 2. Paste the whole of [`supabase/cloud-sync.sql`](supabase/cloud-sync.sql) and
-   click **Run**. It is idempotent — re-running it changes nothing.
+   click **Run**. It is idempotent — re-running it changes nothing. **Re-run it
+   after pulling changes to that file**: it adds columns with
+   `add column if not exists`, and a column the code writes but the table lacks
+   makes every push fail. The most recent addition is
+   `cloud_analyses.recompute_version` (2026-09-01), which is what lets a
+   restored device skip reclassifying a library it just pulled down.
 3. The last statement prints the allowlist. You should see exactly one row, for
    the account you want to sync. If it prints none, the lookup found no matching
    profile; the file's closing comment explains how to insert the id by hand.

@@ -10,6 +10,7 @@ import {
 } from '@/db/schema';
 import {
   backfillBrilliantCounts,
+  backfillRecomputeVersion,
   backfillUserTimeStats,
   nextPendingGame,
   recomputeClassificationsAndAccuracies,
@@ -236,6 +237,17 @@ export async function startAnalysisQueue(): Promise<void> {
       const stamped = await backfillBrilliantCounts();
       if (stamped > 0) {
         console.info(`[queue] stamped brilliant counts for ${stamped} games`);
+      }
+    });
+
+    // Record which rules vintage the existing analyses came from. Cheap (a
+    // settings read plus one write per 60 rows, no classification), and it is
+    // what lets a future restore onto a wiped device skip reclassifying the
+    // whole library — see `backfillRecomputeVersion`.
+    await bootStep('backfillRecomputeVersion', async () => {
+      const stamped = await backfillRecomputeVersion();
+      if (stamped > 0) {
+        console.info(`[queue] stamped rules vintage on ${stamped} analyses`);
       }
     });
 

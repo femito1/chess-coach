@@ -77,6 +77,7 @@ of 60 games.
 | 4 | `recomputeClassificationsAndAccuracies()` | `lastRecomputeVersion` | `RECOMPUTE_VERSION` (2) |
 | 5 | `backfillUserTimeStats()` | `lastUserTimeBackfillVersion` | `USER_TIME_BACKFILL_VERSION` (1) |
 | 6 | `backfillBrilliantCounts()` | `lastBrilliantBackfillVersion` | `BRILLIANT_BACKFILL_VERSION` (1) |
+| 7 | `backfillRecomputeVersion()` — copies the DB-wide recompute stamp onto rows that predate `Analysis.recomputeVersion` | `lastRecomputeStampBackfillVersion` | `RECOMPUTE_STAMP_BACKFILL_VERSION` (1) |
 
 The analyzer run loop starts *before* passes 2-6, so a fresh import is never
 held up by housekeeping. `BootBanner` only renders if the passes are still
@@ -119,13 +120,39 @@ at the start and the completion stamp suppresses later boots. Freshly analyzed
 games get their classification from the analyzer; this pass exists only to
 re-derive *old* rows under new rules.
 
-**A cloud restore makes this pass redundant, and cannot currently say so.** The
-mirror stores whole `Analysis` blobs, so pulled rows already carry
-`classification` / `motifs` / `accuracy` computed by the same code — yet an
-evicted device loses its settings row too, so the stamp is gone and the pass
-re-derives all of it. The clean fix is for the cloud row to record the
-`RECOMPUTE_VERSION` that produced it, so a restore can stamp; until then, a
-restore pays for a full pass.
+**The pass skips rows that are already current, which is what makes a restore
+cheap.** `Analysis.recomputeVersion` records the rules vintage of a row's
+derived fields, and the pass reprocesses only rows below the current version.
+This matters because the mirror stores whole `Analysis` blobs: pulled rows
+already carry correct `classification` / `motifs` / `accuracy`, yet an evicted
+device loses its settings row too, so the DB-wide stamp is gone and without the
+per-row check the pass re-derived a library that was already right — minutes of
+blocked main thread for no change at all.
+
+Three parts make that work, and all three are needed:
+
+- **`saveAnalysis` stamps.** The analyzer runs the same `classifyMove` /
+  `detectMotifs` / `detectPhase`, so its output is current by construction.
+  Cloud *pulls* write `db.analyses` directly and must never stamp — they carry
+  whatever vintage the producing device recorded.
+- **The pass stamps even when nothing changed.** A restored row recomputes to
+  identical values, so a changed-only write would leave every one of them
+  unstamped and the next restore would redo the library again. Recording "these
+  rules have been applied" is the point, not the diff.
+- **`recompute_version` is a decision column on `cloud_analyses`**, ranked in
+  `isBetter` below evaluator and depth and *above* recency. Rewriting derived
+  fields deliberately leaves `analyzedAt` alone, so recency cannot see the
+  difference; without that rung a stamped local row and an un-stamped cloud row
+  tie forever, the cloud keeps rows of unknown vintage, and every restore pays
+  full price. Pinned in `diff.test.ts` — including that a stamped row
+  round-trips as a *fixed point*, because a dropped column would re-push the
+  entire library on every sync.
+
+`backfillRecomputeVersion` (boot pass 7) exists for libraries that predate the
+field: a DB carrying `lastRecomputeVersion` has already been through that pass,
+so the claim can simply be copied onto its rows — one write per 60 rows and no
+classification. It claims nothing when there is no DB-wide stamp, since there
+would be no basis for it.
 
 **Version gates compare `>=`, not `===`.** A rolled-back version would
 otherwise re-trigger the expensive pass on every DB that briefly saw the higher
@@ -135,9 +162,10 @@ Pinned by `recompute-skip.mjs` phase 5.
 
 **A pass that found nothing to do must not stamp.** Otherwise a first boot on
 an empty DB marks the work done and the pass never runs on the data that
-arrives afterwards. Passes 3, 4 and 5 hold this. `backfillBrilliantCounts`
-does not — it stamps unconditionally, which is a latent bug if you ever rely on
-it running post-import.
+arrives afterwards. All of passes 3-7 hold this now; `backfillBrilliantCounts`
+used to stamp unconditionally, which cloud restore turned from a latent bug into
+a live one — a wiped device boots empty, stamps, and then never counts
+brilliancies on the library that arrives seconds later.
 
 **The recompute pass OWNS `MoveEval.classification`, `.motifs`, `.accuracy`.**
 It re-derives them from each move's *stored FENs* on every boot where the stamp

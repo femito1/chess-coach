@@ -52,6 +52,13 @@ export const USER_TIME_BACKFILL_VERSION = 1;
  *  when `countUserBrilliancies` or the `brilliant` classification rule
  *  changes its output for existing analyses. */
 export const BRILLIANT_BACKFILL_VERSION = 1;
+/**
+ * Stamps `Analysis.recomputeVersion` on rows that predate the field, using the
+ * DB's own `lastRecomputeVersion` as the claim. Its own pass with its own gate,
+ * per the rule that a cheap derived field must never be the reason the
+ * expensive reclassification runs.
+ */
+export const RECOMPUTE_STAMP_BACKFILL_VERSION = 1;
 
 /** Order-sensitive equality on two motif arrays. Cheap shortcut used
  *  by `recomputeClassificationsAndAccuracies` instead of a per-move
@@ -155,7 +162,13 @@ export async function getAnalysis(gameId: string): Promise<Analysis | undefined>
 }
 
 export async function saveAnalysis(analysis: Analysis): Promise<void> {
-  await db.analyses.put(analysis);
+  // Stamp the rules vintage. The analyzer computes `classification`, `motifs`
+  // and `phase` with the very same `classifyMove` / `detectMotifs` /
+  // `detectPhase` the recompute pass uses (see `engine/analyzer.ts`), so a row
+  // it just produced is by definition current and the pass has nothing to add.
+  // Only this path may stamp: cloud *pulls* write `db.analyses` directly and
+  // must preserve whatever vintage the other device recorded.
+  await db.analyses.put({ ...analysis, recomputeVersion: RECOMPUTE_VERSION });
 }
 
 /**
@@ -328,6 +341,9 @@ export async function requeueStaleErrors(): Promise<number> {
  *  games ≈ a few hundred per-move classify+motif calls per chunk, which
  *  on mid-tier hardware is comfortably under a 16 ms frame budget. */
 const RECOMPUTE_CHUNK = 60;
+/** Games between yields *within* a chunk. Chosen so the main thread is handed
+ *  back several times per chunk without multiplying transactions. */
+const RECOMPUTE_YIELD_EVERY = 10;
 
 /** Yield to the browser. Prefers `requestIdleCallback` so the work only
  *  runs when the UI thread has slack (post-paint, post-input). Falls
@@ -404,8 +420,37 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
 
   for (let start = startIndex; start < doneIds.length; start += RECOMPUTE_CHUNK) {
     const chunkIds = doneIds.slice(start, start + RECOMPUTE_CHUNK);
-    const games = await db.games.bulkGet(chunkIds);
-    const analyses = await db.analyses.bulkGet(chunkIds);
+    const chunkAnalyses = await db.analyses.bulkGet(chunkIds);
+
+    // Which rows actually need reprocessing. A row already stamped with this
+    // version has derived fields from these exact rules, so recomputing it
+    // would spend `classifyMove` + `detectMotifs` over every move only to
+    // arrive back where it started. This is what makes a cloud restore cheap:
+    // pulled rows arrive stamped by the device that produced them.
+    const todo: number[] = [];
+    for (let k = 0; k < chunkIds.length; k++) {
+      const a = chunkAnalyses[k];
+      if (!a || a.moves.length === 0) continue;
+      if (!opts?.force && (a.recomputeVersion ?? 0) >= RECOMPUTE_VERSION) continue;
+      todo.push(k);
+    }
+
+    if (todo.length === 0) {
+      // Nothing to do here, but still record progress: a reload should not
+      // have to re-examine this stretch either.
+      await updateSettings({
+        recomputeCursor: chunkIds[chunkIds.length - 1],
+        recomputeCursorVersion: RECOMPUTE_VERSION,
+      });
+      continue;
+    }
+
+    // Read games only for the rows being reprocessed. `Game` carries the PGN,
+    // so on a restored library where everything is already current this is the
+    // difference between reading every PGN off disk and reading none.
+    const todoIds = todo.map((k) => chunkIds[k]);
+    const games = await db.games.bulkGet(todoIds);
+    const analyses = todo.map((k) => chunkAnalyses[k]);
 
     const analysisPatches: Analysis[] = [];
     const gamePatches: Array<{
@@ -414,7 +459,15 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
       brilliantCount: number;
     }> = [];
 
-    for (let i = 0; i < chunkIds.length; i++) {
+    for (let i = 0; i < analyses.length; i++) {
+      // Yield inside the chunk, not just between chunks. Reclassifying 60
+      // games is ~3-4k `classifyMove` + `detectMotifs` calls of uninterrupted
+      // main-thread work, which is what makes the app feel wedged rather than
+      // merely slow. This loop is pure CPU with no transaction open, so
+      // yielding here is free — the chunk's single transaction still batches
+      // all 60 writes, so `useLiveQuery` re-render counts are unchanged.
+      if (i > 0 && i % RECOMPUTE_YIELD_EVERY === 0) await yieldToBrowser();
+
       const g = games[i];
       const a = analyses[i];
       if (!g || !a || a.moves.length === 0) continue;
@@ -501,8 +554,20 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
       const brilliantCount = countUserBrilliancies(newMoves, g.userColor);
       const brilliantChanged = g.brilliantCount !== brilliantCount;
 
-      if (changed || accuracyChanged || brilliantChanged) {
-        analysisPatches.push({ ...a, moves: newMoves });
+      // Write whenever anything changed *or* the row still lacks this
+      // version's stamp — which, given the filter above, is every row that
+      // reaches here. Stamping the no-change case matters more than it looks:
+      // a restored library recomputes to *identical* values, so a
+      // changed-only write would leave every one of those rows unstamped, and
+      // the next restore would re-derive the whole library again. Recording
+      // "these rules have been applied" is the point, not the diff.
+      const needsStamp = (a.recomputeVersion ?? 0) < RECOMPUTE_VERSION;
+      if (changed || accuracyChanged || brilliantChanged || needsStamp) {
+        analysisPatches.push({
+          ...a,
+          moves: newMoves,
+          recomputeVersion: RECOMPUTE_VERSION,
+        });
         gamePatches.push({ id: g.id, accuracy, brilliantCount });
         updated++;
       }
@@ -567,6 +632,63 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
  * Backwards-compat alias. Older code and tests may import this name.
  */
 export const recomputeAllAccuracies = recomputeClassificationsAndAccuracies;
+
+/**
+ * Record which rules vintage the existing analyses were derived under.
+ *
+ * `Analysis.recomputeVersion` is new, so every row written before it exists
+ * looks like "unknown vintage" and would be reprocessed. But a DB that carries
+ * `lastRecomputeVersion` has *already* been through that pass at that version —
+ * the claim is right there in settings, it simply was never recorded per row.
+ * Copying it across costs one read and one write per chunk and no
+ * classification work at all.
+ *
+ * Why bother, when the global stamp already suppresses the pass locally: the
+ * per-row stamp is what travels. It rides along in the analysis blob to the
+ * cloud, so a future restore onto a wiped device arrives with rows that say
+ * "already current" and skips a reclassification of the entire library — the
+ * failure that blocked a real library for half an hour.
+ *
+ * Claims nothing when the DB has no `lastRecomputeVersion`: there is no basis,
+ * and the reclassification pass will stamp those rows itself.
+ */
+export async function backfillRecomputeVersion(): Promise<number> {
+  const settings = await getSettings();
+  if (
+    (settings.lastRecomputeStampBackfillVersion ?? 0) >=
+    RECOMPUTE_STAMP_BACKFILL_VERSION
+  ) {
+    return 0;
+  }
+  const claim = settings.lastRecomputeVersion;
+  if (claim == null) return 0;
+
+  const ids = (await db.analyses.toCollection().primaryKeys()) as string[];
+  let updated = 0;
+
+  for (let start = 0; start < ids.length; start += RECOMPUTE_CHUNK) {
+    const chunkIds = ids.slice(start, start + RECOMPUTE_CHUNK);
+    const rows = await db.analyses.bulkGet(chunkIds);
+    const patches: Analysis[] = [];
+    for (const a of rows) {
+      if (!a) continue;
+      if ((a.recomputeVersion ?? 0) >= claim) continue;
+      patches.push({ ...a, recomputeVersion: claim });
+      updated++;
+    }
+    if (patches.length > 0) await db.analyses.bulkPut(patches);
+    await yieldToBrowser();
+  }
+
+  // Same rule as passes 3-5: an empty DB must not mark the work done, or the
+  // rows that arrive afterwards never get stamped.
+  if (ids.length > 0) {
+    await updateSettings({
+      lastRecomputeStampBackfillVersion: RECOMPUTE_STAMP_BACKFILL_VERSION,
+    });
+  }
+  return updated;
+}
 
 /**
  * Re-extract opening/eco from each game's stored PGN, then save. Useful after
@@ -835,8 +957,16 @@ export async function backfillBrilliantCounts(opts?: {
     await yieldToBrowser();
   }
 
-  await updateSettings({
-    lastBrilliantBackfillVersion: BRILLIANT_BACKFILL_VERSION,
-  });
+  // Only stamp when there was something to consider. Stamping on an empty DB
+  // marks the work done before the data arrives, so a first boot followed by an
+  // import silently skips the backfill forever — the pass is gated by version,
+  // not by row count. Passes 3, 4 and 5 already hold this rule; this one didn't,
+  // which ARCHITECTURE.md flagged as a latent bug for exactly the
+  // fresh-install-then-import path that cloud restore now makes routine.
+  if (doneIds.length > 0) {
+    await updateSettings({
+      lastBrilliantBackfillVersion: BRILLIANT_BACKFILL_VERSION,
+    });
+  }
   return updated;
 }

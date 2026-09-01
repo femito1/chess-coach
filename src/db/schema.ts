@@ -155,6 +155,19 @@ export interface Analysis {
   analyzedAt: number;
   engine: string;
   moves: MoveEval[];
+  /** Which `RECOMPUTE_VERSION`'s rules produced this row's *derived* fields —
+   *  `MoveEval.classification`, `.motifs`, `.phase` — as distinct from its
+   *  engine numbers, which `depth` and `engine` describe.
+   *
+   *  It exists so the boot reclassification pass can skip a row it has nothing
+   *  to add to. That matters most after a cloud restore: the mirror stores
+   *  whole `Analysis` blobs, so restored rows already carry correct derived
+   *  fields, and without this the pass re-derived every one of them — minutes
+   *  of blocked main thread to recompute values that were already right.
+   *
+   *  Absent means "unknown vintage", which is read as 0 and therefore always
+   *  reprocessed. Optional and non-indexed, so no Dexie version bump. */
+  recomputeVersion?: number;
 }
 
 /**
@@ -230,6 +243,11 @@ export interface Settings {
    *  non-indexed, so no Dexie version bump is needed. */
   recomputeCursor?: string;
   recomputeCursorVersion?: number;
+  /** Gate for `backfillRecomputeVersion` — the cheap pass that copies
+   *  `lastRecomputeVersion` onto analyses written before the per-row field
+   *  existed. Separate from `lastRecomputeVersion` so recording a field can
+   *  never be the reason the expensive reclassification runs. */
+  lastRecomputeStampBackfillVersion?: number;
   /** Same idea for the boot-time opening-metadata refresh. Bumped only
    *  when `reparseOpeningFromPgn` changes its output for existing PGNs. */
   lastOpeningRefreshVersion?: number;

@@ -27,13 +27,15 @@ const la = (
   depth: number,
   analyzedAt: number,
   engine?: string,
-): LocalAnalysisMeta => ({ gameId, depth, analyzedAt, engine });
+  recomputeVersion?: number,
+): LocalAnalysisMeta => ({ gameId, depth, analyzedAt, engine, recomputeVersion });
 const ra = (
   game_id: string,
   depth: number,
   analyzed_at: number,
   engine?: string | null,
-): RemoteAnalysisMeta => ({ game_id, depth, analyzed_at, engine });
+  recompute_version?: number | null,
+): RemoteAnalysisMeta => ({ game_id, depth, analyzed_at, engine, recompute_version });
 
 const NNUE = 'stockfish-16-nnue';
 const CLASSICAL = 'stockfish-16-classical';
@@ -183,6 +185,51 @@ describe('diffAnalyses', () => {
     expect(diffAnalyses(analysisArgs([la('a', 16, 100)], [ra('a', 16, 100)]))).toEqual({
       push: [],
       pull: [],
+    });
+  });
+
+  describe('rules vintage breaks a tie the clock cannot see', () => {
+    // `recomputeVersion` records which classification rules produced a row's
+    // derived fields. Rewriting those fields deliberately leaves `analyzedAt`
+    // alone — the search really did happen when it says — so without this rung
+    // a freshly-stamped local row and an un-stamped cloud row tie forever, the
+    // cloud keeps rows of unknown vintage, and every restore reclassifies the
+    // whole library. That is the half-hour freeze this rung exists to prevent.
+    it('pushes a stamped row over an unstamped one at equal depth and age', () => {
+      expect(
+        diffAnalyses(analysisArgs([la('a', 16, 100, NNUE, 2)], [ra('a', 16, 100, NNUE, null)])),
+      ).toEqual({ push: ['a'], pull: [] });
+    });
+
+    it('pulls the stamped side when the cloud is the fresher one', () => {
+      expect(
+        diffAnalyses(analysisArgs([la('a', 16, 100, NNUE, undefined)], [ra('a', 16, 100, NNUE, 2)])),
+      ).toEqual({ push: [], pull: ['a'] });
+    });
+
+    it('reaches a fixed point once both sides agree', () => {
+      // The property the whole design rests on: no perpetual re-pushing.
+      expect(
+        diffAnalyses(analysisArgs([la('a', 16, 100, NNUE, 2)], [ra('a', 16, 100, NNUE, 2)])),
+      ).toEqual({ push: [], pull: [] });
+    });
+
+    it('ranks below evaluator and depth, not above them', () => {
+      // A newer rules vintage is the same search read under current rules, not
+      // a better search. It must never outrank NNUE...
+      expect(
+        diffAnalyses(analysisArgs([la('a', 16, 100, CLASSICAL, 9)], [ra('a', 16, 100, NNUE, 0)])),
+      ).toEqual({ push: [], pull: ['a'] });
+      // ...nor depth.
+      expect(
+        diffAnalyses(analysisArgs([la('a', 12, 100, NNUE, 9)], [ra('a', 20, 100, NNUE, 0)])),
+      ).toEqual({ push: [], pull: ['a'] });
+    });
+
+    it('still prefers recency when the vintage matches', () => {
+      expect(
+        diffAnalyses(analysisArgs([la('a', 16, 200, NNUE, 2)], [ra('a', 16, 100, NNUE, 2)])),
+      ).toEqual({ push: ['a'], pull: [] });
     });
   });
 
@@ -536,6 +583,47 @@ describe('toCloudAnalysis', () => {
 
   it('writes the evaluator into its own column', () => {
     expect(toCloudAnalysis('u1', analysis).engine).toBe('stockfish-16-nnue');
+  });
+
+  it('writes the rules vintage into its own column, null when unknown', () => {
+    expect(toCloudAnalysis('u1', { ...analysis, recomputeVersion: 2 }).recompute_version)
+      .toBe(2);
+    // Explicitly null rather than omitted: the column has to be *written*, or
+    // an upsert leaves whatever was there and the manifest reads a stale value.
+    expect(toCloudAnalysis('u1', analysis).recompute_version).toBeNull();
+  });
+
+  it('round-trips a stamped row as a fixed point too', () => {
+    // The failure this guards is silent and permanent: drop
+    // `recompute_version` from the pushed row and a stamped local analysis
+    // reads back as vintage 0, so it outranks the cloud copy on every single
+    // sync and re-pushes the entire library forever.
+    const stamped: Analysis = { ...analysis, recomputeVersion: 2 };
+    const row = toCloudAnalysis('u1', stamped);
+    const plan = diffAnalyses({
+      local: [
+        {
+          gameId: 'g1',
+          depth: 18,
+          analyzedAt: 900,
+          engine: 'stockfish-16-nnue',
+          recomputeVersion: 2,
+        },
+      ],
+      remote: [
+        {
+          game_id: row.game_id,
+          depth: row.depth,
+          analyzed_at: row.analyzed_at,
+          engine: row.engine,
+          recompute_version: row.recompute_version,
+        },
+      ],
+      localGameStatus: new Map([['g1', 'done' as AnalysisStatus]]),
+      localGameIds: new Set(['g1']),
+      localRequeuedAt: new Map(),
+    });
+    expect(plan).toEqual({ push: [], pull: [] });
   });
 
   it('round-trips through diffAnalyses as a fixed point', () => {

@@ -41,6 +41,11 @@ export interface RemoteAnalysisMeta {
    *  and arrive null/undefined; those are treated as classical, which is what
    *  they were. */
   engine?: string | null;
+  /** `Analysis.recomputeVersion` — which classification rules produced the
+   *  row's derived fields. Null on rows written before the column existed,
+   *  read as 0. A decision column, so it must always be written: see
+   *  `toCloudAnalysis`. */
+  recompute_version?: number | null;
 }
 
 export interface RemoteAttemptMeta {
@@ -65,6 +70,7 @@ export interface LocalAnalysisMeta {
   depth: number;
   analyzedAt: number;
   engine?: string;
+  recomputeVersion?: number;
 }
 
 export interface Plan {
@@ -237,6 +243,9 @@ interface Ranked {
   depth: number;
   at: number;
   nnue: boolean;
+  /** `RECOMPUTE_VERSION` whose rules produced the derived fields; 0 when the
+   *  row predates the field. */
+  rules: number;
 }
 
 /**
@@ -252,8 +261,18 @@ export function isNnueAnalysis(engine: string | null | undefined): boolean {
 
 function rank(x: LocalAnalysisMeta | RemoteAnalysisMeta): Ranked {
   return 'gameId' in x
-    ? { depth: x.depth, at: x.analyzedAt, nnue: isNnueAnalysis(x.engine) }
-    : { depth: x.depth, at: x.analyzed_at, nnue: isNnueAnalysis(x.engine) };
+    ? {
+        depth: x.depth,
+        at: x.analyzedAt,
+        nnue: isNnueAnalysis(x.engine),
+        rules: x.recomputeVersion ?? 0,
+      }
+    : {
+        depth: x.depth,
+        at: x.analyzed_at,
+        nnue: isNnueAnalysis(x.engine),
+        rules: x.recompute_version ?? 0,
+      };
 }
 
 /**
@@ -274,6 +293,14 @@ function isBetter(
   const y = rank(b);
   if (x.nnue !== y.nnue) return x.nnue;
   if (x.depth !== y.depth) return x.depth > y.depth;
+  // Same search, fresher *interpretation* of it. This sits below evaluator and
+  // depth on purpose: a newer rules vintage is not a better analysis, it is the
+  // same analysis read under current rules. It sits above recency because
+  // rewriting derived fields deliberately does not touch `analyzedAt` — the
+  // search really did happen when it says — so recency cannot see the
+  // difference and the two rows would otherwise tie forever, leaving the cloud
+  // holding un-vintaged rows and every restore reclassifying the library.
+  if (x.rules !== y.rules) return x.rules > y.rules;
   return x.at > y.at;
 }
 
@@ -399,6 +426,9 @@ export interface CloudAnalysisRow {
   /** Which evaluator produced it. Load-bearing: see `toCloudAnalysis`. */
   engine: string;
   move_count: number;
+  /** Which classification rules produced the derived fields. Load-bearing in
+   *  the same way `engine` is — a decision column the diff reads. */
+  recompute_version: number | null;
   data: Analysis;
 }
 
@@ -442,6 +472,10 @@ export function toCloudAnalysis(userId: string, a: Analysis): CloudAnalysisRow {
     analyzed_at: a.analyzedAt,
     engine: a.engine,
     move_count: a.moves.length,
+    // Always written, never left to default. A decision column read as 0 when
+    // absent would make an already-current row look stale, and the diff would
+    // push it on every sync forever — the fixed point is the whole design.
+    recompute_version: a.recomputeVersion ?? null,
     data: a,
   };
 }

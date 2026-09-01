@@ -121,6 +121,12 @@ create table if not exists public.cloud_analyses (
   -- rows written before this column existed came from the browser's classical
   -- build; null is read as classical, which is what they were.
   engine      text,
+  -- Which classification-rules version produced this row's *derived* fields
+  -- (MoveEval.classification / .motifs / .phase), as opposed to its engine
+  -- numbers. Nullable because rows written before this column existed have an
+  -- unknown vintage; null is read as 0, i.e. "reprocess it". Lets a restored
+  -- device skip reclassifying a library it just pulled down already-correct.
+  recompute_version int,
   move_count  int         not null,
   updated_at  timestamptz not null default now(),
   data        jsonb       not null,
@@ -148,6 +154,7 @@ create table if not exists public.cloud_puzzle_attempts (
 -- `create table if not exists` above is a no-op on an existing table, so the
 -- new column has to be added explicitly.
 alter table public.cloud_analyses add column if not exists engine text;
+alter table public.cloud_analyses add column if not exists recompute_version int;
 
 -- ---------------------------------------------------------------------------
 -- 4. RLS

@@ -283,6 +283,83 @@ await runBrowserTest({
     expect(phase8.updated, 'phase 8: nothing left to do').toBe(0);
     expect(phase8.stamped, 'phase 8: still stamps, so it never runs again').toBeTruthy();
 
-    console.log('PASS: empty-boot does not stamp; real pass stamps; same-version boot skips; force bypasses; newer stamp skips; interrupted pass resumes');
+    /* ---------------------------------------------------------------- */
+    /*  Phase 9: per-row rules vintage                                  */
+    /* ---------------------------------------------------------------- */
+    // The restore case. A row already stamped with the current vintage carries
+    // derived fields from these exact rules, so the pass must leave it alone
+    // even though the DB-wide stamp says the pass is due. Without this, a
+    // freshly restored library — whose rows arrive already correct in the sync
+    // blob — was reclassified move by move, which is what blocked a real
+    // library for half an hour.
+    await seedSpread();
+    const phase9 = await page.evaluate(async () => {
+      const { db } = await import('/src/db/schema.ts');
+      const { recomputeClassificationsAndAccuracies, RECOMPUTE_VERSION } = await import(
+        '/src/db/queries.ts'
+      );
+      // Stamp three of the six as already current, as a cloud pull would.
+      for (const id of ['rs-101', 'rs-102', 'rs-103']) {
+        const a = await db.analyses.get(id);
+        await db.analyses.put({ ...a, recomputeVersion: RECOMPUTE_VERSION });
+      }
+      const updated = await recomputeClassificationsAndAccuracies();
+      const rows = await db.games.bulkGet(['rs-101', 'rs-104']);
+      const stamps = await Promise.all(
+        ['rs-101', 'rs-104'].map(async (id) => (await db.analyses.get(id))?.recomputeVersion),
+      );
+      return {
+        updated,
+        preStamped: rows[0]?.accuracy?.white,
+        reprocessed: rows[1]?.accuracy?.white,
+        stamps,
+      };
+    });
+    console.log('Phase 9 (vintage skip):', phase9);
+    expect(phase9.updated, 'phase 9: only the three unstamped rows').toBe(3);
+    expect(
+      phase9.preStamped,
+      'phase 9: a current row keeps its sentinel — untouched',
+    ).toBe(3.0);
+    expect(
+      phase9.reprocessed !== 3.0,
+      'phase 9: an unstamped row was reprocessed',
+    ).toBeTruthy();
+    expect(
+      phase9.stamps.every((v) => v === phase9.stamps[0]),
+      'phase 9: every row ends up at the current vintage',
+    ).toBeTruthy();
+
+    // Phase 10: the cheap backfill claims the DB's existing stamp for rows that
+    // predate the per-row field, so an already-recomputed library becomes
+    // restore-cheap without a reclassification.
+    await seedSpread();
+    const phase10 = await page.evaluate(async () => {
+      const { db } = await import('/src/db/schema.ts');
+      const { backfillRecomputeVersion, RECOMPUTE_VERSION } = await import(
+        '/src/db/queries.ts'
+      );
+      // No DB-wide stamp yet: there is no basis for a claim, so do nothing.
+      const withoutClaim = await backfillRecomputeVersion();
+
+      await db.settings.update('main', { lastRecomputeVersion: RECOMPUTE_VERSION });
+      const withClaim = await backfillRecomputeVersion();
+      const stamped = (await db.analyses.get('rs-101'))?.recomputeVersion;
+      // Idempotent: a second run has nothing left to claim.
+      const again = await backfillRecomputeVersion();
+      return { withoutClaim, withClaim, stamped, again, current: RECOMPUTE_VERSION };
+    });
+    console.log('Phase 10 (vintage backfill):', phase10);
+    expect(
+      phase10.withoutClaim,
+      'phase 10: no DB-wide stamp means no claim to copy',
+    ).toBe(0);
+    expect(phase10.withClaim, 'phase 10: claims the stamp for all six rows').toBe(6);
+    expect(phase10.stamped, 'phase 10: rows carry the claimed vintage').toBe(
+      phase10.current,
+    );
+    expect(phase10.again, 'phase 10: idempotent').toBe(0);
+
+    console.log('PASS: empty-boot does not stamp; real pass stamps; same-version boot skips; force bypasses; newer stamp skips; interrupted pass resumes; current rows are skipped; vintage backfill claims the DB stamp');
   },
 });

@@ -67,7 +67,7 @@ jobs:
     # an hour-plus of mostly-waiting. Still bounded so it can't run away.
     timeout-minutes: 340
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Full history: the push step may have to rebase onto a main that
           # moved during this multi-hour run, and rebasing in a depth-1
@@ -75,7 +75,7 @@ jobs:
           # so a full clone costs nothing measurable.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
