@@ -118,6 +118,15 @@ export interface OpeningBar {
   draws: number;
   losses: number;
   winRate: number;
+  /** One game id from this group, so a caller that cannot resolve `family`
+   *  against the openings library by *name* can resolve it from moves
+   *  instead. Free to collect here — this function already walks every game.
+   *
+   *  Needed because the two datasets disagree on names, not just punctuation:
+   *  Chess.com calls 1.g3 "King's Fianchetto Opening" and the bundled Lichess
+   *  data calls it "Hungarian Opening", which share no prefix, so
+   *  `resolveOpeningFamily` cannot bridge them and the row lost its link. */
+  sampleGameId?: string;
 }
 
 /**
@@ -299,6 +308,7 @@ export function winRateByOpening(
       draws: 0,
       losses: 0,
       winRate: 0,
+      sampleGameId: g.id,
     };
     agg.games++;
     if (g.result === 'win') agg.wins++;

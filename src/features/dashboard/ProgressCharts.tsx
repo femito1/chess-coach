@@ -21,6 +21,7 @@ import {
 import { usePersistedState } from '@/lib/usePersistedState';
 import { PrepGapsCard } from './PrepGapsCard';
 import { resolveOpeningFamily } from '@/features/openings/library';
+import { familiesFromGameMoves } from '@/features/openings/identifyFromGame';
 import { db } from '@/db/schema';
 import { useLiveQuery } from 'dexie-react-hooks';
 
@@ -548,6 +549,28 @@ function OpeningWinRateList({
     return map;
   }, []);
 
+  // Rows whose name the library doesn't recognise get a second chance from
+  // their moves. The two datasets disagree on names as well as punctuation —
+  // Chess.com's "King's Fianchetto Opening" is the bundled data's "Hungarian
+  // Opening", sharing no prefix — and such a row used to render with no link at
+  // all, which reads as "this opening isn't in the library" when it is.
+  //
+  // Only the failures get here, so this reads at most a handful of PGNs, and it
+  // fixes every naming divergence rather than the ones an alias table happened
+  // to list.
+  const unresolved = useMemo(
+    () =>
+      openings
+        .filter((o) => !resolveOpeningFamily(o.family) && o.sampleGameId)
+        .map((o) => ({ family: o.family, sampleGameId: o.sampleGameId! })),
+    [openings],
+  );
+  const byMovesKey = unresolved.map((u) => u.family).join('|');
+  const familyByMoves = useLiveQuery(
+    () => familiesFromGameMoves(unresolved),
+    [byMovesKey],
+  );
+
   return (
     <ul className="space-y-2">
       {openings.map((o) => {
@@ -561,7 +584,8 @@ function OpeningWinRateList({
         // Chart rows carry the game-derived spelling ("Caro Kann
         // Defense"); the library and repertoires use the canonical one
         // ("Caro-Kann Defense"). Always link with the canonical name.
-        const canonical = resolveOpeningFamily(o.family);
+        const canonical =
+          resolveOpeningFamily(o.family) ?? familyByMoves?.get(o.family) ?? null;
         const repId = canonical ? repIdByFamily?.get(canonical) : undefined;
         const target = repId
           ? `/repertoire?highlight=${encodeURIComponent(repId)}`

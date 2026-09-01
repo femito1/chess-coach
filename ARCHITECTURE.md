@@ -533,6 +533,25 @@ link with the **canonical** name, or the openings page can't select a family.
 Invariants pinned in `library.test.ts`: every one of the 3 690 lines resolves,
 none onto an unrelated opening, and every family resolves to itself.
 
+**But punctuation is not the only disagreement, and `resolveOpeningFamily`
+cannot fix the other one.** All three of its stages are prefix-based, so they
+only bridge names that *contain* one another. The datasets also use flatly
+different names for the same opening: Chess.com calls 1.g3 "King's Fianchetto
+Opening" where the bundled Lichess data calls it "Hungarian Opening". Those share
+no prefix, `resolveOpeningFamily` returns null, and a dashboard chart row with no
+canonical name rendered with **no link at all** — which reads as "this opening
+isn't in the library" when it is.
+
+So a caller that fails to resolve by name falls back to resolving by *moves*:
+`familyFromGameMoves` in `features/openings/identifyFromGame.ts` runs
+`identifyOpeningLine` over a sample game's UCI. This is the same principle
+§ Prep gaps rests on — names are unreliable, moves are not — and it is preferred
+over an alias table because it covers every divergence, including ones nobody
+enumerated. `winRateByOpening` carries a `sampleGameId` per bar so the fallback
+costs one PGN read per *unresolved* row and nothing at all when every row
+resolves. Pinned by `chart-opening-links.mjs`, which asserts on the link's
+target rather than merely on a link existing.
+
 **`openingFamily()` splits the stored name on the first colon**, and the
 importer only inserts one at the first
 `Variation|Defense|Attack|Gambit|System|Opening` token. Slugs whose tail *is*

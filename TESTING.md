@@ -103,6 +103,15 @@ returns to `pending` rather than `error`. It drives the queue's own chooser thro
 a test seam rather than reimplementing "priority first, else newest" — a
 hand-rolled copy would pass even if the pump ignored priority entirely.
 
+`chart-opening-links` pins that a win-rate chart row keeps its library link when
+the two opening datasets disagree on the *name* rather than the punctuation
+(Chess.com's "King's Fianchetto Opening" vs the bundled "Hungarian Opening"). It
+asserts the precondition first — that the name really is unresolvable — so the
+test cannot quietly stop exercising the move-based fallback if
+`resolveOpeningFamily` ever learns to bridge that pair, and it asserts the
+link's *target*, since a link to the wrong family looks fine and selects
+nothing.
+
 `storage-durability` pins that the app asks the browser to keep its data. It
 instruments `navigator.storage` through an init script *before* the app's own
 scripts run, and asserts `persisted()` was consulted exactly once — asserting

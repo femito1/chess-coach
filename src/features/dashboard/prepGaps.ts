@@ -1,4 +1,3 @@
-import { Chess } from 'chess.js';
 import { db, type Color } from '@/db/schema';
 import {
   getVariations,
@@ -6,6 +5,7 @@ import {
   replayLine,
   type OpeningLine,
 } from '@/features/openings/library';
+import { uciFromPgn } from '@/features/openings/identifyFromGame';
 import { findNodeByFen } from '@/features/repertoire/store';
 import type { GameForCharts } from './progress';
 
@@ -241,20 +241,6 @@ export function rankGapCandidates(
   );
 
   return out.slice(0, Math.max(0, limit));
-}
-
-function uciFromPgn(pgn: string): string[] | null {
-  try {
-    const chess = new Chess();
-    chess.loadPgn(pgn);
-    const uci = chess
-      .history({ verbose: true })
-      .map((move) => move.from + move.to + (move.promotion ?? ''));
-    return uci.length > 0 ? uci : null;
-  } catch {
-    // A malformed historical PGN shouldn't break the dashboard.
-    return null;
-  }
 }
 
 /**
