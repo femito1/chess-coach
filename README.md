@@ -37,7 +37,7 @@ Two things run outside the page:
 React 18 + Vite + TypeScript · [chessground](https://github.com/lichess-org/chessground)
 + [chess.js](https://github.com/jhlywa/chess.js) ·
 [Stockfish 16](https://github.com/nmrugg/stockfish.js) WASM in Web Workers
-(NNUE on by default — but see the caveat below) ·
+(NNUE on by default; in production the net is served from R2 — see below) ·
 [Dexie](https://dexie.org/) over IndexedDB ·
 Clerk (auth) + Supabase (optional mirror) · Tailwind · i18next · Recharts.
 
@@ -97,27 +97,48 @@ Keyboard: `←`/`→` step through moves, `Home`/`End` jump to start/end.
 | `npm run extension:screenshots` | Regenerate the extension's store screenshots. |
 | `npm run preview` | Serve a built `dist/`. |
 
-## NNUE, and why production is on classical eval
+## NNUE, and where the network comes from
 
-The engine asks for Stockfish's NNUE network by default, and locally it gets
-it: `predev`/`prebuild` stage the 40 MB net out of `node_modules` into
-`public/stockfish/`. **On Cloudflare Pages it does not.** Pages rejects any
-single asset over 25 MiB and the net is 38.3 MiB, which **fails the build**. So
-the live site keeps serving the last deploy that succeeded, `/stockfish/nn-*.nnue`
-there answers with the SPA fallback HTML, and every browser analysis in
-production runs Stockfish's weaker classical evaluator (with a console warning;
-nothing crashes).
+The engine runs Stockfish's NNUE evaluator by default, in production as well as
+locally — but the 38.3 MiB network reaches the browser from a different place in
+each case.
 
-Consequences for anyone picking this up:
+- **Locally**, `predev`/`prebuild` stage it out of `node_modules` into
+  `public/stockfish/` and it is served same-origin. The net is gitignored; `npm
+  install` supplies it.
+- **In production**, Cloudflare Pages refuses any single asset over 25 MiB, so
+  the net cannot live in `dist/` on that host — permanently, not as a
+  misconfiguration to be fixed. It is served from an R2 bucket instead, with
+  `VITE_NNUE_NET_URL` in `.env.production` pointing the app there. Setting that
+  variable also makes `prebuild` **skip** staging, so the deployed `public/`
+  stays under the cap.
 
-- Deploys stay red until the net is either kept out of the deployed `public/`
-  or served from somewhere that allows a 40 MB object. DEPLOY.md
-  § "The NNUE network and the 25 MiB asset cap" has the details and the
-  trade-offs.
-- Analyses produced in the browser in production are labelled
-  `stockfish-16-classical`, and are legitimately worse in quiet and endgame
-  positions. The off-laptop worker is unaffected — its Stockfish binary embeds
-  the network.
+Two things that look like faults and are not:
+
+- In production, `/stockfish/nn-*.nnue` on the app's own origin answers with
+  SPA-fallback HTML. The net is deliberately not there.
+- **Preview deploys run the classical evaluator.** The bucket's CORS policy
+  allows only the production hostname and `http://localhost:5173`, while preview
+  builds get per-branch hostnames. Pass `--origin=` to `npm run nnue:setup` to
+  add one.
+
+If the net fails to load for any other reason, a `HEAD` probe catches it and the
+engine falls back to classical with a console warning instead of dying —
+Stockfish 16 `exit()`s at the first `go` when `Use NNUE` is on and no net
+arrived, so that probe is load-bearing. Analyses record which evaluator produced
+them (`stockfish-16-nnue` / `stockfish-16-classical`), and cloud sync ranks the
+evaluator **above** depth: a deeper classical search is a weaker judge looking
+further, not a better analysis.
+
+The real cost of NNUE is memory, not bandwidth — ~340 MB RSS per engine worker
+against ~125 MB classical — so the pool shrinks on low-memory devices and
+Settings carries a per-device toggle.
+
+`npm run nnue:upload -- --verify-only` checks the live bucket end to end. Run it
+after any bucket change and after any Stockfish upgrade, since the net's
+filename carries its own hash and a stale object then 404s under the new name.
+DEPLOY.md § "The NNUE network and the 25 MiB asset cap" and ARCHITECTURE.md
+§ NNUE have the rest.
 
 ## Cloud sync
 
