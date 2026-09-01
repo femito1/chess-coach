@@ -179,6 +179,23 @@ Treat any red as yours, with these exceptions:
   `lib/supabase.ts` → `lib/env.ts`, which throws at module load. There is no
   committed `.env.local`; CI supplies the values from repo secrets. On a machine
   without them, this **one** failing file is expected and everything else passes.
+- **`integration/puzzle-library`** is intermittent and predates any current
+  work. It fails as `matched-to summary shown: expected true, got false`, with
+  the log line above it reading `recommended chips: []` where a pass reads
+  `["Walked into a fork…", …]` — so the flake is in the weakness-motif
+  recommendation seeding, not in the puzzle rendering the test spends most of
+  its assertions on. Re-run it in isolation before investigating; it usually
+  passes there. Not root-caused.
+- **`integration/cloud-sync`** was seen to fail once on CI (2026-09-01, run
+  33500377379) as `game row byte-identical after round trip: expected true, got
+  false`. Evidence that it is intermittent rather than a real regression: the
+  same commit passed 11/11 locally and the failed job passed on a re-run with no
+  code change. Note the test runs against an **in-page fake** Supabase, so real
+  credentials and real cloud rows are not involved and the local/CI difference
+  is unexplained — if you see this twice, it is worth chasing rather than
+  re-running. One thing not yet ruled out: CI supplies real auth env from repo
+  secrets, so the app's own `useCloudSync` is live in the page in a way it
+  cannot be locally against `https://local.invalid`.
 - **`e2e/mobile-audit`** fails on some local setups with
   `Page.captureScreenshot: Unable to capture screenshot` /
   `ERR_INSUFFICIENT_RESOURCES` — Chromium runs out of resources over ~45
