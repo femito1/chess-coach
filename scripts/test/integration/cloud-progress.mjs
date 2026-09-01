@@ -183,8 +183,14 @@ await runBrowserTest({
     // real enrolled account lands in — so the readout actually mounts. This also
     // exercises the stub's own count answers, which is what proves cloud sync
     // can't throw in every other browser test.
+    // Look for the card's own <h2>, not for the words anywhere on the page.
+    // A body-text regex also matches any *prose* that mentions cloud sync —
+    // the storage-durability card names it as the mitigation for evicted
+    // local data — which made this read "card visible" with no card mounted.
     const hiddenFirst = await page.evaluate(() => ({
-      cardVisible: /Cloud sync/i.test(document.body.innerText),
+      cardVisible: Array.from(document.querySelectorAll('h2')).some(
+        (h) => h.textContent?.trim() === 'Cloud sync',
+      ),
     }));
     expect(hiddenFirst.cardVisible, 'card hidden for a non-allowlisted account').toBe(
       false,
@@ -194,9 +200,14 @@ await runBrowserTest({
       const { useSyncStore } = await import('/src/features/sync/useCloudSync.ts');
       useSyncStore.getState().setPhase({ kind: 'ready' });
     });
-    await page.waitForFunction(() => /Cloud sync/i.test(document.body.innerText), undefined, {
-      timeout: 10_000,
-    });
+    await page.waitForFunction(
+      () =>
+        Array.from(document.querySelectorAll('h2')).some(
+          (h) => h.textContent?.trim() === 'Cloud sync',
+        ),
+      undefined,
+      { timeout: 10_000 },
+    );
     // Let the hook's first count read land.
     await sleep(800);
 

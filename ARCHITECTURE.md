@@ -620,6 +620,45 @@ makes each attempt compound, and the script exits `3` while work remains.
 Setting a `LICHESS_TOKEN` hits Lichess directly and skips the proxy's limits
 entirely.
 
+## Storage durability
+
+Everything the app owns lives in IndexedDB, and IndexedDB is **best-effort
+storage**: until an origin asks otherwise, the browser may evict all of it to
+reclaim space, and some browsers evict on an inactivity timer too. For most of
+this app's life it never asked, so the README's local-first promise rested on
+luck. `lib/storagePersistence.ts` asks — once per page load, from `AppLayout`'s
+boot effect — and `features/settings/StorageDurabilityCard.tsx` reports the
+answer.
+
+**An eviction does not look like an eviction.** It takes the Clerk session with
+it, so the app comes back signed out *and* empty, which reads as data loss or as
+a sync bug. The pair of symptoms arriving together is the tell — a Dexie
+migration wipe, by contrast, empties the tables and leaves you signed in.
+
+What the grant does and does not buy, because it is easy to over-trust:
+
+- Firefox prompts, so `false` can be a real refusal.
+- Chrome decides silently from engagement signals (installed, bookmarked,
+  frequently visited) and commonly refuses with no prompt at all.
+- **Nothing on the client survives the user's own browser settings.** "Clear
+  cookies and site data when you close all windows", or a manual clear, takes
+  the data whatever was granted. This is why the state is *surfaced* rather than
+  only requested: a `best-effort` readout is the honest answer to "where did my
+  library go", and cloud sync is the actual mitigation.
+- Quota headroom is not protection either. An origin can be cleared while using
+  a fraction of a percent of its quota, so a healthy `estimate()` says nothing
+  about durability — only `persisted()` does.
+
+`requestDurability` checks `persisted()` before calling `persist()`, because
+re-asking can re-prompt where browsers prompt, and the result is memoised so the
+boot call and the Settings readout share one answer. Everything is wrapped: some
+contexts (private windows, blocked site data) throw rather than resolve, and a
+storage question must never break boot.
+
+`scripts/test/integration/storage-durability.mjs` instruments
+`navigator.storage` *before* the app's scripts run, because "the card renders"
+would pass just as happily over a `persist()` call that never happens.
+
 ## Cloud sync
 
 `src/features/sync/` mirrors three Dexie tables to Supabase.

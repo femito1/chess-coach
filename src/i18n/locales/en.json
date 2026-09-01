@@ -140,6 +140,16 @@
     "openInRepertoireTitle": "Go to your {{family}} repertoire"
   },
   "settings": {
+    "storage": {
+      "title": "Browser storage",
+      "persisted": "Your browser has promised to keep this device's data.",
+      "bestEffort": "This device's data is stored best-effort — the browser may delete it.",
+      "unsupported": "This browser won't say whether it will keep your data.",
+      "error": "Couldn't check storage durability: {{message}}",
+      "persistedHint": "Games, analyses and progress live in IndexedDB on this device. The browser has agreed not to evict them to reclaim space.",
+      "bestEffortHint": "The browser can clear this origin to reclaim space, and will also clear it if you have set it to delete site data on close — which signs you out and empties your library until cloud sync restores it. Keeping cloud sync on is the protection.",
+      "usage": "{{used}} used of {{quota}} available ({{percent}}%)"
+    },
     "title": "Settings",
     "username": "Chess.com username",
     "engineDepth": "Engine depth: {{depth}}",

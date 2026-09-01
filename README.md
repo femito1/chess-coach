@@ -9,6 +9,13 @@ There is no application server. Sign-in (Clerk) is required to reach the app,
 and an opt-in Supabase mirror can back the data up — see
 [Cloud sync](#cloud-sync).
 
+IndexedDB is *best-effort* storage, so the app asks the browser to keep it
+(`navigator.storage.persist()`) at boot and reports the answer under
+Settings → Browser storage. A browser that refuses, or that is set to clear site
+data on close, can still evict everything — which signs you out and empties the
+library until a sync restores it. ARCHITECTURE.md § Storage durability has the
+detail.
+
 ## What it does
 
 | Area | Route | Summary |

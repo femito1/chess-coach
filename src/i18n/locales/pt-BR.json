@@ -140,6 +140,16 @@
     "openInRepertoireTitle": "Ir para o seu repertório de {{family}}"
   },
   "settings": {
+    "storage": {
+      "title": "Armazenamento do navegador",
+      "persisted": "Seu navegador prometeu manter os dados deste dispositivo.",
+      "bestEffort": "Os dados deste dispositivo são guardados sem garantia — o navegador pode apagá-los.",
+      "unsupported": "Este navegador não informa se manterá seus dados.",
+      "error": "Não foi possível verificar a durabilidade do armazenamento: {{message}}",
+      "persistedHint": "Partidas, análises e progresso ficam no IndexedDB deste dispositivo. O navegador concordou em não descartá-los para liberar espaço.",
+      "bestEffortHint": "O navegador pode limpar esta origem para liberar espaço, e também a limpará se você tiver configurado a exclusão de dados do site ao fechar — o que desconecta sua conta e esvazia sua biblioteca até a sincronização na nuvem restaurá-la. Manter a sincronização ativa é a proteção.",
+      "usage": "{{used}} usados de {{quota}} disponíveis ({{percent}}%)"
+    },
     "title": "Configurações",
     "username": "Nome de usuário do Chess.com",
     "engineDepth": "Profundidade da engine: {{depth}}",

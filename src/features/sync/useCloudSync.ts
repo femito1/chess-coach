@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSupabase } from '@/lib/supabase';
 import { useEffectiveAuth } from '@/lib/testAuth';
+import { probeSyncEnabledWithRetry } from './probeRetry';
 import { useQueueStore } from '@/engine/queue';
 import {
   countsTotal,
@@ -152,19 +153,17 @@ export function useCloudSync(): void {
     setPhase({ kind: 'checking' });
 
     void (async () => {
-      // try/catch, not just the returned `error`: a Supabase client can throw
-      // synchronously from `.from()` (the E2E bypass stub does, for tables it
-      // doesn't model), and an escaping rejection here would show up as a page
-      // error in every browser test rather than as a sync state.
-      let enabled = false;
-      let error: string | undefined;
-      try {
-        const res = await isSyncEnabled(supabase, userId);
-        enabled = res.enabled;
-        error = res.error;
-      } catch (err) {
-        error = err instanceof Error ? err.message : String(err);
-      }
+      // The helper absorbs a throw as well as a returned `error`: a Supabase
+      // client can throw synchronously from `.from()` (the E2E bypass stub
+      // does, for tables it doesn't model), and an escaping rejection here
+      // would show up as a page error in every browser test rather than as a
+      // sync state. It also retries a failed probe — see
+      // `probeSyncEnabledWithRetry` for why that matters on a device whose
+      // local data is gone.
+      const { enabled, error } = await probeSyncEnabledWithRetry(
+        () => isSyncEnabled(supabase, userId),
+        signal,
+      );
       if (signal.aborted) return;
       if (error) {
         // Can't tell — most likely offline, or the tables don't exist yet.

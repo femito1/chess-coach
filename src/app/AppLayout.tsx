@@ -7,6 +7,7 @@ import { startAnalysisQueue } from '@/engine/queue';
 import { ProfileChip } from './ProfileChip';
 import { ProfileSyncBanner } from '@/features/auth/ProfileSyncBanner';
 import { useCloudSync } from '@/features/sync/useCloudSync';
+import { ensureDurableStorage } from '@/lib/storagePersistence';
 import { NewGamesBanner } from '@/features/import/NewGamesBanner';
 
 /** Translation-keys for nav. Kept as a typed list so the order is
@@ -31,6 +32,17 @@ export function AppLayout() {
   const { t } = useTranslation();
   useEffect(() => {
     startAnalysisQueue();
+  }, []);
+
+  // Ask the browser to keep this origin's data. Everything the app owns lives
+  // in IndexedDB, which is *best-effort* storage until asked otherwise — the
+  // browser may evict the whole origin, which reads to the user as "my library
+  // vanished and I'm logged out". Fire-and-forget at boot: the answer is
+  // memoised and displayed in Settings, and nothing here should block or break
+  // startup. See `lib/storagePersistence.ts` for what the grant does and does
+  // not cover.
+  useEffect(() => {
+    void ensureDurableStorage();
   }, []);
 
   // Cloud sync for the enrolled account. Mounted here (once, high in the tree)

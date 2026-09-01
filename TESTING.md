@@ -103,6 +103,14 @@ returns to `pending` rather than `error`. It drives the queue's own chooser thro
 a test seam rather than reimplementing "priority first, else newest" — a
 hand-rolled copy would pass even if the pump ignored priority entirely.
 
+`storage-durability` pins that the app asks the browser to keep its data. It
+instruments `navigator.storage` through an init script *before* the app's own
+scripts run, and asserts `persisted()` was consulted exactly once — asserting
+that the Settings card renders would pass over a `persist()` call that never
+happens, which is the bug that existed for the app's whole life. Headless
+Chromium has no engagement signal and so normally refuses the grant; the card
+must be truthful either way, which is what the wording assertions check.
+
 `prep-gaps` pins the dashboard's prep-gap card end to end. Its seeded games
 carry the hyphen-less `opening` string that `parseOpeningFromEcoUrl` really
 emits ("Caro Kann Defense Advance Variation: 4.Nf3"), so the assertion that the

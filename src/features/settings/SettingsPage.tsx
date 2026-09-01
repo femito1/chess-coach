@@ -8,6 +8,7 @@ import {
 } from '@/db/schema';
 import { listAllGamesLight, requeueGamesByScope, type RequeueScope } from '@/db/queries';
 import { TimeClassChips } from '@/components/TimeClassFilter';
+import { StorageDurabilityCard } from './StorageDurabilityCard';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 import {
   CHROME_EXTENSION_NAME,
@@ -297,6 +298,8 @@ export function SettingsPage() {
        *  native-name labels (`Português (Brasil)`, not "Portuguese
        *  (Brazil)") because every other piece of software the user
        *  interacts with does the same. */}
+      <StorageDurabilityCard />
+
       <section className="card p-4 space-y-3">
         <h2 className="font-medium">{t('settings.language.title')}</h2>
         <p className="text-xs text-text-muted">{t('settings.language.description')}</p>
