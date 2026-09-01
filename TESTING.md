@@ -213,6 +213,16 @@ Treat any red as yours, with these exceptions:
   re-running. One thing not yet ruled out: CI supplies real auth env from repo
   secrets, so the app's own `useCloudSync` is live in the page in a way it
   cannot be locally against `https://local.invalid`.
+- **`waitUntil: 'networkidle'` is not a safe contract on the review or dashboard
+  pages.** They start the engine pool, and each worker fetches the 38 MB NNUE
+  net — Playwright contexts are throwaway and have no disk cache, so every one
+  pays in full. `e2e/exploration-classification` timed out there at 40 s in CI
+  (30 s `page.goto` budget) while passing locally in 16 s, and passed on a
+  re-run with no code change; it now navigates with `domcontentloaded` and waits
+  for the move list to be interactive instead. Several other e2e scripts still
+  use `networkidle` and pass today — if one starts timing out in `page.goto`,
+  this is the reason, and the fix is to wait for a UI signal rather than for the
+  network to go quiet.
 - **`e2e/mobile-audit`** fails on some local setups with
   `Page.captureScreenshot: Unable to capture screenshot` /
   `ERR_INSUFFICIENT_RESOURCES` — Chromium runs out of resources over ~45

@@ -48,8 +48,21 @@ await runBrowserTest({
     }
     console.log('Analysis done.');
 
-    await page.goto(appendBypass(`${DEFAULT_URL}review/${id}`), { waitUntil: 'networkidle' });
-    await page.waitForTimeout(800);
+    // `domcontentloaded`, not `networkidle`. The review page starts the engine
+    // pool, and every worker fetches the 38 MB NNUE net — Playwright contexts
+    // are throwaway and have no disk cache, so each one pays in full. "No
+    // network for 500 ms within 30 s" is therefore not a property this page
+    // reliably has on a loaded runner: this navigation timed out in CI at 40 s
+    // while passing locally in 16 s, and passed on a re-run with no code change.
+    // `mobile-review.mjs` already navigates the same page this way.
+    await page.goto(appendBypass(`${DEFAULT_URL}review/${id}`), {
+      waitUntil: 'domcontentloaded',
+    });
+    // Then wait for the thing actually needed — an interactive move list —
+    // rather than a fixed 800 ms, which was a guess at the same question.
+    await page.waitForFunction(() => /Ply \d+\/\d+/.test(document.body.innerText), undefined, {
+      timeout: 30_000,
+    });
 
     // Step past the book phase before going off-mainline. The whole
     // 5-move Italian Game in the test's PGN is in the openings book,
