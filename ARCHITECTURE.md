@@ -743,6 +743,22 @@ What the grant does and does not buy, because it is easy to over-trust:
   is the app-visible symptom of a nearly-full disk, since Chromium derives quota
   from free space; that is the signal worth surfacing.
 
+**So the app warns on headroom, not on the grant.** `assessStoragePressure`
+reads `estimate()` and bands the *remaining* quota: below ~250 MB is `low` (a
+Settings line), below ~50 MB is `critical` (an app-wide banner, mounted above
+every other banner in `AppLayout`). Headroom rather than an absolute quota
+figure, because a small quota on a small device is normal while small *remaining*
+quota means writes are about to fail whatever the device — and a `quota` of 0 is
+read as no room, never as unlimited, since that is precisely what a browser
+promising nothing looks like.
+
+Only `critical` interrupts. A banner that fires on "low" would be trained into
+invisibility, and this one has to be believed the single time it matters.
+`storage-durability.mjs` stubs `estimate()` to a nearly-full-disk shape and
+asserts the banner appears, because the warning's whole value is being *told* —
+a readout you have to go and look at would not have helped the two-day incident
+that prompted it.
+
 Which is why the mitigation that matters is not the grant but **cheap recovery**:
 cloud sync restores the library, and § Boot-time passes' per-row rules vintage is
 what keeps that restore from costing a reclassification of everything.

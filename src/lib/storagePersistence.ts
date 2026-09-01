@@ -107,3 +107,53 @@ export async function readStorageUsage(): Promise<StorageUsage | null> {
 export function resetDurabilityCacheForTests(): void {
   pending = null;
 }
+
+/**
+ * How close this origin is to being unable to write.
+ *
+ * Why headroom and not the durability grant: Chromium derives an origin's quota
+ * from *free disk space*, and keeps two floors on that free space — it evicts
+ * storage buckets below min(1 GiB, 10% of the disk) and refuses writes outright
+ * below min(2 GiB, 1%). A granted `persist()` exempts an origin from quota
+ * eviction; it does **not** exempt it from those floors. Measured on the machine
+ * this app is developed on: a disk at 13.9 MB free wiped six origins including
+ * this one, and a site that had `durable_storage: 1` granted still lost its
+ * IndexedDB session.
+ *
+ * So a collapsing `quota` is the one app-visible fingerprint of the failure that
+ * actually loses data, and it is worth saying out loud. The alternative is what
+ * happened: two days of "why does this app keep forgetting everything", with
+ * every layer reporting healthy — ext4 reserves 5% for root, and `df`'s Avail
+ * already excludes it, so the machine looks fine while every unprivileged writer
+ * starves.
+ *
+ * Deliberately framed as headroom rather than an absolute quota figure, because
+ * a small quota on a small device is normal while a small *remaining* quota
+ * means writes are about to fail whatever the device.
+ */
+export type StoragePressure =
+  | { kind: 'unknown' }
+  | { kind: 'ok'; remaining: number }
+  /** Close enough that eviction or a failed write is plausible soon. */
+  | { kind: 'low'; remaining: number }
+  /** Writes may already be failing. */
+  | { kind: 'critical'; remaining: number };
+
+/** Below this much headroom, writes may already be failing. */
+export const CRITICAL_REMAINING_BYTES = 50_000_000;
+/** Below this much headroom, warn. ~250 MB is several thousand analyses — see
+ *  SETUP_AUTH.md's ~30 KB-per-analysis figure — so this is "you will notice
+ *  soon", not "cutting it fine". */
+export const LOW_REMAINING_BYTES = 250_000_000;
+
+export function assessStoragePressure(usage: StorageUsage | null): StoragePressure {
+  if (!usage) return { kind: 'unknown' };
+  const { usage: used, quota } = usage;
+  // A zero/absent quota is not "infinite room" — it is the browser declining to
+  // promise any, which is exactly the nearly-full-disk case.
+  if (!Number.isFinite(quota) || !Number.isFinite(used)) return { kind: 'unknown' };
+  const remaining = Math.max(0, quota - used);
+  if (remaining < CRITICAL_REMAINING_BYTES) return { kind: 'critical', remaining };
+  if (remaining < LOW_REMAINING_BYTES) return { kind: 'low', remaining };
+  return { kind: 'ok', remaining };
+}

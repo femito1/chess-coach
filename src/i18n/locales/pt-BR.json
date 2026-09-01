@@ -146,9 +146,13 @@
       "bestEffort": "Os dados deste dispositivo são guardados sem garantia — o navegador pode apagá-los.",
       "unsupported": "Este navegador não informa se manterá seus dados.",
       "error": "Não foi possível verificar a durabilidade do armazenamento: {{message}}",
-      "persistedHint": "Partidas, análises e progresso ficam no IndexedDB deste dispositivo. O navegador concordou em não descartá-los para liberar espaço.",
+      "persistedHint": "Partidas, análises e progresso ficam no IndexedDB deste dispositivo, e o navegador concordou em não descartá-los para liberar espaço. Isso não é absoluto: se o disco encher, o navegador deixa de honrar essa promessa e ainda pode apagar tudo. A sincronização na nuvem é a proteção final.",
       "bestEffortHint": "O navegador pode limpar esta origem para liberar espaço, e também a limpará se você tiver configurado a exclusão de dados do site ao fechar — o que desconecta sua conta e esvazia sua biblioteca até a sincronização na nuvem restaurá-la. Manter a sincronização ativa é a proteção.",
-      "usage": "{{used}} usados de {{quota}} disponíveis ({{percent}}%)"
+      "usage": "{{used}} usados de {{quota}} disponíveis ({{percent}}%)",
+      "diskLow": "Este dispositivo está com pouco espaço para os dados do app. Se acabar, o navegador vai apagar sua biblioteca local — a sincronização na nuvem pode restaurá-la, mas fique atento ao espaço livre em disco.",
+      "diskCritical": "Este dispositivo praticamente não tem mais espaço para os dados do app. O navegador pode apagar sua biblioteca local a qualquer momento, e o armazenamento durável não impede isso. Libere espaço em disco.",
+      "bannerTitle": "Espaço em disco esgotando.",
+      "bannerBody": "O navegador pode apagar os dados locais deste app, incluindo seu login. Libere espaço no dispositivo; a sincronização na nuvem pode restaurar a biblioteca depois."
     },
     "title": "Configurações",
     "username": "Nome de usuário do Chess.com",

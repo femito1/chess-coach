@@ -9,6 +9,7 @@ import { ProfileSyncBanner } from '@/features/auth/ProfileSyncBanner';
 import { useCloudSync } from '@/features/sync/useCloudSync';
 import { ensureDurableStorage } from '@/lib/storagePersistence';
 import { NewGamesBanner } from '@/features/import/NewGamesBanner';
+import { StoragePressureBanner } from '@/features/settings/StoragePressureBanner';
 
 /** Translation-keys for nav. Kept as a typed list so the order is
  *  stable and a missing translation surfaces at compile time as a
@@ -146,6 +147,9 @@ export function AppLayout() {
       </header>
       {/* Renders nothing in the steady state; surfaces only when a
           different Clerk user signs in on this browser profile. */}
+      {/* First, and above the others: if the device cannot store data, every
+          other thing the app says about your library is provisional. */}
+      <StoragePressureBanner />
       <ProfileSyncBanner />
       {/* Self-checks Chess.com once per browser session for games
           played since the last import; shows nothing on the steady

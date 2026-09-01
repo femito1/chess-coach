@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  assessStoragePressure,
   ensureDurableStorage,
   readStorageUsage,
   type StorageDurability,
@@ -40,6 +41,11 @@ export function StorageDurabilityCard() {
 
   if (!durability) return null;
 
+  // Headroom first: a collapsing quota is the fingerprint of a nearly-full disk,
+  // which defeats the durability grant entirely and is the failure that actually
+  // loses data. Saying so outranks reporting the grant.
+  const pressure = assessStoragePressure(usage);
+
   const tone =
     durability.kind === 'persisted'
       ? 'text-best'
@@ -60,6 +66,19 @@ export function StorageDurabilityCard() {
     <section className="card p-4 space-y-2">
       <h2 className="font-medium">{t('settings.storage.title')}</h2>
       <p className={`text-sm ${tone}`}>{status}</p>
+      {(pressure.kind === 'critical' || pressure.kind === 'low') && (
+        <p
+          className={`text-sm rounded-md border px-2 py-1.5 ${
+            pressure.kind === 'critical'
+              ? 'border-blunder/50 bg-blunder/10 text-blunder'
+              : 'border-inaccuracy/50 bg-inaccuracy/10 text-inaccuracy'
+          }`}
+        >
+          {pressure.kind === 'critical'
+            ? t('settings.storage.diskCritical')
+            : t('settings.storage.diskLow')}
+        </p>
+      )}
       <p className="text-xs text-text-muted">
         {durability.kind === 'persisted'
           ? t('settings.storage.persistedHint')

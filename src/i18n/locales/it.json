@@ -146,9 +146,13 @@
       "bestEffort": "I dati di questo dispositivo sono conservati senza garanzia — il browser può eliminarli.",
       "unsupported": "Questo browser non dice se conserverà i tuoi dati.",
       "error": "Impossibile verificare la durabilità dell'archiviazione: {{message}}",
-      "persistedHint": "Partite, analisi e progressi vivono in IndexedDB su questo dispositivo. Il browser ha accettato di non rimuoverli per recuperare spazio.",
+      "persistedHint": "Partite, analisi e progressi vivono in IndexedDB su questo dispositivo, e il browser ha accettato di non rimuoverli per recuperare spazio. Non è assoluto: se il disco si esaurisce il browser non rispetta più la promessa e può comunque eliminare tutto. La sincronizzazione cloud è la rete di sicurezza.",
       "bestEffortHint": "Il browser può cancellare questa origine per recuperare spazio, e la cancellerà anche se hai impostato l'eliminazione dei dati del sito alla chiusura — cosa che ti disconnette e svuota la libreria finché la sincronizzazione cloud non la ripristina. Tenere attiva la sincronizzazione è la protezione.",
-      "usage": "{{used}} usati di {{quota}} disponibili ({{percent}}%)"
+      "usage": "{{used}} usati di {{quota}} disponibili ({{percent}}%)",
+      "diskLow": "Questo dispositivo ha poco spazio per i dati dell'app. Se si esaurisce, il browser eliminerà la libreria locale — la sincronizzazione cloud può ripristinarla, ma tieni d'occhio lo spazio libero su disco.",
+      "diskCritical": "Questo dispositivo non ha quasi più spazio per i dati dell'app. Il browser può eliminare la libreria locale in qualsiasi momento, e l'archiviazione durevole non lo impedisce. Libera spazio su disco.",
+      "bannerTitle": "Spazio su disco in esaurimento.",
+      "bannerBody": "Il browser può eliminare i dati locali di questa app, incluso il tuo accesso. Libera spazio sul dispositivo; la sincronizzazione cloud può poi ripristinare la libreria."
     },
     "title": "Impostazioni",
     "username": "Nome utente Chess.com",

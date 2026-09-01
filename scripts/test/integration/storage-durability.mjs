@@ -99,5 +99,37 @@ await runBrowserTest({
     expect(cardText.includes('settings.storage.'), 'no raw i18n keys').toBeFalsy();
     // The usage readout should carry real numbers, not NaN.
     expect(cardText.includes('NaN'), 'usage numbers are real').toBeFalsy();
+
+    // 4. A collapsed quota must be reported, loudly. This is the state that
+    //    actually loses data — Chromium derives quota from free disk, and below
+    //    its floors it refuses writes regardless of any durability grant — and
+    //    it is invisible everywhere else on the machine, so a banner is the
+    //    whole point. Stub `estimate()` to the shape a nearly-full disk gives.
+    await page.addInitScript(() => {
+      const sm = navigator.storage;
+      if (!sm?.estimate) return;
+      Object.defineProperty(sm, 'estimate', {
+        configurable: true,
+        value: async () => ({ usage: 0, quota: 13_900_000 }),
+      });
+    });
+    await page.goto(appendBypass(`${DEFAULT_URL}settings`), {
+      waitUntil: 'networkidle',
+    });
+
+    const alert = await pollUntil(
+      async () => {
+        const text = await page.evaluate(() => {
+          const el = document.querySelector('[role="alert"]');
+          return el ? (el.textContent ?? '') : '';
+        });
+        return { done: text.length > 0, value: text, label: `alert: ${text.slice(0, 110)}` };
+      },
+      { timeoutMs: 15_000 },
+    );
+    expect(
+      alert.includes('disk space'),
+      'a nearly-full disk raises an app-wide banner, not just a Settings line',
+    ).toBeTruthy();
   },
 });

@@ -146,9 +146,13 @@
       "bestEffort": "This device's data is stored best-effort — the browser may delete it.",
       "unsupported": "This browser won't say whether it will keep your data.",
       "error": "Couldn't check storage durability: {{message}}",
-      "persistedHint": "Games, analyses and progress live in IndexedDB on this device. The browser has agreed not to evict them to reclaim space.",
+      "persistedHint": "Games, analyses and progress live in IndexedDB on this device, and the browser has agreed not to evict them to reclaim space. That is not absolute: if the disk runs out, the browser stops honouring it and can still delete everything. Cloud sync is the backstop.",
       "bestEffortHint": "The browser can clear this origin to reclaim space, and will also clear it if you have set it to delete site data on close — which signs you out and empties your library until cloud sync restores it. Keeping cloud sync on is the protection.",
-      "usage": "{{used}} used of {{quota}} available ({{percent}}%)"
+      "usage": "{{used}} used of {{quota}} available ({{percent}}%)",
+      "diskLow": "This device is running low on space for the app's data. If it runs out, the browser will delete your local library — cloud sync can restore it, but keep an eye on free disk space.",
+      "diskCritical": "This device has almost no space left for the app's data. The browser may delete your local library at any point, and durable storage does not prevent that. Free up disk space.",
+      "bannerTitle": "Running out of disk space.",
+      "bannerBody": "The browser may delete this app's local data, including your sign-in. Free up space on the device; cloud sync can restore the library afterwards."
     },
     "title": "Settings",
     "username": "Chess.com username",
