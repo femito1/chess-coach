@@ -725,12 +725,27 @@ What the grant does and does not buy, because it is easy to over-trust:
   frequently visited) and commonly refuses with no prompt at all.
 - **Nothing on the client survives the user's own browser settings.** "Clear
   cookies and site data when you close all windows", or a manual clear, takes
-  the data whatever was granted. This is why the state is *surfaced* rather than
-  only requested: a `best-effort` readout is the honest answer to "where did my
-  library go", and cloud sync is the actual mitigation.
+  the data whatever was granted.
+- **A full disk defeats the grant outright, and this is the failure that
+  actually happened.** Chromium keeps two floors on free disk space:
+  `should_remain_available` (min(1 GiB, 10%)) below which it evicts storage
+  buckets, and `must_remain_available` (min(2 GiB, 1%)) below which it *refuses
+  writes*. Durability exempts an origin from quota eviction; it does not exempt
+  it from those floors. Measured on the machine this app is developed on: a disk
+  at 13.9 MB free wiped six origins including this one, and WhatsApp Web lost its
+  session with `durable_storage: 1` **granted**. So `persist()` is worth
+  requesting but must never be described as protection against disk exhaustion.
+  ext4's 5% root reserve is what makes this hard to spot — root stays healthy and
+  only unprivileged writers starve, so it presents as "one app is misbehaving".
 - Quota headroom is not protection either. An origin can be cleared while using
   a fraction of a percent of its quota, so a healthy `estimate()` says nothing
-  about durability — only `persisted()` does.
+  about durability — only `persisted()` does. Conversely a *collapsed* `quota`
+  is the app-visible symptom of a nearly-full disk, since Chromium derives quota
+  from free space; that is the signal worth surfacing.
+
+Which is why the mitigation that matters is not the grant but **cheap recovery**:
+cloud sync restores the library, and § Boot-time passes' per-row rules vintage is
+what keeps that restore from costing a reclassification of everything.
 
 `requestDurability` checks `persisted()` before calling `persist()`, because
 re-asking can re-prompt where browsers prompt, and the result is memoised so the

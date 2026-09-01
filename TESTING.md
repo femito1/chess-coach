@@ -203,31 +203,32 @@ Treat any red as yours, with these exceptions:
   recommendation seeding, not in the puzzle rendering the test spends most of
   its assertions on. Re-run it in isolation before investigating; it usually
   passes there. Not root-caused.
-- **`integration/cloud-sync`** was seen to fail once on CI (2026-09-01, run
-  33500377379) as `game row byte-identical after round trip: expected true, got
-  false`. Evidence that it is intermittent rather than a real regression: the
-  same commit passed 11/11 locally and the failed job passed on a re-run with no
-  code change. Note the test runs against an **in-page fake** Supabase, so real
-  credentials and real cloud rows are not involved and the local/CI difference
-  is unexplained — if you see this twice, it is worth chasing rather than
-  re-running. One thing not yet ruled out: CI supplies real auth env from repo
-  secrets, so the app's own `useCloudSync` is live in the page in a way it
-  cannot be locally against `https://local.invalid`.
-- **`waitUntil: 'networkidle'` is not a safe contract on the review or dashboard
-  pages.** They start the engine pool, and each worker fetches the 38 MB NNUE
-  net — Playwright contexts are throwaway and have no disk cache, so every one
-  pays in full. `e2e/exploration-classification` timed out there at 40 s in CI
-  (30 s `page.goto` budget) while passing locally in 16 s, and passed on a
-  re-run with no code change; it now navigates with `domcontentloaded` and waits
-  for the move list to be interactive instead. Several other e2e scripts still
-  use `networkidle` and pass today — if one starts timing out in `page.goto`,
-  this is the reason, and the fix is to wait for a UI signal rather than for the
-  network to go quiet.
-- **`e2e/mobile-audit`** fails on some local setups with
-  `Page.captureScreenshot: Unable to capture screenshot` /
-  `ERR_INSUFFICIENT_RESOURCES` — Chromium runs out of resources over ~45
-  full-page screenshots of WASM-heavy pages. It passes in CI (~73 s); confirm
-  against CI before chasing it.
+- **`integration/cloud-sync`'s CI-only failures are now explained**, and the
+  cause was never the diff. The test seeds `games` + `analyses` *inside* its
+  `page.evaluate`, while the boot reclassification pass is still working through
+  its own passes. On a loaded runner the pass snapshots its id list after the
+  seed lands, then rewrites `Game.accuracy` / `brilliantCount` — which is
+  precisely what "byte-identical after round trip" asserts cannot happen — and
+  since `recompute_version` became a decision column it also broke "a second
+  sync moves nothing". The interference was always there; rewriting derived
+  fields left `depth` / `analyzedAt` / `engine` alone, so the diff simply could
+  not see it. Both sightings fit.
+
+  Fixed by insulating the seed, per § Seeding synthetic analyses: the test
+  stamps the DB-wide gate *and* seeds rows already at the current vintage, so
+  the pass skips them however its timing falls. It then asserts
+  `bootPassWork === 0` — verified non-vacuous, since removing the insulation
+  reports 2 and fails with a message naming the cause. If that assertion ever
+  fires, the pass is mutating rows under the test and no other assertion in the
+  file should be trusted until it is fixed.
+
+- **`e2e/mobile-audit`** fails with `Page.captureScreenshot: Unable to capture
+  screenshot` / `ERR_INSUFFICIENT_RESOURCES` **when the disk is nearly full** —
+  it takes ~45 full-page screenshots of WASM-heavy pages and Chromium cannot
+  write them. This was long recorded here as a local Chromium resource limit,
+  reproducible even on a pristine worktree, which was true but not the cause: it
+  reproduced because the disk stayed full. With ~9 GB free the whole e2e tier
+  passes 11/11. So if this fails, check `df -h /` before anything else.
 
 ## Run on demand
 
