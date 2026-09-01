@@ -363,19 +363,46 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
   // one final time on the next load — re-freezing exactly the users the
   // rollback is meant to rescue. A DB carrying a newer stamp has by
   // definition already been through at least as new a rule set.
+  const settings = await getSettings();
   if (!opts?.force) {
-    const settings = await getSettings();
     const stamped = settings.lastRecomputeVersion;
     if (stamped != null && stamped >= RECOMPUTE_VERSION) return 0;
   }
 
-  const doneIds = (await db.games
-    .where('analysisStatus')
-    .equals('done')
-    .primaryKeys()) as string[];
+  // Sorted, so "everything up to the cursor" is a well-defined prefix that
+  // survives a reload. `primaryKeys()` off an index is already ordered, but
+  // the resume contract shouldn't rest on that being true forever.
+  const doneIds = (
+    (await db.games
+      .where('analysisStatus')
+      .equals('done')
+      .primaryKeys()) as string[]
+  ).sort();
+
+  // Resume an interrupted pass. The cursor is only honoured for the version
+  // that wrote it: after a rules change the old prefix was classified under
+  // the old rules and has to be redone. `force` means "redo everything", so it
+  // ignores the cursor too.
+  //
+  // A game that arrives *after* a partial run and sorts before the cursor is
+  // skipped — but that is already true without resumption, because `doneIds`
+  // is snapshotted here and the completion stamp then suppresses later boots.
+  // Freshly analyzed games get their classification from the analyzer anyway;
+  // this pass only exists to re-derive *old* rows under new rules.
+  const resumeFrom =
+    !opts?.force && settings.recomputeCursorVersion === RECOMPUTE_VERSION
+      ? settings.recomputeCursor
+      : undefined;
+  const firstIndex = resumeFrom
+    ? doneIds.findIndex((id) => id > resumeFrom)
+    : 0;
+  // `findIndex` returns -1 when the cursor is at or past the last id, i.e. the
+  // previous run got everything and only the final stamp was lost.
+  const startIndex = firstIndex === -1 ? doneIds.length : firstIndex;
+
   let updated = 0;
 
-  for (let start = 0; start < doneIds.length; start += RECOMPUTE_CHUNK) {
+  for (let start = startIndex; start < doneIds.length; start += RECOMPUTE_CHUNK) {
     const chunkIds = doneIds.slice(start, start + RECOMPUTE_CHUNK);
     const games = await db.games.bulkGet(chunkIds);
     const analyses = await db.analyses.bulkGet(chunkIds);
@@ -503,6 +530,15 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
       });
     }
 
+    // Record how far we got, so a reload resumes here instead of starting
+    // over. One small settings write per 60 games, against a chunk that just
+    // wrote up to 60 analyses and 60 games — immaterial next to the work it
+    // protects.
+    await updateSettings({
+      recomputeCursor: chunkIds[chunkIds.length - 1],
+      recomputeCursorVersion: RECOMPUTE_VERSION,
+    });
+
     // Yield to the browser so the UI thread doesn't freeze for the
     // full duration of the recompute on large libraries.
     await yieldToBrowser();
@@ -515,7 +551,13 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
   // import would silently skip the pass forever (the pass is checked
   // by version, not by row count).
   if (doneIds.length > 0) {
-    await updateSettings({ lastRecomputeVersion: RECOMPUTE_VERSION });
+    await updateSettings({
+      lastRecomputeVersion: RECOMPUTE_VERSION,
+      // The run is over; a stale cursor would only be a trap for the next
+      // version bump, which must start from the beginning.
+      recomputeCursor: undefined,
+      recomputeCursorVersion: undefined,
+    });
   }
 
   return updated;

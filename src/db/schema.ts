@@ -216,6 +216,20 @@ export interface Settings {
    *  every page reload was making the app feel frozen for the first few
    *  seconds after navigation. */
   lastRecomputeVersion?: number;
+  /** Resume point for an *interrupted* recompute pass: the id of the last
+   *  game whose analysis was rewritten, with the version that run was for.
+   *
+   *  The pass only stamps `lastRecomputeVersion` after walking the entire
+   *  library, so before this existed a reload at any point started it over
+   *  from the first game. On a library of a couple of thousand games the pass
+   *  takes minutes, a user watching a frozen-looking app reloads, and it could
+   *  therefore never finish — the reasonable reaction was the thing that
+   *  guaranteed the trap. With a cursor, a reload costs at most one chunk.
+   *
+   *  Cleared when the pass completes. Both fields are optional and
+   *  non-indexed, so no Dexie version bump is needed. */
+  recomputeCursor?: string;
+  recomputeCursorVersion?: number;
   /** Same idea for the boot-time opening-metadata refresh. Bumped only
    *  when `reparseOpeningFromPgn` changes its output for existing PGNs. */
   lastOpeningRefreshVersion?: number;

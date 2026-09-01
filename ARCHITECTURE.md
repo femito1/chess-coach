@@ -91,6 +91,42 @@ stamp — `backfillBrilliantCounts` (~10 ms for 40 games) is the worked example.
 The expensive pass may *refresh* such a field as a rider, but must never be the
 reason it runs.
 
+**The pass is resumable, and has to be.** It stamps `lastRecomputeVersion` only
+after walking the *whole* library, so for a large library a reload part-way
+through used to start again at the first game. That is a trap with teeth: the
+pass takes minutes on a couple of thousand games and blocks the main thread
+between chunks, so the app looks frozen, and the natural response — reload —
+was precisely what guaranteed it could never finish. One user sat through
+20–30 minutes of it after a cloud restore.
+
+So each chunk now writes `recomputeCursor` / `recomputeCursorVersion` to
+settings, and a run resumes after the cursor instead of from zero; a reload
+costs at most one chunk of redone work. Three rules the cursor carries, all
+pinned in `recompute-skip.mjs` phases 6–8:
+
+- **It is only honoured for the version that wrote it.** After a rules change
+  the old prefix was classified under the old rules and must be redone — which
+  is the entire point of the bump. `force` ignores it for the same reason.
+- **A completed run clears it**, or the next version bump would resume from a
+  stale point and skip everything before it.
+- **`doneIds` is sorted** so "everything up to the cursor" is a well-defined
+  prefix. `primaryKeys()` off an index is already ordered, but the resume
+  contract should not rest on that staying true.
+
+A game imported *after* a partial run that sorts before the cursor is skipped —
+but that was already true without resumption, because `doneIds` is snapshotted
+at the start and the completion stamp suppresses later boots. Freshly analyzed
+games get their classification from the analyzer; this pass exists only to
+re-derive *old* rows under new rules.
+
+**A cloud restore makes this pass redundant, and cannot currently say so.** The
+mirror stores whole `Analysis` blobs, so pulled rows already carry
+`classification` / `motifs` / `accuracy` computed by the same code — yet an
+evicted device loses its settings row too, so the stamp is gone and the pass
+re-derives all of it. The clean fix is for the cloud row to record the
+`RECOMPUTE_VERSION` that produced it, so a restore can stamp; until then, a
+restore pays for a full pass.
+
 **Version gates compare `>=`, not `===`.** A rolled-back version would
 otherwise re-trigger the expensive pass on every DB that briefly saw the higher
 number — re-freezing exactly the users a rollback is meant to rescue. A DB
