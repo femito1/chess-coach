@@ -16,7 +16,7 @@ and an opt-in Supabase mirror can back the data up — see
 | Import | `/import` | Pull Chess.com games by month; queue them for analysis. |
 | Games | `/games` | The library, filtered/paged; accuracy and brilliancy badges. |
 | Review | `/review/:id` | Eval graph, per-move classification (blunder / mistake / inaccuracy / miss / good / best / brilliant / book), motifs, clock use, play-it-out vs Stockfish. |
-| Dashboard | `/dashboard` | Rating + accuracy trends, win rate by opening family, study cards. |
+| Dashboard | `/dashboard` | Rating + accuracy trends, win rate by opening family, **prep gaps** (openings you lose in that aren't in a repertoire), study cards. |
 | Puzzles | `/puzzles` | 191,250 vetted puzzles from the Lichess open DB (CC0). Tabs: Recommended / Easy / Medium / Hard / All. |
 | Openings | `/openings` | ~3,700 named lines (Lichess `chess-openings`, MIT). Browse by family, preview, add lines or a whole family to a repertoire. |
 | Repertoire | `/repertoire` | Family-bound repertoires; SM-2 spaced repetition (`/repertoire/:id/train`). |

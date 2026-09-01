@@ -533,20 +533,17 @@ export function familyColor(family: string): Color {
 }
 
 /**
- * Best-effort identification of the opening that a UCI move sequence
- * represents. Returns the longest known book line that is a prefix of
- * the input, so e.g. a 12-ply Najdorf line matches the deepest Najdorf
- * variation rather than just "1.e4".
+ * The longest known book line that is a prefix of `uci` — the library row
+ * itself, so callers that need the book path (not just its labels) don't
+ * have to search again. Returns null when nothing in the library covers
+ * even the first move (extremely rare with the Lichess dataset, but
+ * possible for joke lines).
  *
- * Returns null when nothing in the library covers even the first move
- * (extremely rare with the Lichess dataset, but possible for joke lines).
+ * Prefer this over matching a game's stored `opening` string by name:
+ * that string comes from Chess.com and spells variations differently from
+ * the bundled Lichess dataset, whereas moves are moves.
  */
-export function identifyOpening(uci: string[]): {
-  family: string;
-  variation: string;
-  name: string;
-  eco: string;
-} | null {
+export function identifyOpeningLine(uci: readonly string[]): OpeningLine | null {
   if (uci.length === 0) return null;
   let best: OpeningLine | null = null;
   for (const line of OPENING_LINES) {
@@ -561,6 +558,22 @@ export function identifyOpening(uci: string[]): {
     if (!match) continue;
     if (!best || line.uci.length > best.uci.length) best = line;
   }
+  return best;
+}
+
+/**
+ * Best-effort identification of the opening that a UCI move sequence
+ * represents, as labels. So e.g. a 12-ply Najdorf line matches the deepest
+ * Najdorf variation rather than just "1.e4". See `identifyOpeningLine` when
+ * you also need the matched line's moves.
+ */
+export function identifyOpening(uci: string[]): {
+  family: string;
+  variation: string;
+  name: string;
+  eco: string;
+} | null {
+  const best = identifyOpeningLine(uci);
   if (!best) return null;
   return {
     family: best.family,

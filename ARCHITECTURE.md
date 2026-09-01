@@ -555,6 +555,45 @@ branches on it takes an injectable predicate in tests
 (`scoreLine(line, stats, isMeasured)`) rather than hard-coding the current
 depth.
 
+### Prep gaps
+
+`features/dashboard/prepGaps.ts` finds openings you lose in that are absent
+from your prep. Two rules keep it honest, and both are easy to undo by
+accident.
+
+**Never split a game's `opening` into family + variation.** The reconciliation
+above is about *spelling*; this is a separate defect in the same string.
+`parseOpeningFromEcoUrl` inserts its colon at the first marker word it
+recognises, so where the colon lands depends on whether Chess.com's slug
+carried a trailing move sequence — the same opening arrives as both
+`"Caro Kann Defense Advance Variation: 4.Nf3"` and
+`"Caro Kann Defense: Advance Variation"`. Splitting on the colon files those
+under two different families and fragments the very record that makes a gap
+visible. `openingGroupKey` instead drops the move tail, neutralises the
+punctuation and groups on the whole remaining name. The result is a grouping
+key only: it is variation-grained but is not a library name (note the lost
+hyphen), so it must never reach the UI as a label.
+
+**The name shown and the position checked both come from the moves, never from
+that key.** Stage 2 resolves each candidate through `identifyOpeningLine`,
+which returns the deepest library line prefixing the game — so labels and
+`/openings` links are canonical by construction, with no name matching between
+the two vocabularies. The prep check is then deliberately *coarser* than that
+match: the library distinguishes "Advance Variation, Short Variation" from
+"Advance Variation, Tal Variation" where a game says only "Advance", so the
+matched variation is truncated to its first comma segment before its defining
+(shallowest) position is looked up. Checking the deep sub-line instead would put
+"lost 8 of 11" beside a label describing one of the eight, and would report
+prepped prep as a gap. Where the group's own name is just the family, the check
+drops to the family. Both errors it avoids are silent — the card looks right
+either way — which is why `scripts/test/integration/prep-gaps.mjs` asserts on
+the hyphen in "Caro-Kann" and on a row retiring itself after prep.
+
+The split into a pure PGN-free stage 1 and a PGN-reading stage 2 exists because
+the dashboard reads `listGamesLight()` on a throttled live query; stage 2 reads
+at most `MAX_CANDIDATES * SAMPLES_PER_CANDIDATE` PGNs. Widening stage 1 to parse
+PGNs would put ~2 MB of allocation behind every refire.
+
 ## Openings data refresh
 
 `.github/workflows/openings-refresh.yml` re-snapshots monthly (and on manual

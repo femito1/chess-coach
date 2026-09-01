@@ -93,6 +93,12 @@
     }
   },
   "charts": {
+    "prepGaps": {
+      "title": "Prep gaps",
+      "subtitle": "Openings you lose in that aren't in a repertoire yet.",
+      "row": "lost {{losses}} of {{games}}",
+      "tooltip": "{{label}} — {{wins}}W {{draws}}D {{losses}}L over {{games}} games your library files as \"{{groupName}}\", and not in your repertoire"
+    },
     "sectionTitle": "Progress",
     "ratingTitle": "Rating trend",
     "accuracyTitle": "Accuracy over time",

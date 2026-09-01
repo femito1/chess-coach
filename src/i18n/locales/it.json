@@ -93,6 +93,12 @@
     }
   },
   "charts": {
+    "prepGaps": {
+      "title": "Lacune di preparazione",
+      "subtitle": "Aperture in cui perdi e che non sono ancora in un repertorio.",
+      "row": "perse {{losses}} su {{games}}",
+      "tooltip": "{{label}} — {{wins}}V {{draws}}P {{losses}}S su {{games}} partite registrate come \"{{groupName}}\", e non nel tuo repertorio"
+    },
     "sectionTitle": "Progressi",
     "ratingTitle": "Andamento rating",
     "accuracyTitle": "Accuratezza nel tempo",

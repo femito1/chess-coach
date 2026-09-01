@@ -103,6 +103,16 @@ returns to `pending` rather than `error`. It drives the queue's own chooser thro
 a test seam rather than reimplementing "priority first, else newest" — a
 hand-rolled copy would pass even if the pump ignored priority entirely.
 
+`prep-gaps` pins the dashboard's prep-gap card end to end. Its seeded games
+carry the hyphen-less `opening` string that `parseOpeningFromEcoUrl` really
+emits ("Caro Kann Defense Advance Variation: 4.Nf3"), so the assertion that the
+row reads "Caro-**K**ann" is what proves the label was resolved from the game's
+*moves* rather than echoed from that string — the card would look correct in a
+screenshot either way. The other load-bearing assertion is that adding the
+variation to a repertoire retires the row with no reload: that is the difference
+between reading the repertoire tree and merely checking whether a family
+repertoire exists, which is the behaviour the feature was specified on.
+
 `nnue-remote-net` pins the production NNUE deployment: it starts its own HTTP
 server on an ephemeral port to play the part of the object store, with CORS and
 CORP separately switchable, and asserts that the app loads the net cross-origin

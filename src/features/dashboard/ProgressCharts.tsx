@@ -19,6 +19,7 @@ import {
   type GameForCharts,
 } from './progress';
 import { usePersistedState } from '@/lib/usePersistedState';
+import { PrepGapsCard } from './PrepGapsCard';
 import { resolveOpeningFamily } from '@/features/openings/library';
 import { db } from '@/db/schema';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -507,6 +508,13 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
           <OpeningWinRateList openings={openings} />
         )}
       </div>
+
+      {/* Which of those openings you should actually go and study. Renders
+          nothing when there is no gap to report, so it can't push the
+          section around on a thin library. Unfiltered by the opening
+          mode-picker on purpose: a prep gap is a property of your
+          repertoire, not of a time class. */}
+      <PrepGapsCard games={games} />
     </section>
   );
 }
