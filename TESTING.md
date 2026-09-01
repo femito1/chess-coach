@@ -187,6 +187,36 @@ await updateSettings({
 Keep an explicit assertion that the seeded motifs survived, so a regression
 names its own cause instead of surfacing as a confusing empty result.
 
+## Tests race the live app, and must insulate themselves
+
+`runBrowserTest` loads the **real** app, so by the time your `page.evaluate`
+runs, two things are already working on the same Dexie tables you are about to
+seed: the analysis queue's run loop, and the boot passes. Neither knows it is in
+a test. Three failures this suite has produced all came from this, every one of
+them CI-only, because a slow runner changes who wins:
+
+| Test | What raced | Symptom |
+|---|---|---|
+| `cloud-sync` | boot reclassification rewriting `Game.accuracy` / row vintage between two syncs | "byte-identical after round trip", then "a second sync moves nothing" |
+| `queue-newest-first` | the analyzer claiming a pending game the test was about to drain | `order: [...3 of 4]` — correct ordering, one row short |
+| `e2e/exploration-classification` | engine workers fetching 38 MB nets, so the network never went quiet | `page.goto` timeout on `networkidle` |
+
+The pattern to copy, in order of preference:
+
+1. **Stop the machinery from having anything to do.** Stamp the boot-pass version
+   gates, and seed rows already at the current `RECOMPUTE_VERSION` so the
+   per-row filter skips them (`cloud-sync` does both). Then *assert* it worked —
+   `cloud-sync` checks `bootPassWork === 0` — so a regression names its own cause
+   instead of surfacing as a mysterious assertion failure three lines later.
+2. **Make your own sequence atomic.** If you read-then-write rows the app also
+   consumes, do it in one `db.transaction('rw', ...)`. Dexie serialises
+   transactions, so the app cannot interleave a claim. `queue-newest-first`
+   drains inside one for exactly this reason.
+3. **Wait on a UI signal, never on the network going idle.** See § Known-failing.
+
+What NOT to do is loosen the assertion to accommodate the race — that trades a
+red test for a test that no longer checks the thing it was written for.
+
 ## Known-failing
 
 Treat any red as yours, with these exceptions:

@@ -65,15 +65,28 @@ await runBrowserTest({
 
       // Repeatedly pull `nextPendingGame`, mark the result done, and
       // record the order. We expect newest-first.
+      //
+      // The whole drain runs in ONE read-write transaction, because the live
+      // analyzer is a second consumer of the same pending queue: the app shell
+      // is mounted, its run loop calls this very function, and whatever it
+      // claims it flips to 'running'. On a slow runner it won this race for the
+      // last game and the test saw
+      // `["g-newest","g-second","g-middle"]` — correct ordering, one row short.
+      // Dexie serialises transactions on `games`, so inside one the analyzer
+      // cannot interleave a claim, which makes the drain deterministic instead
+      // of dependent on winning a race. Strengthened rather than loosened: the
+      // ordering assertions below are unchanged and still require all four.
       const order = [];
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const g = await nextPendingGame();
-        if (!g) break;
-        order.push(g.id);
-        await db.games.update(g.id, { analysisStatus: 'done' });
-        if (order.length > 10) break; // safety
-      }
+      await db.transaction('rw', db.games, async () => {
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const g = await nextPendingGame();
+          if (!g) break;
+          order.push(g.id);
+          await db.games.update(g.id, { analysisStatus: 'done' });
+          if (order.length > 10) break; // safety
+        }
+      });
 
       return { order };
     });
