@@ -27,7 +27,7 @@ import {
 } from '@/engine/freePlayEngine';
 import { usePersistedState } from '@/lib/usePersistedState';
 import { MOVE_SOUNDS_PREF_KEY } from '@/audio/moveSounds';
-import { NNUE_PREF_KEY, NNUE_PREF_VERSION } from '@/engine/nnue';
+import { NNUE_PREF_KEY, NNUE_PREF_VERSION, nnueDefaultForDevice } from '@/engine/nnue';
 import {
   ENGINE_WORKERS_CHOICES,
   ENGINE_WORKERS_PREF_KEY,
@@ -56,7 +56,9 @@ export function SettingsPage() {
   );
   // Same key + version the engine handshake reads through
   // `nnuePreferenceEnabled()`.
-  const [nnue, setNnue] = usePersistedState<boolean>(NNUE_PREF_KEY, true, {
+  // Same default the engine uses, or the toggle would show ON while the engine
+  // ran classical — see `nnueDefaultForDevice`.
+  const [nnue, setNnue] = usePersistedState<boolean>(NNUE_PREF_KEY, nnueDefaultForDevice(), {
     version: NNUE_PREF_VERSION,
     isValid: (v): v is boolean => typeof v === 'boolean',
   });

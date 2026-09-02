@@ -405,11 +405,28 @@ analyses.
 
 **Memory, not bandwidth, is the real cost:** ~340 MB RSS per worker with NNUE
 against ~125 MB classical, so a 4-worker pool goes ~0.5 GB → ~1.4 GB. Fine on
-desktop, fatal on a phone. `defaultPoolSize({cores, memoryGb, nnue})` reads
+desktop, fatal on a phone. `defaultPoolSize({cores, memoryGb, nnue, phone})` reads
 `navigator.hardwareConcurrency` and `navigator.deviceMemory`, and clamps to
-1 worker at ≤2 GB and 2 at ≤4 GB — **but only when NNUE is on**. iOS Safari
-exposes no `deviceMemory`, so it cannot be detected there; the per-device
-toggle is that device's answer. The toggle lives in localStorage
+1 worker at ≤2 GB and 2 at ≤4 GB — **but only when NNUE is on**.
+
+**iOS Safari exposes no `deviceMemory`, and that gap crashed a real phone.**
+`hardwareConcurrency` of 4 gave an iPhone three NNUE workers, ~1.0 GB, while the
+boot reclassification pass and a cloud restore ran alongside; Safari killed the
+tab repeatedly. Treating the Settings toggle as that platform's answer asked the
+user to find a switch *before* the crash that would tell them they needed it. So
+when there is no memory reading, `looksLikePhone()` (`engine/device.ts`) is
+consulted: a coarse **primary** pointer plus a short screen edge ≤500 px means
+one NNUE worker, or two classical. NNUE's untouched default also flips off there
+(`nnueDefaultForDevice`), which is the larger lever — 340 MB per worker becomes
+125 MB.
+
+That is a capability query about the *device*, not user-agent sniffing, and it
+deliberately does not widen to "no memory API" in general: desktop Safari and
+Firefox report a fine pointer and keep the full pool, which was the original
+objection to guessing and still stands. Tablets are also left alone — an iPad's
+short edge is 744 and it was not the device that died. `engine-nnue.mjs` pins
+both directions, including that a phone which *does* report memory uses the
+reading rather than the screen measurement. The toggle lives in localStorage
 (`chess-coach:engine.nnue:v1`, default on) rather than the synced `Settings`
 row precisely because it is a per-device bandwidth/memory question.
 

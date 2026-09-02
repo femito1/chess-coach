@@ -358,6 +358,8 @@ await runBrowserTest({
     const sizing = await page.evaluate(async () => {
       const { defaultPoolSize } = await import('/src/engine/pool.ts');
       const at = (cores, memoryGb, nnue) => defaultPoolSize({ cores, memoryGb, nnue });
+      const onPhone = (cores, memoryGb, nnue) =>
+        defaultPoolSize({ cores, memoryGb, nnue, phone: true });
       return {
         // Classical is unchanged by memory: it was always affordable.
         classical8core2gb: at(8, 2, false),
@@ -373,6 +375,16 @@ await runBrowserTest({
         nnue2core16gb: at(2, 16, true),
         nnue1core16gb: at(1, 16, true),
         nnue1core1gb: at(1, 1, true),
+        // A phone-shaped device with no memory API — the case a real iPhone
+        // crashed on. `hardwareConcurrency` of 4 used to yield three NNUE
+        // workers, ~1.0 GB.
+        nnuePhone4coreNoApi: onPhone(4, undefined, true),
+        classicalPhone4coreNoApi: onPhone(4, undefined, false),
+        // A phone that DOES report memory uses the reading — better evidence
+        // than a screen measurement, and it must not be overridden by it.
+        nnuePhone8core8gb: onPhone(8, 8, true),
+        // Phone-shaped but single core: the floor still holds.
+        nnuePhone1coreNoApi: onPhone(1, undefined, true),
       };
     });
     console.log('pool sizing:', JSON.stringify(sizing));
@@ -385,6 +397,22 @@ await runBrowserTest({
     expect(sizing.nnue2core16gb, 'cores still cap the pool').toBe(1);
     expect(sizing.nnue1core16gb, 'single core still gets one worker').toBe(1);
     expect(sizing.nnue1core1gb, 'never zero workers (a 0-size pool deadlocks pump)').toBe(1);
+    // The iOS hole. `nnue8coreNoApi` above still expects 4, which is the point:
+    // the guess is made from the DEVICE being phone-shaped, never from the
+    // memory API being absent — desktop Safari and Firefox are untouched.
+    expect(
+      sizing.nnuePhone4coreNoApi,
+      'a phone with no memory API gets ONE NNUE worker, not three',
+    ).toBe(1);
+    expect(
+      sizing.classicalPhone4coreNoApi,
+      'a phone without NNUE gets two workers (~250 MB), not three',
+    ).toBe(2);
+    expect(
+      sizing.nnuePhone8core8gb,
+      'a real memory reading outranks the screen measurement',
+    ).toBe(4);
+    expect(sizing.nnuePhone1coreNoApi, 'the one-worker floor still holds').toBe(1);
 
     /* ------------------------------------------------------------------ */
     /*  4. The opt-out                                                    */

@@ -66,6 +66,7 @@
  * same-origin stand-in.
  */
 
+import { looksLikePhone } from './device';
 import { readPersistedValue, persistedStorageKey } from '@/lib/usePersistedState';
 
 /**
@@ -104,10 +105,28 @@ function isBoolean(raw: unknown): raw is boolean {
  * deliberately *not* memoized, so flipping the Settings toggle takes effect on
  * the next engine start without a reload.
  */
+/**
+ * What the toggle reads as on a device that has never touched it.
+ *
+ * `true` everywhere except phones. NNUE is the right default on anything with
+ * room for it — it is a materially better evaluator, and this is a coaching app
+ * whose conclusions depend on that. On a phone it is the wrong default twice
+ * over: a 38 MB download over cellular, and ~340 MB of WASM heap per worker
+ * against ~125 MB classical, on the platform with the tightest per-tab memory
+ * limit and no `deviceMemory` for the pool to size itself from. An iPhone
+ * crashed on exactly that combination.
+ *
+ * A device that opts in explicitly keeps NNUE — this only changes the untouched
+ * default, and the toggle still overrides it in both directions.
+ */
+export function nnueDefaultForDevice(): boolean {
+  return !looksLikePhone();
+}
+
 export function nnuePreferenceEnabled(): boolean {
   return readPersistedValue(
     persistedStorageKey(NNUE_PREF_KEY, NNUE_PREF_VERSION),
-    true,
+    nnueDefaultForDevice(),
     isBoolean,
   );
 }

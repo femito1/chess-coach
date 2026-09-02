@@ -3,6 +3,7 @@ import {
   type AnalysisResult,
   type EngineObservation,
 } from './engine';
+import { looksLikePhone } from './device';
 import { intendedEvaluatorIdSync, nnuePreferenceEnabled } from './nnue';
 import { persistedStorageKey, readPersistedValue } from '@/lib/usePersistedState';
 
@@ -48,11 +49,20 @@ type PoolObserver = (obs: EngineObservation, workerIndex: number) => void;
  * a smaller pool analyzes more slowly, a crashed tab analyzes nothing.
  *
  * `navigator.deviceMemory` is Chromium-only (and deliberately coarse). Where it
- * is missing we do NOT guess — penalising every Firefox and Safari desktop for an
- * absent API would cost real throughput to protect a device we have no evidence
- * about. The residual gap is iOS Safari, which reports nothing and enforces tight
- * per-tab limits; that device's answer is the Settings toggle, which is one of the
- * reasons it exists.
+ * is missing we still do NOT guess from the browser — penalising every Firefox
+ * and Safari desktop for an absent API would cost real throughput to protect a
+ * device we have no evidence about.
+ *
+ * But we do now ask about the *device*. iOS Safari reports no `deviceMemory` and
+ * enforces the tightest per-tab limit of anything this runs on, and treating the
+ * Settings toggle as that platform's answer asked the user to find a switch
+ * before the crash that would tell them they needed it. A real iPhone died here:
+ * `hardwareConcurrency` of 4 gave it three NNUE workers, ~1.0 GB, while the boot
+ * reclassification pass and a cloud restore ran alongside. So when there is no
+ * memory reading and the device is phone-shaped (`isPhoneShaped` — a coarse
+ * PRIMARY pointer and a short screen edge, which desktop Safari and Firefox do
+ * not match), assume the tightest case. See `device.ts` for why that is a
+ * capability query rather than user-agent sniffing.
  */
 export function defaultPoolSize(env: {
   cores?: number;
@@ -60,12 +70,20 @@ export function defaultPoolSize(env: {
   memoryGb?: number;
   /** Whether workers will load the NNUE net. */
   nnue: boolean;
+  /** `looksLikePhone()`. Consulted only when `memoryGb` is absent — a real
+   *  memory reading is always better evidence than a screen measurement. */
+  phone?: boolean;
 }): number {
   const cores = env.cores && env.cores > 0 ? env.cores : 4;
   const byCores = Math.max(1, Math.min(4, cores - 1));
-  if (!env.nnue || typeof env.memoryGb !== 'number' || !(env.memoryGb > 0)) {
+  if (typeof env.memoryGb !== 'number' || !(env.memoryGb > 0)) {
+    // No reading. A phone gets the tightest answer we would ever give a device
+    // this size: one NNUE worker (~340 MB) or two classical (~250 MB). Anything
+    // not phone-shaped keeps today's behaviour exactly.
+    if (env.phone) return Math.min(byCores, env.nnue ? 1 : 2);
     return byCores;
   }
+  if (!env.nnue) return byCores;
   // ~340 MB/worker: 2 GB can afford one, 4 GB two, and anything larger is a
   // machine where the core count is the real constraint again.
   const byMemory = env.memoryGb <= 2 ? 1 : env.memoryGb <= 4 ? 2 : 4;
@@ -125,6 +143,7 @@ const AUTO_POOL_SIZE = (() => {
   return defaultPoolSize({
     cores: navigator.hardwareConcurrency,
     memoryGb: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+    phone: looksLikePhone(),
     // Read once at module load. A user who flips the toggle gets the new cap on
     // the next page load; the per-worker evaluator itself updates as soon as
     // idle workers are respawned (see `changeNnue` in SettingsPage).
