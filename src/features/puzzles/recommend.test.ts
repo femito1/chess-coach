@@ -18,7 +18,9 @@ const NOW = Date.UTC(2026, 7, 31);
 const DAY = 86_400_000;
 
 /** Minimal MistakeRow — only the fields the scorer reads matter, but we
- *  build the full shape so the test breaks if the contract changes. */
+ *  build the full shape so the test breaks if the contract changes. It has
+ *  earned that once already: trimming the row's dead mini-board fields failed
+ *  here first, which is exactly the intent. */
 function mistake(opts: {
   motifs: Motif[];
   daysAgo: number;
@@ -26,27 +28,14 @@ function mistake(opts: {
 }): MistakeRow {
   return {
     gameId: `g${opts.daysAgo}-${opts.motifs.join('+')}`,
-    gameUrl: undefined,
+    ply: 21,
     gameDate: NOW - opts.daysAgo * DAY,
-    opponent: 'opp',
-    result: 'loss',
-    userColor: 'white',
     opening: undefined,
     eco: undefined,
-    ply: 21,
-    san: 'Qxh7',
-    uci: 'd1h7',
-    fenBefore: '8/8/8/8/8/8/8/8 w - - 0 1',
-    evalCpBefore: 0,
-    bestMoveUci: undefined,
-    classification: 'blunder',
     motifs: opts.motifs,
     phase: 'middlegame',
-    clockAfter: undefined,
     inTimeTrouble: false,
     winrateDrop: opts.winrateDrop ?? 0.5,
-    moveAccuracy: 20,
-    bestMoveSan: undefined,
   };
 }
 

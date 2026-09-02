@@ -544,12 +544,30 @@ ways in one run and asserts they are field-for-field identical, against a fixtur
 seeded with real mistakes — two empty lists would otherwise compare equal, and
 "the tab silently has nothing to recommend" is exactly the regression to catch.
 
-Still true of this read, and not addressed: `MistakeRow` carries `fenBefore`,
-`uci`, `bestMoveUci`, `bestMoveSan` and `evalCpBefore` to feed inline mini-boards
-on the **Weaknesses page, which no longer exists**. Recommended reads none of
-them. Dropping the dead fields would cut what remains resident by most of its
-size, but `aggregateMistakes` and `phase2.mjs` assert on the fuller shape, so it
-is a separate change with its own blast radius.
+`MistakeRow` itself was then cut from 22 fields to 9. It carried `fenBefore`,
+`evalCpBefore`, `bestMoveUci`, `bestMoveSan`, `san` and `uci` to draw inline
+mini-boards on the **Weaknesses page, which no longer exists** — and because rows
+outlive the analyses they are folded from, each of those was a string held off a
+move list that would otherwise be garbage, once per mistake in the library.
+`fenBefore` alone was ~70 characters a row. The unread game-derived fields
+(`gameUrl`, `opponent`, `result`, `userColor`) went with them for tidiness rather
+than bytes: they were reference copies of strings the caller's game rows already
+keep alive, so they cost ~nothing, but unread is unread and each is a `gameId`
+lookup away. `opening` and `eco` are game-derived in the same way and stayed only
+because `aggregateMistakes` reads them.
+
+The rule for adding one back, stated on the type: **a field belongs when a
+consumer reads it, not when one might.** That is the rule the removed six broke —
+they were kept against a page that had already been deleted. Widening is cheap
+now: `mistakeRowsForGame` has the `MoveEval` in hand, so it is one line in the
+type and one in the fold.
+
+Nothing in `src/` read any removed field, which `tsc` confirms rather than a grep:
+the only two errors from deleting them were an unused import and
+`recommend.test.ts`'s row factory, which builds the full shape precisely so that a
+contract change fails there first. `phase2.mjs` reads only counts off
+`aggregateMistakes`, never `byMotif[].examples`, so the one path by which arbitrary
+row fields could escape to a consumer has none.
 
 ### The lever, now that it exists
 

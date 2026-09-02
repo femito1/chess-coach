@@ -1,6 +1,5 @@
 import type { Analysis, Game, Motif, MoveEval, Phase } from '@/db/schema';
 import { MOTIF_ORDER } from '@/engine/motifs';
-import { moveAccuracy } from '@/engine/classify';
 
 /**
  * Extracts the user's own mistakes from analyzed games.
@@ -23,10 +22,8 @@ import { moveAccuracy } from '@/engine/classify';
  *    because a "your weaknesses at a glance" summary is a plausible
  *    addition to the Recommended tab.
  *
- * Doc comments below still mention "the weaknesses page" where they
- * describe why a field exists; those are accurate history for fields whose
- * shape that page determined (`fenBefore`, `evalCpBefore`, `bestMoveUci`
- * all exist to feed inline mini-boards).
+ * `MistakeRow` was trimmed to what is actually read when that page went — see
+ * its own comment for the rule on adding a field back.
  */
 
 /**
@@ -37,48 +34,54 @@ import { moveAccuracy } from '@/engine/classify';
  */
 export type GameForAggregation = Omit<Game, 'pgn'>;
 
+/**
+ * One mistake the user made, in one game.
+ *
+ * Carries what its consumers read, plus what identifies it, and nothing else.
+ * It used to carry a great deal else — `fenBefore`, `evalCpBefore`,
+ * `bestMoveUci`, `bestMoveSan`, `san`, `uci` — to draw inline mini-boards on the
+ * Weaknesses page. That page is gone; its diagnosis half became the Recommended
+ * tab, which scores motifs and never looks at a board. Nothing has read those
+ * fields since.
+ *
+ * They were not merely untidy. These rows deliberately **outlive** the analyses
+ * they are folded out of (`mistakeRowsForGame`), and each of those fields was a
+ * string held off a move list that would otherwise be garbage — multiplied by
+ * every mistake in the library. `fenBefore` alone was ~70 characters per row.
+ *
+ * The unread game-derived fields (`gameUrl`, `opponent`, `result`, `userColor`)
+ * went too, for tidiness rather than for bytes: they were reference copies of
+ * strings the caller's own game rows already keep alive, so holding them cost
+ * ~nothing. But unread is unread, and each is one `gameId` lookup away.
+ * `opening` and `eco` are game-derived in exactly the same way and stay only
+ * because `aggregateMistakes` genuinely reads them.
+ *
+ * **The rule for adding one back:** a field belongs here when a consumer reads
+ * it — not when a consumer might. If a "weaknesses at a glance" summary ever
+ * wants the played move again, widen this and the fold in the same change;
+ * `mistakeRowsForGame` has the `MoveEval` in hand, so it is one line each.
+ */
 export interface MistakeRow {
+  /** Identity, with `ply`: which game, which move. Everything else about the
+   *  game is a lookup away, which is why nothing else about it is here. */
   gameId: string;
-  gameUrl?: string;
+  ply: number;
+  /** When the game was played. `scoreMotifs` decays a motif's weight by the
+   *  age of the mistake, so this is load-bearing for ranking, not display. */
   gameDate: number;
-  opponent: string;
-  result: Game['result'];
-  userColor: 'white' | 'black';
+  /** Read by `aggregateMistakes` to bucket mistakes by opening. */
   opening?: string;
   eco?: string;
-  ply: number;
-  san: string;
-  /** UCI of the played move; needed by the inline mini-board on the
-   *  weaknesses page so it can highlight the move + animate it without
-   *  re-deriving from SAN. Always defined for stored mistakes (the
-   *  analyzer always populates `MoveEval.uci`). */
-  uci?: string;
-  /** FEN of the position the user moved FROM. Used by the weaknesses
-   *  page's inline mini-board (preview) and as a deep-link fallback for
-   *  the review page's "from weakness" banner — review uses this to
-   *  match against the analysis's move list when the `?ply=` deep-link
-   *  hits a transposition or doesn't otherwise resolve. */
-  fenBefore: string;
-  /** White-POV centipawn eval before the move; used by the weakness
-   *  inline EvalBar so the mini preview shares the same visual rhythm
-   *  as the review page. */
-  evalCpBefore: number;
-  /** Engine's preferred UCI from `fenBefore`. Lets the weaknesses page
-   *  draw the "engine wanted this" arrow on the preview without spinning
-   *  up the live engine. */
-  bestMoveUci?: string;
-  classification: MoveEval['classification'];
+  /** What the mistake *was*, in the vocabulary Recommended turns into puzzle
+   *  themes. The reason the whole pipeline exists. */
   motifs: Motif[];
   phase?: Phase;
-  /** Remaining clock AFTER this move (seconds), for mover. */
-  clockAfter?: number;
-  /** Opponent's estimate of "time pressure" for the player: either the
-   *  player's clock was < 20% of base, or < 15s absolute. */
+  /** Whether the player was short of time. The mover's raw `clockAfter` is not
+   *  kept beside it: this is the only form anything reads, and keeping both
+   *  invites them to disagree. */
   inTimeTrouble: boolean;
+  /** Winrate lost by the move, 0–1. Severity, for both scorers. */
   winrateDrop: number;
-  /** Accuracy (0-100). */
-  moveAccuracy: number;
-  bestMoveSan?: string;
 }
 
 export interface Aggregates {
@@ -142,27 +145,14 @@ export function mistakeRowsForGame(
     const drop = Math.max(0, m.winrateBefore - m.winrateAfter);
     rows.push({
       gameId: g.id,
-      gameUrl: g.url,
+      ply: m.ply,
       gameDate: g.endTime,
-      opponent: g.opponent,
-      result: g.result,
-      userColor: g.userColor,
       opening: g.opening,
       eco: g.eco,
-      ply: m.ply,
-      san: m.san,
-      uci: m.uci,
-      fenBefore: m.fenBefore,
-      evalCpBefore: m.evalCpBefore,
-      bestMoveUci: m.bestMoveUci,
-      classification: m.classification,
       motifs: m.motifs ?? [],
       phase: m.phase,
-      clockAfter: m.clockAfter,
       inTimeTrouble: inTimeTroubleFor(m, base),
       winrateDrop: drop,
-      moveAccuracy: moveAccuracy(drop * 100),
-      bestMoveSan: m.bestMoveSan,
     });
   }
   return rows;
