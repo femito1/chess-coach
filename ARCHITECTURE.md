@@ -7,8 +7,9 @@ comments at each site are the detailed version, this is the map.
 
 Contents: [Data model](#data-model) ·
 [Boot-time passes](#boot-time-passes-and-version-stamps) · [Engine](#engine) ·
-[NNUE](#nnue) · [Puzzles](#puzzles) · [Openings](#openings) ·
-[Openings data refresh](#openings-data-refresh) · [Cloud sync](#cloud-sync) ·
+[NNUE](#nnue) · [Memory on mobile](#memory-on-mobile) · [Puzzles](#puzzles) ·
+[Openings](#openings) · [Openings data refresh](#openings-data-refresh) ·
+[Storage durability](#storage-durability) · [Cloud sync](#cloud-sync) ·
 [Off-laptop analysis worker](#off-laptop-analysis-worker) ·
 [UI conventions](#ui-conventions) · [Deployment](#deployment)
 
@@ -265,7 +266,9 @@ depends on *free* memory, which the browser will not report:
 at 8. So `defaultPoolSize()` stays conservative and
 `preferredWorkerCount()` (localStorage, like the NNUE toggle) lets a human who
 knows their machine take the 31%. `effectivePoolSize()` is the one answer both the
-pool and the Settings UI read.
+pool and the Settings UI read. The phone clamp in § NNUE is not an exception to
+this: it does not try to predict where the cliff is, it avoids a device that
+cannot survive the default at all.
 
 **The single-threaded fallback is an 11× cliff, so it is surfaced.** Measured on
 the same game at depth 18: `stockfish-nnue-16.js` 9.7 s versus
@@ -435,6 +438,44 @@ row precisely because it is a per-device bandwidth/memory question.
 `nnue`, so absent, null or unrecognised reads as **classical**. That is the
 honest default — everything analyzed before the evaluator was recorded came
 from a build running `Use NNUE` off.
+
+## Memory on mobile
+
+An iPhone was killed by Safari on `/review/:id` (2026-09-02). The engine's share
+of that is fixed — see § NNUE for `isPhoneShaped` — but **the crash was
+overdetermined and only the dominant term was removed.** Four whole-table or
+multiple-copy loads remain, and they can all peak at the same instant, because
+nothing serialises them: `queue.ts:162` starts the engine pump, `:168` starts the
+boot passes, and cloud sync runs from its own `AppLayout` effect.
+
+Sizes below are **estimates from row shapes**, not device measurements — the
+30 KB-per-analysis figure comes from SETUP_AUTH.md. Measure before optimising.
+
+| # | Sink | Where | Mechanism |
+|---|---|---|---|
+| 1 | `listAnalysesLight()` | `db/queries.ts:228` | `db.analyses.toArray()` materialises **every** analysis in full, then `.map(stripMoves)` — so the full array *and* the stripped copy are both live. ~1 200 analyses ≈ 36 MB JSON, plausibly 100–180 MB as live objects. Called at `cloudSync.ts:220`, i.e. mid-restore. |
+| 2 | `listAllGamesLight()` | `db/queries.ts:142` | Same shape over `games`, so every PGN. Called **twice per sync** (`cloudSync.ts:170`, `:219`) and — worse — from a *throttled live query* at `SettingsPage.tsx:86`, which re-materialises all PGNs every 1.5 s while Settings is open during analysis. |
+| 3 | Recompute pass, per 60-game chunk | `db/queries.ts:423-595` | 60 full analyses + 60 `Game` rows **with PGN** + a second copy of every move (`{...m}`) + a third live reference in `analysisPatches` + a `Map` of the same games + 60 more spreads in `merged`. Roughly 2× analyses and 2× games at peak, sustained for the whole pass. |
+| 4 | `backfillBrilliantCounts` | `db/queries.ts:929-930` | bulkGets 60 PGN-bearing games **and** 60 full analyses for the same ids, then reads only `a.moves` classifications and `g.userColor` / `g.brilliantCount`. The PGN is paid for and never touched. |
+
+**1 and 2 are the biggest and the safest**: streaming with `db.<table>.each()`
+and stripping per row gives identical output while never holding the whole table,
+and the light projections exist precisely so callers do not hold moves or PGNs —
+`toArray().map()` defeats their entire purpose. Note `bulkGetAnalysisLight`
+(`queries.ts:218`) is already fine; it is only the unbounded list functions that
+are wrong.
+
+3 and 4 are riskier because 3 is the pass whose correctness rules are documented
+in § Boot-time passes — its per-row vintage gate and cursor must keep working —
+and 4's `undefined !== 0` first-run behaviour is load-bearing for the badge.
+
+**The obvious lever that does not exist:** `Settings.autoAnalyze` is written by
+the Settings UI and **read by nothing**. `grep` it — the only hits are
+`SettingsPage.tsx` and the `Settings` interface. The queue never consults it, so
+"Analyze new games automatically" is an inert toggle: it cannot be used to quiet
+the analyzer on a constrained device, and it silently misleads anyone who flips
+it. Either wire it into `runLoop`'s pump or remove it; do not cite it as a
+mitigation until it is one.
 
 ## Puzzles
 

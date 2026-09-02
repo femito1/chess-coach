@@ -233,25 +233,6 @@ Treat any red as yours, with these exceptions:
   recommendation seeding, not in the puzzle rendering the test spends most of
   its assertions on. Re-run it in isolation before investigating; it usually
   passes there. Not root-caused.
-- **`integration/cloud-sync`'s CI-only failures are now explained**, and the
-  cause was never the diff. The test seeds `games` + `analyses` *inside* its
-  `page.evaluate`, while the boot reclassification pass is still working through
-  its own passes. On a loaded runner the pass snapshots its id list after the
-  seed lands, then rewrites `Game.accuracy` / `brilliantCount` — which is
-  precisely what "byte-identical after round trip" asserts cannot happen — and
-  since `recompute_version` became a decision column it also broke "a second
-  sync moves nothing". The interference was always there; rewriting derived
-  fields left `depth` / `analyzedAt` / `engine` alone, so the diff simply could
-  not see it. Both sightings fit.
-
-  Fixed by insulating the seed, per § Seeding synthetic analyses: the test
-  stamps the DB-wide gate *and* seeds rows already at the current vintage, so
-  the pass skips them however its timing falls. It then asserts
-  `bootPassWork === 0` — verified non-vacuous, since removing the insulation
-  reports 2 and fails with a message naming the cause. If that assertion ever
-  fires, the pass is mutating rows under the test and no other assertion in the
-  file should be trusted until it is fixed.
-
 - **`e2e/mobile-audit`** fails with `Page.captureScreenshot: Unable to capture
   screenshot` / `ERR_INSUFFICIENT_RESOURCES` **when the disk is nearly full** —
   it takes ~45 full-page screenshots of WASM-heavy pages and Chromium cannot

@@ -28,7 +28,7 @@ detail.
 | Openings | `/openings` | ~3,700 named lines (Lichess `chess-openings`, MIT). Browse by family, preview, add lines or a whole family to a repertoire. |
 | Repertoire | `/repertoire` | Family-bound repertoires; SM-2 spaced repetition (`/repertoire/:id/train`). |
 | Drill | `/repertoire/:id/drill` | Repertoire ∪ library lines in one picker, tiered Easy / Medium / Hard (family-relative), with a **Learn** active-recall step that hands straight into drilling that same line. |
-| Settings | `/settings` | Per-device engine + sound preferences, NNUE toggle, cloud-sync status. |
+| Settings | `/settings` | Per-device engine + sound preferences, NNUE toggle, worker count, browser-storage durability, cloud-sync status. |
 
 Two things run outside the page:
 
@@ -44,7 +44,7 @@ Two things run outside the page:
 React 18 + Vite + TypeScript · [chessground](https://github.com/lichess-org/chessground)
 + [chess.js](https://github.com/jhlywa/chess.js) ·
 [Stockfish 16](https://github.com/nmrugg/stockfish.js) WASM in Web Workers
-(NNUE on by default; in production the net is served from R2 — see below) ·
+(NNUE on by default except on phones — see below) ·
 [Dexie](https://dexie.org/) over IndexedDB ·
 Clerk (auth) + Supabase (optional mirror) · Tailwind · i18next · Recharts.
 
@@ -119,6 +119,12 @@ each case.
   `VITE_NNUE_NET_URL` in `.env.production` pointing the app there. Setting that
   variable also makes `prebuild` **skip** staging, so the deployed `public/`
   stays under the cap.
+
+**Phones are the exception, deliberately.** NNUE's untouched default is off
+there, and the worker pool clamps to one, because ~340 MB of WASM heap per worker
+killed a real iPhone. Both are per-device localStorage toggles, so a phone that
+opts in keeps NNUE. ARCHITECTURE.md § NNUE has the detection and § Memory on
+mobile has what is still unfixed.
 
 Two things that look like faults and are not:
 
