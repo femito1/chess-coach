@@ -115,8 +115,66 @@ function baseOf(tc: string | undefined): number | undefined {
 }
 
 /**
+ * The user's own mistakes in ONE analyzed game.
+ *
+ * Split out of `buildMistakes` so a caller can *stream*. Every game's analysis
+ * is consumed independently here — nothing in a row depends on another game —
+ * so a reader walking a Dexie cursor can fold one analysis into rows and let
+ * the move list go, instead of holding every analysis in the library at once.
+ * That is what the Recommended tab does; see ARCHITECTURE.md § Memory on
+ * mobile for why holding them was a problem.
+ *
+ * Deliberately pure, and this module must stay that way: it has no Dexie
+ * import, which is what lets `recommend.test.ts` and friends run in the unit
+ * tier (`vitest.config.ts` forbids Dexie there). The cursor lives in
+ * `db/queries.ts` — `forEachAnalysis` — and calls this.
+ */
+export function mistakeRowsForGame(
+  g: GameForAggregation,
+  a: Analysis,
+): MistakeRow[] {
+  const rows: MistakeRow[] = [];
+  const base = baseOf(g.timeControl);
+  for (const m of a.moves) {
+    const moverColor = m.ply % 2 === 1 ? 'white' : 'black';
+    if (moverColor !== g.userColor) continue;
+    if (!BLUNDERY.has(m.classification)) continue;
+    const drop = Math.max(0, m.winrateBefore - m.winrateAfter);
+    rows.push({
+      gameId: g.id,
+      gameUrl: g.url,
+      gameDate: g.endTime,
+      opponent: g.opponent,
+      result: g.result,
+      userColor: g.userColor,
+      opening: g.opening,
+      eco: g.eco,
+      ply: m.ply,
+      san: m.san,
+      uci: m.uci,
+      fenBefore: m.fenBefore,
+      evalCpBefore: m.evalCpBefore,
+      bestMoveUci: m.bestMoveUci,
+      classification: m.classification,
+      motifs: m.motifs ?? [],
+      phase: m.phase,
+      clockAfter: m.clockAfter,
+      inTimeTrouble: inTimeTroubleFor(m, base),
+      winrateDrop: drop,
+      moveAccuracy: moveAccuracy(drop * 100),
+      bestMoveSan: m.bestMoveSan,
+    });
+  }
+  return rows;
+}
+
+/**
  * Build the flat list of MistakeRows across all analyzed games where the
  * user was the mover. Downstream stats all derive from this list.
+ *
+ * Takes every analysis up front, so it is only appropriate where the caller
+ * already holds them — `aggregateMistakes` and its tests. A reader coming from
+ * the database should stream `mistakeRowsForGame` instead.
  */
 export function buildMistakes(
   games: ReadonlyArray<GameForAggregation>,
@@ -126,37 +184,9 @@ export function buildMistakes(
   for (const g of games) {
     const a = analyses.get(g.id);
     if (!a) continue;
-    const base = baseOf(g.timeControl);
-    for (const m of a.moves) {
-      const moverColor = m.ply % 2 === 1 ? 'white' : 'black';
-      if (moverColor !== g.userColor) continue;
-      if (!BLUNDERY.has(m.classification)) continue;
-      const drop = Math.max(0, m.winrateBefore - m.winrateAfter);
-      rows.push({
-        gameId: g.id,
-        gameUrl: g.url,
-        gameDate: g.endTime,
-        opponent: g.opponent,
-        result: g.result,
-        userColor: g.userColor,
-        opening: g.opening,
-        eco: g.eco,
-        ply: m.ply,
-        san: m.san,
-        uci: m.uci,
-        fenBefore: m.fenBefore,
-        evalCpBefore: m.evalCpBefore,
-        bestMoveUci: m.bestMoveUci,
-        classification: m.classification,
-        motifs: m.motifs ?? [],
-        phase: m.phase,
-        clockAfter: m.clockAfter,
-        inTimeTrouble: inTimeTroubleFor(m, base),
-        winrateDrop: drop,
-        moveAccuracy: moveAccuracy(drop * 100),
-        bestMoveSan: m.bestMoveSan,
-      });
-    }
+    // A loop rather than `push(...rows)`: spreading is an argument list, and
+    // this one is bounded only by how badly the user played.
+    for (const r of mistakeRowsForGame(g, a)) rows.push(r);
   }
   return rows;
 }

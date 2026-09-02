@@ -303,6 +303,35 @@ export async function listAnalysesLight(): Promise<AnalysisLight[]> {
   return streamLight(db.analyses.toCollection(), stripMoves);
 }
 
+/**
+ * Visit the analyses for `gameIds` one at a time, full move lists included.
+ *
+ * For the callers that genuinely need every move — motif scoring, and anything
+ * else that folds an analysis into a summary — and so cannot use
+ * `AnalysisLight`. `bulkGet` would hand them the whole set at once, which on a
+ * 1 200-game library is the 100–180 MB shape that made these reads a problem in
+ * the first place. A cursor gives the same rows with one resident at a time, and
+ * whatever the visitor accumulates is the only thing that grows.
+ *
+ * The visitor must be synchronous — Dexie closes the cursor's transaction if you
+ * await inside it — so fold, don't fetch. Rows arrive in primary-key order
+ * rather than the order of `gameIds`; every current caller accumulates
+ * order-independently, and one that cares should sort its own output rather than
+ * expect this to.
+ */
+export async function forEachAnalysis(
+  gameIds: string[],
+  visit: (analysis: Analysis) => void,
+): Promise<void> {
+  if (gameIds.length === 0) return;
+  await db.analyses
+    .where(':id')
+    .anyOf(gameIds)
+    .each((a) => {
+      visit(a);
+    });
+}
+
 /** Exported for unit-testing the shape contract. Not for production
  *  use — call `getAnalysisLight` / `bulkGetAnalysisLight` /
  *  `listAnalysesLight` instead so the IDB read stays in one place. */

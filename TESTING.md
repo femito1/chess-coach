@@ -133,6 +133,13 @@ place. It also key-checks that `pgn` and `moves` are absent rather than merely
 unread: a row that still carries the field costs the memory whether anyone reads
 it or not, and that is invisible to the type checker.
 
+Its last section covers `forEachAnalysis`, the cursor the Recommended tab reads
+full move lists through. It builds the mistake rows both ways in one run — streamed,
+and via the `bulkGet` + `buildMistakes` form it replaced — and asserts they are
+field-for-field identical, having first asserted the fixture yields rows at all.
+Both paths returning nothing would otherwise compare equal, and "the tab silently
+has nothing to recommend" is the regression worth catching.
+
 `storage-durability` pins that the app asks the browser to keep its data. It
 instruments `navigator.storage` through an init script *before* the app's own
 scripts run, and asserts `persisted()` was consulted exactly once — asserting

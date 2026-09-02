@@ -2,13 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
-  db,
   getSettings,
   normalizeTimeClassSelection,
-  type Analysis,
   type TimeClassSelection,
 } from '@/db/schema';
-import { listAllGamesLight, type GameLight } from '@/db/queries';
+import { forEachAnalysis, listAllGamesLight, type GameLight } from '@/db/queries';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 import { gameMatchesSelection } from '@/lib/timeClass';
 import { usePersistedState } from '@/lib/usePersistedState';
@@ -33,7 +31,7 @@ import {
   recommendationPlan,
   type RecommendationPlan,
 } from './recommend';
-import { buildMistakes } from './mistakes';
+import { mistakeRowsForGame, type MistakeRow } from './mistakes';
 import { loadSolvedIds, recordAttempt } from './attempts';
 import {
   BOARD_CLAMP_PX,
@@ -347,10 +345,17 @@ function useSolvedIds(): { ids: Set<string>; loaded: boolean } {
 /**
  * Compute the recommendation plan from the user's analyzed games.
  *
- * Only runs when `active`, because it reads every analysis's full move list
- * — the same cost the old Weaknesses page paid, which is why that page was
- * slow on large libraries. Throttled live queries keep it from refiring on
- * every write during an analysis run.
+ * Only runs when `active`: scoring needs every move of every analyzed game, so
+ * there is no point paying for it until the user opens the tab. Throttled live
+ * queries keep it from refiring on every write during an analysis run.
+ *
+ * It reads those move lists through a cursor and folds each one into
+ * `MistakeRow`s as it arrives (`forEachAnalysis` + `mistakeRowsForGame`). It used
+ * to `bulkGet` the lot — the same cost the old Weaknesses page paid, which is why
+ * that page was slow on large libraries, and on a phone the last of the
+ * whole-table loads in ARCHITECTURE.md § Memory on mobile. Only the user's own
+ * blundery moves survive the fold, so what stays resident is a few thousand small
+ * rows instead of ~1 200 full move lists.
  */
 function useRecommendation(active: boolean): {
   plan: RecommendationPlan | null;
@@ -388,23 +393,36 @@ function useRecommendation(active: boolean): {
     [games, timeClasses],
   );
 
-  const analyses = useThrottledLiveQuery(
+  const mistakes = useThrottledLiveQuery(
     async () => {
-      if (!active || analyzed.length === 0) return [] as Analysis[];
-      const rows = await db.analyses.bulkGet(analyzed.map((g) => g.id));
-      return rows.filter((a): a is Analysis => Boolean(a));
+      if (!active || analyzed.length === 0) return [] as MistakeRow[];
+      // The join is on game metadata the light rows already carry, so the game
+      // side costs nothing extra; only the analysis is streamed.
+      const byId = new Map(analyzed.map((g) => [g.id, g]));
+      const rows: MistakeRow[] = [];
+      await forEachAnalysis(
+        analyzed.map((g) => g.id),
+        (a) => {
+          const g = byId.get(a.gameId);
+          // An analysis whose game fell out of the filter between the two reads.
+          if (!g) return;
+          for (const r of mistakeRowsForGame(g, a)) rows.push(r);
+        },
+      );
+      return rows;
     },
     [active, analyzed],
     1000,
   );
 
   const plan = useMemo(() => {
-    if (!active || !games || !analyses) return null;
-    const map = new Map<string, Analysis>();
-    for (const a of analyses) map.set(a.gameId, a);
-    const rows = buildMistakes(analyzed, map);
+    if (!active || !games || !mistakes) return null;
     return recommendationPlan({
-      rows,
+      // Row order does not matter: `scoreMotifs` sums into a map keyed by motif
+      // and sorts its own output, and `estimateUserRating` re-sorts by date. Worth
+      // knowing, because the cursor delivers in game-id order rather than the
+      // order `analyzed` is in.
+      rows: mistakes,
       now: Date.now(),
       userRating: estimateUserRating(analyzed),
       queueLength: RUN_LENGTH,
@@ -412,11 +430,11 @@ function useRecommendation(active: boolean): {
     // `Date.now()` in a memo is fine here: the deps only change on a data
     // refire, and re-scoring on a stale clock would at worst shift decay
     // weights by minutes on a 30-day half-life.
-  }, [active, games, analyses, analyzed]);
+  }, [active, games, mistakes, analyzed]);
 
   return {
     plan,
-    loaded: !active || (Boolean(games) && Boolean(analyses)),
+    loaded: !active || (Boolean(games) && Boolean(mistakes)),
     hasAnalyzedGames: analyzed.length > 0,
   };
 }

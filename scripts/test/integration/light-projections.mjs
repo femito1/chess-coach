@@ -227,5 +227,112 @@ await runBrowserTest({
       out.timeClasses.join(','),
       'distinct classes present, one entry each',
     ).toBe('blitz,rapid');
+
+    /* ------------------------------------------------------------------ */
+    /*  forEachAnalysis: streaming the FULL move lists                    */
+    /* ------------------------------------------------------------------ */
+    //
+    // The Recommended tab needs every move of every analyzed game, so it cannot
+    // use a projection — it streams instead, folding each analysis into
+    // `MistakeRow`s and dropping the move list (ARCHITECTURE.md § Memory on
+    // mobile). The fold has to produce exactly what the old `bulkGet` +
+    // `buildMistakes` produced, so that is what is asserted: the same rows, built
+    // both ways, in the same run, against a fixture that really does contain
+    // mistakes. Comparing counts alone would pass on two empty lists, and both
+    // paths returning nothing is precisely the regression that would silently
+    // empty the tab.
+    const fold = await page.evaluate(async () => {
+      const { db } = await import('/src/db/schema.ts');
+      const { forEachAnalysis } = await import('/src/db/queries.ts');
+      const { mistakeRowsForGame, buildMistakes } = await import(
+        '/src/features/puzzles/mistakes.ts'
+      );
+
+      // Give the seeded analyses real user mistakes. Every fixture game is
+      // `userColor: 'white'`, and white moves on ODD plies, so a blunder on an
+      // odd ply is the user's own — an even one belongs to the opponent and must
+      // NOT produce a row.
+      const blunder = (ply) => ({
+        ply,
+        san: 'Qh5??',
+        uci: 'd1h5',
+        fenBefore: 'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2',
+        fenAfter: 'rnbqkbnr/pppp1ppp/8/4p2Q/4P3/8/PPPP1PPP/RNBQKB1R b KQkq - 1 2',
+        evalCpBefore: 30,
+        evalCpAfter: -400,
+        winrateBefore: 0.55,
+        winrateAfter: 0.2,
+        classification: 'blunder',
+        motifs: ['fork'],
+        depth: 16,
+      });
+
+      const rows = await db.analyses.toArray();
+      for (const a of rows) {
+        // ply 1 = user's blunder, ply 2 = opponent's. Keeps the rest as-is.
+        a.moves = [blunder(1), { ...blunder(2), ply: 2 }, ...a.moves.slice(2)];
+      }
+      await db.analyses.bulkPut(rows);
+
+      const games = await db.games.toArray();
+      const analyzed = games.filter((g) => g.analysisStatus === 'done');
+
+      // Reference: the shape this used to be — every analysis resident at once.
+      const map = new Map();
+      for (const a of await db.analyses.bulkGet(analyzed.map((g) => g.id))) {
+        if (a) map.set(a.gameId, a);
+      }
+      const reference = buildMistakes(analyzed, map);
+
+      // Streamed: one analysis resident at a time.
+      const byId = new Map(analyzed.map((g) => [g.id, g]));
+      const streamed = [];
+      await forEachAnalysis(
+        analyzed.map((g) => g.id),
+        (a) => {
+          const g = byId.get(a.gameId);
+          if (!g) return;
+          for (const r of mistakeRowsForGame(g, a)) streamed.push(r);
+        },
+      );
+
+      const key = (r) => `${r.gameId}#${r.ply}`;
+      const norm = (list) =>
+        list
+          .slice()
+          .sort((a, b) => (key(a) < key(b) ? -1 : 1))
+          .map((r) => JSON.stringify(r));
+      return {
+        referenceCount: reference.length,
+        streamedCount: streamed.length,
+        identical: JSON.stringify(norm(reference)) === JSON.stringify(norm(streamed)),
+        plies: [...new Set(streamed.map((r) => r.ply))],
+        motifs: [...new Set(streamed.flatMap((r) => r.motifs))],
+      };
+    });
+
+    console.log('mistake fold:', JSON.stringify(fold));
+    // Precondition: three analyzed games, one user blunder each. Without this the
+    // equivalence assertion below would hold trivially at 0 === 0.
+    expect(
+      fold.referenceCount,
+      'precondition: the fixture yields real mistake rows to compare',
+    ).toBe(3);
+    expect(
+      fold.streamedCount,
+      'streaming finds the same number of rows as holding every analysis did',
+    ).toBe(fold.referenceCount);
+    expect(
+      fold.identical,
+      'streamed rows are field-for-field identical to the bulkGet + buildMistakes form',
+    ).toBe(true);
+    expect(
+      fold.plies.join(','),
+      "only the USER's move is a mistake row — ply 2 is the opponent's blunder",
+    ).toBe('1');
+    expect(
+      fold.motifs.join(','),
+      'motifs survive the fold — they are what Recommended scores on',
+    ).toBe('fork');
   },
 });

@@ -443,8 +443,8 @@ from a build running `Use NNUE` off.
 
 An iPhone was killed by Safari on `/review/:id` (2026-09-02). The crash was
 **overdetermined**: the engine was the dominant term — see § NNUE for
-`isPhoneShaped` — but four whole-table or multiple-copy loads sat behind it, and
-nothing serialises them: `queue.ts:162` starts the engine pump, `:168` starts the
+`isPhoneShaped` — but a set of whole-table or multiple-copy loads sat behind it
+(four found at the time, a fifth since), and nothing serialises them: `queue.ts:162` starts the engine pump, `:168` starts the
 boot passes, and cloud sync runs from its own `AppLayout` effect, so whatever
 each of them costs, they can cost it at the same instant. All four are now fixed.
 The lack of serialisation is not, which is why each one's peak had to come down
@@ -455,7 +455,7 @@ Sizes here are **estimates from row shapes**, not device measurements — the
 a phone, so treat the numbers as the reason a change was made, never as evidence
 of what it achieved.
 
-### The rule the four broke
+### The rule the first four broke
 
 A projection that exists so callers need not hold every PGN or every move list
 must not itself hold them. `await table.toArray()` followed by `.map(strip)`
@@ -510,28 +510,46 @@ and resumption seeks past it, so a device that answers `looksLikePhone()`
 differently between boots still resumes correctly, just at a different
 granularity.
 
-### Still unbounded
+### The fifth: streaming what a projection cannot help
 
-**`PuzzlesPage`'s recommendation read** (`PuzzlesPage.tsx:394`) `bulkGet`s the
-**full** analysis — every move of every game — for every analyzed game matching
-the time-class filter, and holds them all to score motifs. On the ~1 200-analysis
-library above that is the same 100–180 MB shape as sink 1 before it was fixed.
-Three things make it a different problem rather than a fifth instance of the same
-one, and none of them make it safe:
+**`PuzzlesPage`'s recommendation read** was the same whole-table shape as sink 1 —
+`bulkGet` of the **full** analysis, every move of every analyzed game matching the
+time-class filter, all resident to score motifs. On a ~1 200-analysis library that
+is the same 100–180 MB estimate.
 
-- It is gated on `active`, so it costs nothing until the user opens the
-  Recommended tab — but that is a tab a phone user can open.
-- It genuinely needs the move lists; motif scoring reads classifications and
-  motifs per move. A projection cannot help. Streaming can: the scorer consumes
-  each analysis independently, so it could accumulate counts through a cursor
-  instead of an array. That is a change to `recommendation`'s shape, not a
-  one-line swap.
-- Its own comment already names it as "the same cost the old Weaknesses page
-  paid, which is why that page was slow on large libraries" — i.e. this is known
-  and was accepted, not overlooked.
+A projection is no use here: motif scoring reads a classification and a motif list
+off every move, so the move list *is* the input. What makes it fixable anyway is
+that each analysis is consumed **independently** — nothing in one game's mistakes
+depends on another's — so it can be folded on arrival instead of collected:
 
-Not fixed, and not measured. Anyone touching the Recommended tab should treat it
-as the next one.
+- `mistakeRowsForGame(game, analysis)` (`puzzles/mistakes.ts`) is the per-game
+  half, split out of `buildMistakes`. Pure, and that module must stay pure: it has
+  no Dexie import, which is what lets its consumers run in the unit tier.
+- `forEachAnalysis(gameIds, visit)` (`db/queries.ts`) is the cursor. One analysis
+  resident at a time. The visitor must be synchronous — awaiting inside a Dexie
+  cursor closes its transaction — so fold, don't fetch.
+
+What stays resident afterwards is `MistakeRow[]`: only the user's own blundery
+moves survive the fold, so a few thousand small rows instead of ~1 200 move lists.
+Rows are **not** free — each carries a FEN and a handful of strings, so call it
+single-digit MB on that library — but they are one to two orders off what they
+replaced. `buildMistakes` still exists and still takes every analysis at once;
+that is correct for `aggregateMistakes` and the tests, which already hold them.
+
+Order changed and does not matter: the cursor delivers in game-id order rather
+than the order the filtered game list is in. `scoreMotifs` sums into a map keyed by
+motif and sorts its own output, and `estimateUserRating` re-sorts by date, so the
+plan is identical either way. `integration/light-projections` builds the rows both
+ways in one run and asserts they are field-for-field identical, against a fixture
+seeded with real mistakes — two empty lists would otherwise compare equal, and
+"the tab silently has nothing to recommend" is exactly the regression to catch.
+
+Still true of this read, and not addressed: `MistakeRow` carries `fenBefore`,
+`uci`, `bestMoveUci`, `bestMoveSan` and `evalCpBefore` to feed inline mini-boards
+on the **Weaknesses page, which no longer exists**. Recommended reads none of
+them. Dropping the dead fields would cut what remains resident by most of its
+size, but `aggregateMistakes` and `phase2.mjs` assert on the fuller shape, so it
+is a separate change with its own blast radius.
 
 ### The lever, now that it exists
 
