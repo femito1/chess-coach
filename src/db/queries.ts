@@ -8,6 +8,7 @@ import {
   detectPhase,
   extractClocks,
 } from '@/engine/phase';
+import { looksLikePhone } from '@/engine/device';
 
 /**
  * Bump these any time the corresponding boot-time pass would produce
@@ -128,20 +129,71 @@ export async function listGames(): Promise<Game[]> {
  */
 export type GameLight = Omit<Game, 'pgn'>;
 
+/** Minimal structural shape of the things we cursor over — a Dexie `Table`
+ *  or `Collection`. Structural so this file needn't import Dexie's generics. */
+type EachSource<Row> = { each(cb: (row: Row) => void): PromiseLike<void> };
+
+/**
+ * Read a whole table through a cursor, projecting each row as it arrives.
+ *
+ * The obvious spelling — `await source.toArray()` then `.map(project)` — holds
+ * the entire table **twice** at its peak: every full row, because `toArray`
+ * resolves all of them before `map` runs, plus the stripped copy being built
+ * alongside. That defeats the whole purpose of a projection whose reason for
+ * existing is to *not* hold every PGN or every move list, and it is what made
+ * these list functions the two largest memory sinks on the iPhone Safari killed
+ * (ARCHITECTURE.md § Memory on mobile).
+ *
+ * A cursor visits one row at a time and the full row is garbage the moment
+ * `project` returns, so the peak is one full row plus the light array the
+ * caller actually asked for. Same rows, same order, same output as the
+ * `toArray().map()` form — only the peak differs. Dexie has still no native
+ * "select-without-field" projection, so the field is dropped in JS either way;
+ * what changed is how many rows are alive when it happens.
+ */
+async function streamLight<Row, Light>(
+  source: EachSource<Row>,
+  project: (row: Row) => Light,
+): Promise<Light[]> {
+  const out: Light[] = [];
+  await source.each((row) => {
+    out.push(project(row));
+  });
+  return out;
+}
+
 export async function listGamesLight(): Promise<GameLight[]> {
-  // Dexie has no native "select-without-field" projection; the cheapest
-  // way to drop one large field is to read the rows and strip it before
-  // returning. The string is freed by the next GC.
-  const rows = await db.games.orderBy('endTime').reverse().toArray();
-  return rows.map(stripPgn);
+  return streamLight(db.games.orderBy('endTime').reverse(), stripPgn);
 }
 
 /** Same projection but returns rows in arbitrary order — matches
- *  `db.games.toArray()`. Used by pages that don't care about ordering
- *  (Puzzles, Settings) so the projection stays a one-liner there. */
+ *  `db.games.toArray()`. Used by callers that don't care about ordering
+ *  (the Puzzles page, cloud sync) so the projection stays a one-liner there.
+ *
+ *  Both this and `listGamesLight` are unbounded: they return a row per game in
+ *  the library. The light shape is what makes that affordable, not free — a
+ *  caller that only needs an aggregate should ask for the aggregate instead
+ *  (`countByStatus`, `listTimeClasses`) and read no rows at all. */
 export async function listAllGamesLight(): Promise<GameLight[]> {
-  const rows = await db.games.toArray();
-  return rows.map(stripPgn);
+  return streamLight(db.games.toCollection(), stripPgn);
+}
+
+/**
+ * The distinct `timeClass` values present in the library.
+ *
+ * Answered from the `timeClass` index alone — `uniqueKeys` walks index entries,
+ * so this reads **no rows at all**, and its cost is the number of distinct
+ * classes (five-ish) rather than the number of games. The chip bars that pick a
+ * time-control filter want exactly this, and the Settings page used to get it
+ * by pulling every game in the library every 1.5 s while the analyzer wrote to
+ * the same table.
+ *
+ * Games with no `timeClass` are absent from the index and so absent here, which
+ * matches `availableTimeClasses` skipping falsy values.
+ */
+export async function listTimeClasses(): Promise<string[]> {
+  const keys = await db.games.orderBy('timeClass').uniqueKeys();
+  return keys.map((k) => String(k));
 }
 
 function stripPgn(g: Game): GameLight {
@@ -200,6 +252,11 @@ export async function saveAnalysis(analysis: Analysis): Promise<void> {
  * because the heavy cost is the JS-heap allocation that survives the
  * function (the row's lifetime in memory), not the IDB read itself.
  * The dropped `moves` array is freed on the next GC.
+ *
+ * Which makes *how many* rows are awaiting that GC at once the thing
+ * that matters, and it is a property of the reader, not of this type.
+ * Every reader here goes through a cursor for that reason — see
+ * `streamLight`. A new one must not reintroduce `toArray().map()`.
  */
 export type AnalysisLight = Omit<Analysis, 'moves'> & { moveCount: number };
 
@@ -219,15 +276,31 @@ export async function bulkGetAnalysisLight(
   gameIds: string[],
 ): Promise<AnalysisLight[]> {
   if (gameIds.length === 0) return [];
-  const rows = await db.analyses.bulkGet(gameIds);
+  // A cursor, for the same reason as `streamLight`: `bulkGet` resolves an array
+  // holding every requested row in full, so a 60-id call holds 60 move lists —
+  // ~2 MB — for as long as it takes to strip them. The cursor holds one.
+  //
+  // `anyOf` walks the primary-key index in key order rather than argument
+  // order, so rows land in a map and are re-emitted in the caller's order.
+  // Contract is unchanged from the `bulkGet` form: input order, ids with no row
+  // dropped, a repeated id repeated in the output.
+  const byId = new Map<string, AnalysisLight>();
+  await db.analyses
+    .where(':id')
+    .anyOf(gameIds)
+    .each((a) => {
+      byId.set(a.gameId, stripMoves(a));
+    });
   const out: AnalysisLight[] = [];
-  for (const a of rows) if (a) out.push(stripMoves(a));
+  for (const id of gameIds) {
+    const row = byId.get(id);
+    if (row) out.push(row);
+  }
   return out;
 }
 
 export async function listAnalysesLight(): Promise<AnalysisLight[]> {
-  const rows = await db.analyses.toArray();
-  return rows.map(stripMoves);
+  return streamLight(db.analyses.toCollection(), stripMoves);
 }
 
 /** Exported for unit-testing the shape contract. Not for production
@@ -341,6 +414,30 @@ export async function requeueStaleErrors(): Promise<number> {
  *  games ≈ a few hundred per-move classify+motif calls per chunk, which
  *  on mid-tier hardware is comfortably under a 16 ms frame budget. */
 const RECOMPUTE_CHUNK = 60;
+/**
+ * Chunk size on a phone-shaped device.
+ *
+ * The chunk is also the unit of *memory*: a chunk being reprocessed holds its
+ * move lists twice over, once as read and once as rebuilt, until the write at
+ * the end of the chunk. That is bounded work either way — unlike the whole-table
+ * sinks — but it is bounded at a size chosen for a laptop, and on a phone it
+ * lands on top of the engine and cloud sync because nothing serialises the
+ * three (ARCHITECTURE.md § Memory on mobile).
+ *
+ * Thirds it. Correctness does not depend on the number: the cursor records the
+ * last id of whatever chunk just finished and resumption seeks past it, so a
+ * device that changes its answer between boots — or between this and the next
+ * release — resumes correctly, just at a different granularity. The cost is
+ * 3× as many settings writes and transactions, which is immaterial against a
+ * pass that reclassifies every move of every game.
+ */
+const RECOMPUTE_CHUNK_PHONE = 20;
+
+/** The chunk size for this device. Read per call rather than at module load so
+ *  a test can drive both paths and so nothing depends on import order. */
+function recomputeChunkSize(): number {
+  return looksLikePhone() ? RECOMPUTE_CHUNK_PHONE : RECOMPUTE_CHUNK;
+}
 /** Games between yields *within* a chunk. Chosen so the main thread is handed
  *  back several times per chunk without multiplying transactions. */
 const RECOMPUTE_YIELD_EVERY = 10;
@@ -418,24 +515,35 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
 
   let updated = 0;
 
-  for (let start = startIndex; start < doneIds.length; start += RECOMPUTE_CHUNK) {
-    const chunkIds = doneIds.slice(start, start + RECOMPUTE_CHUNK);
-    const chunkAnalyses = await db.analyses.bulkGet(chunkIds);
+  const chunkSize = recomputeChunkSize();
+
+  for (let start = startIndex; start < doneIds.length; start += chunkSize) {
+    const chunkIds = doneIds.slice(start, start + chunkSize);
 
     // Which rows actually need reprocessing. A row already stamped with this
     // version has derived fields from these exact rules, so recomputing it
     // would spend `classifyMove` + `detectMotifs` over every move only to
     // arrive back where it started. This is what makes a cloud restore cheap:
     // pulled rows arrive stamped by the device that produced them.
-    const todo: number[] = [];
-    for (let k = 0; k < chunkIds.length; k++) {
-      const a = chunkAnalyses[k];
-      if (!a || a.moves.length === 0) continue;
+    //
+    // The decision needs two fields — the vintage stamp, and whether there are
+    // any moves at all — so it is taken on the LIGHT projection. Reading full
+    // rows to answer it meant holding every move list in the chunk for as long
+    // as the chunk ran, and on the case this gate exists for (a restored
+    // library, every row already current) that was the pass's entire cost:
+    // materialise 60 move lists, conclude there is nothing to do, drop them,
+    // repeat to the end of the library. `bulkGetAnalysisLight` streams, so the
+    // peak here is one row. It also drops ids with no analysis row, which is
+    // the `!a` arm of the old filter.
+    const chunkLight = await bulkGetAnalysisLight(chunkIds);
+    const todoIds: string[] = [];
+    for (const a of chunkLight) {
+      if (a.moveCount === 0) continue;
       if (!opts?.force && (a.recomputeVersion ?? 0) >= RECOMPUTE_VERSION) continue;
-      todo.push(k);
+      todoIds.push(a.gameId);
     }
 
-    if (todo.length === 0) {
+    if (todoIds.length === 0) {
       // Nothing to do here, but still record progress: a reload should not
       // have to re-examine this stretch either.
       await updateSettings({
@@ -445,12 +553,13 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
       continue;
     }
 
-    // Read games only for the rows being reprocessed. `Game` carries the PGN,
-    // so on a restored library where everything is already current this is the
-    // difference between reading every PGN off disk and reading none.
-    const todoIds = todo.map((k) => chunkIds[k]);
+    // Full rows for exactly the ids being reprocessed — the analyses for their
+    // move lists, the games for the PGN their clocks come out of. `Game` carries
+    // that PGN, so on a restored library where everything is already current
+    // this is the difference between reading every PGN off disk and reading
+    // none; the same now goes for the move lists above it.
+    const analyses = await db.analyses.bulkGet(todoIds);
     const games = await db.games.bulkGet(todoIds);
-    const analyses = todo.map((k) => chunkAnalyses[k]);
 
     const analysisPatches: Analysis[] = [];
     const gamePatches: Array<{
@@ -460,12 +569,13 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
     }> = [];
 
     for (let i = 0; i < analyses.length; i++) {
-      // Yield inside the chunk, not just between chunks. Reclassifying 60
-      // games is ~3-4k `classifyMove` + `detectMotifs` calls of uninterrupted
-      // main-thread work, which is what makes the app feel wedged rather than
-      // merely slow. This loop is pure CPU with no transaction open, so
-      // yielding here is free — the chunk's single transaction still batches
-      // all 60 writes, so `useLiveQuery` re-render counts are unchanged.
+      // Yield inside the chunk, not just between chunks. Reclassifying a
+      // full chunk is a few thousand `classifyMove` + `detectMotifs` calls of
+      // uninterrupted main-thread work, which is what makes the app feel wedged
+      // rather than merely slow. This loop is pure CPU with no transaction open,
+      // so yielding here is free — the chunk's single transaction still batches
+      // every one of its writes, so `useLiveQuery` re-render counts are
+      // unchanged.
       if (i > 0 && i % RECOMPUTE_YIELD_EVERY === 0) await yieldToBrowser();
 
       const g = games[i];
@@ -575,7 +685,7 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
 
     if (analysisPatches.length > 0) {
       // One transaction per chunk, two bulk writes inside it. This is
-      // ~RECOMPUTE_CHUNK× fewer transactions than the per-game version
+      // ~a chunk's worth fewer transactions than the per-game version
       // and — crucially — fires `useLiveQuery` re-renders once per chunk
       // instead of once per game, so the UI doesn't thrash while boot
       // housekeeping runs.
@@ -930,28 +1040,56 @@ export async function backfillBrilliantCounts(opts?: {
     .primaryKeys()) as string[];
   let updated = 0;
 
-  for (let start = 0; start < doneIds.length; start += RECOMPUTE_CHUNK) {
-    const chunkIds = doneIds.slice(start, start + RECOMPUTE_CHUNK);
-    const games = await db.games.bulkGet(chunkIds);
-    const analyses = await db.analyses.bulkGet(chunkIds);
+  const chunkSize = recomputeChunkSize();
 
-    const merged: Game[] = [];
-    for (let i = 0; i < chunkIds.length; i++) {
-      const g = games[i];
-      const a = analyses[i];
-      if (!g || !a) continue;
-      const brilliantCount = countUserBrilliancies(a.moves, g.userColor);
-      // `undefined !== 0` on the first run, so a game with no
-      // brilliancies still gets stamped once and compares equal
-      // thereafter. That's what keeps this idempotent and what lets the
-      // badge distinguish "none found" from "never counted".
-      if (g.brilliantCount === brilliantCount) continue;
-      merged.push({ ...g, brilliantCount });
-      updated++;
-    }
+  for (let start = 0; start < doneIds.length; start += chunkSize) {
+    const chunkIds = doneIds.slice(start, start + chunkSize);
 
-    if (merged.length > 0) {
-      await db.games.bulkPut(merged);
+    // Two fields are read off each game and one is written, so the PGN this row
+    // carries is pure overhead — and `bulkGet` would hold a chunk's worth of
+    // them. Cursor the primary-key index instead and keep only the two fields.
+    // (ARCHITECTURE.md § Memory on mobile, sink 4: "the PGN is paid for and
+    // never touched".)
+    const colors = new Map<string, Game['userColor']>();
+    const stored = new Map<string, number | undefined>();
+    await db.games
+      .where(':id')
+      .anyOf(chunkIds)
+      .each((g) => {
+        colors.set(g.id, g.userColor);
+        stored.set(g.id, g.brilliantCount);
+      });
+
+    // The move lists are the thing being counted, so those are genuinely
+    // needed — but one at a time, not a chunk at a time. A cursor frees each
+    // list as soon as its count is taken.
+    const updates: Array<{ key: string; changes: { brilliantCount: number } }> = [];
+    await db.analyses
+      .where(':id')
+      .anyOf(chunkIds)
+      .each((a) => {
+        // No game row for this analysis: the `!g` arm of the old filter. Read
+        // through `has`, not a falsy check, because `userColor` is a real value
+        // whose absence would otherwise be indistinguishable from a missing row.
+        if (!colors.has(a.gameId)) return;
+        const brilliantCount = countUserBrilliancies(a.moves, colors.get(a.gameId)!);
+        // `undefined !== 0` on the first run, so a game with no
+        // brilliancies still gets stamped once and compares equal
+        // thereafter. That's what keeps this idempotent and what lets the
+        // badge distinguish "none found" from "never counted".
+        if (stored.get(a.gameId) === brilliantCount) return;
+        updates.push({ key: a.gameId, changes: { brilliantCount } });
+        updated++;
+      });
+
+    if (updates.length > 0) {
+      // `bulkUpdate`, not a `bulkPut` of merged rows. Patching one field means
+      // the row's PGN never has to be held to be written back — and it closes a
+      // real hazard rather than only a memory one: this pass runs at boot
+      // alongside the analyzer, which writes `analysisStatus` to these same
+      // rows, and putting back a whole row read seconds earlier would revert
+      // whatever landed in between.
+      await db.games.bulkUpdate(updates);
     }
 
     await yieldToBrowser();

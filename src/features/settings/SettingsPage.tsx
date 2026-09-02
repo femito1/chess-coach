@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import {
   getSettings,
@@ -6,7 +6,7 @@ import {
   updateSettings,
   type TimeClassSelection,
 } from '@/db/schema';
-import { listAllGamesLight, requeueGamesByScope, type RequeueScope } from '@/db/queries';
+import { listTimeClasses, requeueGamesByScope, type RequeueScope } from '@/db/queries';
 import { TimeClassChips } from '@/components/TimeClassFilter';
 import { StorageDurabilityCard } from './StorageDurabilityCard';
 import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
@@ -79,11 +79,22 @@ export function SettingsPage() {
   );
   const [freePlayStrength, setFreePlayStrength] =
     useState<FreePlayStrength>('max');
-  // Settings only uses `games` to populate the time-class filter dropdown
-  // — staleness of a few seconds is invisible. Throttled for the same
-  // reason as the dashboard / weaknesses pages, and uses the light
-  // projection (no PGN) since we only need `timeClass` for the dropdown.
-  const games = useThrottledLiveQuery(() => listAllGamesLight(), [], 1500);
+  // Settings needs the *set* of time classes in the library — which filter
+  // chips to show — and never the games themselves. `listTimeClasses` answers
+  // that off the index, so this reads no rows. The previous form pulled a row
+  // per game every 1.5 s, and did it while the analyzer was writing to the same
+  // table, which is why it was the worst caller of the second-largest memory
+  // sink (ARCHITECTURE.md § Memory on mobile). Still live and still throttled,
+  // so a newly imported time class appears on its own; a few seconds of
+  // staleness is invisible in a chip bar.
+  const timeClasses = useThrottledLiveQuery(() => listTimeClasses(), [], 1500);
+  // `TimeClassChips` takes rows and derives the present classes itself, which is
+  // the right shape for the Games page — it already holds the rows it lists.
+  // Here the classes *are* the answer, so they go back into the shape it wants.
+  const timeClassRows = useMemo(
+    () => (timeClasses ?? []).map((timeClass) => ({ timeClass })),
+    [timeClasses],
+  );
 
   useEffect(() => {
     void getSettings().then((s) => {
@@ -226,7 +237,7 @@ export function SettingsPage() {
           <TimeClassChips
             selection={timeClassFilter}
             onChange={setTimeClassFilter}
-            available={games ?? []}
+            available={timeClassRows}
           />
           <div className="text-xs text-text-muted mt-1">
             {t('settings.timeFilterHint')}

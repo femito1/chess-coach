@@ -43,6 +43,8 @@ export const BROWSER_TESTS = [
   // empty-DB-no-stamp + warm-boot-skip + force-bypass.
   { name: 'recompute-skip',             file: 'scripts/test/integration/recompute-skip.mjs',             category: 'integration' },
   { name: 'user-time-backfill',         file: 'scripts/test/integration/user-time-backfill.mjs',         category: 'integration' },
+  // Read-path projections the passes above and cloud sync all go through.
+  { name: 'light-projections',          file: 'scripts/test/integration/light-projections.mjs',          category: 'integration' },
   { name: 'classifications',            file: 'scripts/test/live/classifications.mjs',                   category: 'live' },
   { name: 'accuracy',                   file: 'scripts/test/live/accuracy.mjs',                          category: 'live' },
 

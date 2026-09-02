@@ -441,41 +441,107 @@ from a build running `Use NNUE` off.
 
 ## Memory on mobile
 
-An iPhone was killed by Safari on `/review/:id` (2026-09-02). The engine's share
-of that is fixed — see § NNUE for `isPhoneShaped` — but **the crash was
-overdetermined and only the dominant term was removed.** Four whole-table or
-multiple-copy loads remain, and they can all peak at the same instant, because
+An iPhone was killed by Safari on `/review/:id` (2026-09-02). The crash was
+**overdetermined**: the engine was the dominant term — see § NNUE for
+`isPhoneShaped` — but four whole-table or multiple-copy loads sat behind it, and
 nothing serialises them: `queue.ts:162` starts the engine pump, `:168` starts the
-boot passes, and cloud sync runs from its own `AppLayout` effect.
+boot passes, and cloud sync runs from its own `AppLayout` effect, so whatever
+each of them costs, they can cost it at the same instant. All four are now fixed.
+The lack of serialisation is not, which is why each one's peak had to come down
+on its own rather than being scheduled around.
 
-Sizes below are **estimates from row shapes**, not device measurements — the
-30 KB-per-analysis figure comes from SETUP_AUTH.md. Measure before optimising.
+Sizes here are **estimates from row shapes**, not device measurements — the
+30 KB-per-analysis figure comes from SETUP_AUTH.md. Nothing below was measured on
+a phone, so treat the numbers as the reason a change was made, never as evidence
+of what it achieved.
 
-| # | Sink | Where | Mechanism |
+### The rule the four broke
+
+A projection that exists so callers need not hold every PGN or every move list
+must not itself hold them. `await table.toArray()` followed by `.map(strip)`
+holds the table **twice** at its peak — every full row, because `toArray`
+resolves all of them before `map` runs, plus the stripped copy being built
+alongside — which is strictly worse than the unprojected read it replaced. Two of
+the four were exactly this.
+
+The fix in each case is a **cursor**: `Table.each` / `Collection.each` visits one
+row at a time and the full row is garbage the moment the callback returns, so the
+peak is one row plus the light array the caller asked for. `streamLight`
+(`db/queries.ts`) is the shared spelling; `nextPendingGame` was already using the
+technique. Output — rows, order, contents — is identical, which is what makes the
+swap safe. Dexie still has no native "select-without-field" projection, so the
+field is dropped in JS either way; what changed is how many rows are alive when it
+happens.
+
+| # | Sink | Was | Now |
 |---|---|---|---|
-| 1 | `listAnalysesLight()` | `db/queries.ts:228` | `db.analyses.toArray()` materialises **every** analysis in full, then `.map(stripMoves)` — so the full array *and* the stripped copy are both live. ~1 200 analyses ≈ 36 MB JSON, plausibly 100–180 MB as live objects. Called at `cloudSync.ts:220`, i.e. mid-restore. |
-| 2 | `listAllGamesLight()` | `db/queries.ts:142` | Same shape over `games`, so every PGN. Called **twice per sync** (`cloudSync.ts:170`, `:219`) and — worse — from a *throttled live query* at `SettingsPage.tsx:86`, which re-materialises all PGNs every 1.5 s while Settings is open during analysis. |
-| 3 | Recompute pass, per 60-game chunk | `db/queries.ts:423-595` | 60 full analyses + 60 `Game` rows **with PGN** + a second copy of every move (`{...m}`) + a third live reference in `analysisPatches` + a `Map` of the same games + 60 more spreads in `merged`. Roughly 2× analyses and 2× games at peak, sustained for the whole pass. |
-| 4 | `backfillBrilliantCounts` | `db/queries.ts:929-930` | bulkGets 60 PGN-bearing games **and** 60 full analyses for the same ids, then reads only `a.moves` classifications and `g.userColor` / `g.brilliantCount`. The PGN is paid for and never touched. |
+| 1 | `listAnalysesLight()` | `db.analyses.toArray()` then `.map(stripMoves)` — full array *and* stripped copy live at once. ~1 200 analyses ≈ 36 MB JSON, plausibly 100–180 MB as live objects. | `streamLight` over a cursor. Peak: one analysis. |
+| 2 | `listAllGamesLight()` / `listGamesLight()` | Same shape over `games`, so every PGN. Called twice per sync, and from a *throttled live query* in Settings that re-materialised every PGN every 1.5 s during analysis. | `streamLight` over a cursor. Settings no longer reads rows at all — see below. |
+| 3 | Recompute pass gate | `bulkGet` of 60 **full** analyses per chunk, held for the whole chunk, to read two fields off each: the vintage stamp and whether there are any moves. On the case the gate exists for — a restored library, every row current — that was the pass's entire cost. | Gate runs on `bulkGetAnalysisLight`; full rows are read only for the ids that actually need reprocessing, matching what the pass already did for games. Chunk is 20 rather than 60 on a phone. |
+| 4 | `backfillBrilliantCounts` | `bulkGet` of 60 PGN-bearing games **and** 60 full analyses, to read `a.moves` classifications and `g.userColor` / `g.brilliantCount`. The PGN was paid for and never touched. Wrote whole merged rows back. | Cursors both tables, keeping two fields per game and one move list at a time. Writes via `bulkUpdate`. |
 
-**1 and 2 are the biggest and the safest**: streaming with `db.<table>.each()`
-and stripping per row gives identical output while never holding the whole table,
-and the light projections exist precisely so callers do not hold moves or PGNs —
-`toArray().map()` defeats their entire purpose. Note `bulkGetAnalysisLight`
-(`queries.ts:218`) is already fine; it is only the unbounded list functions that
-are wrong.
+`bulkGetAnalysisLight` also became a cursor, and the recompute gate is its first
+production caller. It walks `anyOf`, which visits the primary-key index in **key**
+order rather than argument order, so it re-emits from a map to keep its contract:
+argument order, unknown ids dropped, a repeated id repeated. That re-emit is the
+one thing in this change a type checker cannot see, and
+`integration/light-projections` requests ids in descending order specifically to
+catch its loss.
 
-3 and 4 are riskier because 3 is the pass whose correctness rules are documented
-in § Boot-time passes — its per-row vintage gate and cursor must keep working —
-and 4's `undefined !== 0` first-run behaviour is load-bearing for the badge.
+### Two things worth keeping straight
 
-**The obvious lever that does not exist:** `Settings.autoAnalyze` is written by
-the Settings UI and **read by nothing**. `grep` it — the only hits are
-`SettingsPage.tsx` and the `Settings` interface. The queue never consults it, so
-"Analyze new games automatically" is an inert toggle: it cannot be used to quiet
-the analyzer on a constrained device, and it silently misleads anyone who flips
-it. Either wire it into `runLoop`'s pump or remove it; do not cite it as a
-mitigation until it is one.
+**Settings needed an aggregate, not rows.** It read every game in the library
+every 1.5 s to populate a filter chip bar whose only input is the *set* of time
+classes present. `listTimeClasses` answers that from the `timeClass` index via
+`uniqueKeys` — no rows read at all, cost proportional to the five-ish distinct
+classes rather than to the library. Reach for this before reaching for a
+projection: a light row is affordable, an aggregate is free. `countByStatus` is
+the same move, made earlier. The Games page still reads rows, correctly — it
+lists them.
+
+**Sink 4's write got safer, not just smaller.** It used to `bulkPut` whole game
+rows read seconds earlier. This pass runs at boot alongside the analyzer, which
+writes `analysisStatus` to those same rows, so putting back a stale row could
+revert whatever landed in between. `bulkUpdate` patches the one field it owns.
+
+Chunk size is not a correctness parameter, which is why 3 could be made
+phone-aware cheaply: the cursor records the last id of whichever chunk finished
+and resumption seeks past it, so a device that answers `looksLikePhone()`
+differently between boots still resumes correctly, just at a different
+granularity.
+
+### Still unbounded
+
+**`PuzzlesPage`'s recommendation read** (`PuzzlesPage.tsx:394`) `bulkGet`s the
+**full** analysis — every move of every game — for every analyzed game matching
+the time-class filter, and holds them all to score motifs. On the ~1 200-analysis
+library above that is the same 100–180 MB shape as sink 1 before it was fixed.
+Three things make it a different problem rather than a fifth instance of the same
+one, and none of them make it safe:
+
+- It is gated on `active`, so it costs nothing until the user opens the
+  Recommended tab — but that is a tab a phone user can open.
+- It genuinely needs the move lists; motif scoring reads classifications and
+  motifs per move. A projection cannot help. Streaming can: the scorer consumes
+  each analysis independently, so it could accumulate counts through a cursor
+  instead of an array. That is a change to `recommendation`'s shape, not a
+  one-line swap.
+- Its own comment already names it as "the same cost the old Weaknesses page
+  paid, which is why that page was slow on large libraries" — i.e. this is known
+  and was accepted, not overlooked.
+
+Not fixed, and not measured. Anyone touching the Recommended tab should treat it
+as the next one.
+
+### The lever that still does not exist
+
+`Settings.autoAnalyze` is written by the Settings UI and **read by nothing**.
+`grep` it — the only hits are `SettingsPage.tsx` and the `Settings` interface. The
+queue never consults it, so "Analyze new games automatically" is an inert toggle:
+it cannot be used to quiet the analyzer on a constrained device, and it silently
+misleads anyone who flips it. Either wire it into `runLoop`'s pump or remove it;
+do not cite it as a mitigation until it is one. Unchanged by the work above,
+because which of the two it should be is a product decision, not a cleanup.
 
 ## Puzzles
 

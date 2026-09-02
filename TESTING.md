@@ -112,6 +112,19 @@ test cannot quietly stop exercising the move-based fallback if
 link's *target*, since a link to the wrong family looks fine and selects
 nothing.
 
+`light-projections` pins the read contracts of the light projections
+(ARCHITECTURE.md § Memory on mobile). They were rewritten from
+`toArray().map(strip)` to cursors, so what needs guarding is that the *output* did
+not move: every projection is asserted against the row count and id set it
+projects from, because a cursor that ends early returns a short list and cloud
+sync would push or pull against it. The load-bearing case is
+`bulkGetAnalysisLight`, which walks `anyOf` — primary-key order, not argument
+order — and re-emits from a map to keep its contract; the test asks for ids in
+*descending* order, the one order a lost re-emit would silently sort back into
+place. It also key-checks that `pgn` and `moves` are absent rather than merely
+unread: a row that still carries the field costs the memory whether anyone reads
+it or not, and that is invisible to the type checker.
+
 `storage-durability` pins that the app asks the browser to keep its data. It
 instruments `navigator.storage` through an init script *before* the app's own
 scripts run, and asserts `persisted()` was consulted exactly once — asserting
@@ -221,11 +234,39 @@ red test for a test that no longer checks the thing it was written for.
 
 Treat any red as yours, with these exceptions:
 
-- **`src/features/auth/useProfileSync.test.ts`** fails (collects 0 tests)
-  without the three `VITE_*` auth vars, because it transitively imports
-  `lib/supabase.ts` → `lib/env.ts`, which throws at module load. There is no
-  committed `.env.local`; CI supplies the values from repo secrets. On a machine
-  without them, this **one** failing file is expected and everything else passes.
+- **Anything that loads `lib/env.ts` without the three `VITE_*` auth vars.**
+  `env.ts` throws at module load when they are missing, so every importer dies
+  before its own code runs. There is no committed `.env.local`; CI supplies the
+  values from repo secrets.
+
+  This was recorded here as **one** expected failure —
+  `src/features/auth/useProfileSync.test.ts`, which collects 0 tests. That
+  undercounted it badly. `AppLayout` reaches `env.ts` too, so on a machine with
+  no `.env.local` **16 of 34 integration tests** also fail, including
+  `auth-bypass`, `cloud-sync` and both `drill-*`. They fail as ordinary
+  assertion failures ("AppLayout header rendered: expected true, got false")
+  with the real cause only in the page-error log, which is exactly how it reads
+  as a code regression.
+
+  **The values do not have to be real.** The vars are only required to *exist*;
+  the browser tiers stub the network and take the auth bypass, so placeholders
+  turn the whole suite green — measured 2026-09-02 at unit 711/711 (53 files,
+  `useProfileSync` included), integration 34/34, e2e 11/11. Put this in
+  `.env.local` (gitignored) when you want the full local gate:
+
+  ```
+  VITE_CLERK_PUBLISHABLE_KEY=pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
+  VITE_SUPABASE_URL=https://example.supabase.co
+  VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiJ9.dummy
+  VITE_E2E_AUTH_BYPASS=true
+  ```
+
+  Restart `npm run dev` after adding it — Vite reads env at startup. Two
+  consequences of keeping it: **`VITE_E2E_AUTH_BYPASS=true` makes your local dev
+  app skip auth**, and a real sign-in will fail against the placeholder Clerk
+  key. Delete the file to get honest auth back. Before concluding a change broke
+  a browser test on a machine without it, check the page-error log for
+  `[env] Missing required auth env vars`, or baseline the tier on a clean tree.
 - **`integration/puzzle-library`** is intermittent and predates any current
   work. It fails as `matched-to summary shown: expected true, got false`, with
   the log line above it reading `recommended chips: []` where a pass reads
