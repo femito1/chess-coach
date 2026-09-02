@@ -141,10 +141,18 @@ export function SettingsPage() {
     });
     setSavedDepth(engineDepth);
     const n = await requeueGamesByScope(scope);
+    // The pump only takes background work when `autoAnalyze` is on, so
+    // "Queued N games" on its own would be a half-truth with the toggle off:
+    // the rows really are pending and really will not move. Say so, rather than
+    // silently flipping a setting the user just chose.
+    const stalled =
+      ' Background analysis is off, so these stay queued until you turn it back' +
+      ' on — or open one, which analyzes it right away.';
     setRequeueStatus(
       n === 0
         ? 'No games matched that scope.'
-        : `Queued ${n} game${n === 1 ? '' : 's'} for re-analysis at depth ${engineDepth}.`,
+        : `Queued ${n} game${n === 1 ? '' : 's'} for re-analysis at depth ${engineDepth}.` +
+          (autoAnalyze ? '' : stalled),
     );
   }
 

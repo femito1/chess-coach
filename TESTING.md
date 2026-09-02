@@ -112,6 +112,14 @@ test cannot quietly stop exercising the move-based fallback if
 link's *target*, since a link to the wrong family looks fine and selects
 nothing.
 
+`auto-analyze` pins that `Settings.autoAnalyze` gates the background backfill and
+*only* that — a game the user is viewing still gets analyzed with the toggle off,
+because that request comes from the review page rather than the sweep. It asserts
+an analyzable pending game exists alongside the "takes no work" assertion, since
+otherwise the test passes just as well on an empty table. It also seeds *after*
+turning the toggle off, so the gate under test is what keeps the app's own run
+loop off the fixtures.
+
 `light-projections` pins the read contracts of the light projections
 (ARCHITECTURE.md § Memory on mobile). They were rewritten from
 `toArray().map(strip)` to cursors, so what needs guarding is that the *output* did

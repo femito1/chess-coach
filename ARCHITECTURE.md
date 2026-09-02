@@ -533,15 +533,45 @@ one, and none of them make it safe:
 Not fixed, and not measured. Anyone touching the Recommended tab should treat it
 as the next one.
 
-### The lever that still does not exist
+### The lever, now that it exists
 
-`Settings.autoAnalyze` is written by the Settings UI and **read by nothing**.
-`grep` it — the only hits are `SettingsPage.tsx` and the `Settings` interface. The
-queue never consults it, so "Analyze new games automatically" is an inert toggle:
-it cannot be used to quiet the analyzer on a constrained device, and it silently
-misleads anyone who flips it. Either wire it into `runLoop`'s pump or remove it;
-do not cite it as a mitigation until it is one. Unchanged by the work above,
-because which of the two it should be is a product decision, not a cleanup.
+`Settings.autoAnalyze` was written by the Settings UI and **read by nothing** for
+the app's whole life. The queue never consulted it, so "Automatically analyze
+imported games in the background" changed no behaviour at all — it could not be
+used to quiet the analyzer on a constrained device, and silently misled anyone
+who flipped it. It is now read by `nextGameToAnalyze` (`engine/queue.ts`).
+
+**It gates the unattended backfill only.** That chooser is priority-first: the
+priority list is the review page saying "I am showing this game and it has no
+analysis", which is the user asking directly, and it keeps working whatever the
+toggle says. Only the `nextPendingGame()` fallback beneath it — the newest-first
+background sweep, which is what the toggle's own label describes — is gated.
+Gating the whole chooser would mean a user who turned background analysis off
+could open an unanalyzed game and wait on a spinner forever: a worse bug than the
+inert toggle it replaces.
+
+Two consequences of reading it *between games* rather than at the top of
+`runLoop`, both deliberate:
+
+- Turning it off does not abort the game in flight. Stopping new work is what was
+  asked; abandoning the current analysis would drop the in-flight position and put
+  the row back to `pending`. It stops at the next game boundary.
+- Turning it back on takes effect within one poll — nothing restarts. Hence a
+  settings read per call rather than a cached flag: one keyed Dexie get against a
+  loop that sleeps 2–4 s when idle.
+
+With it off and rows still `pending`, the chooser returns nothing, the loop takes
+its idle path, and the engine workers are released after `IDLE_TEARDOWN_MS` —
+which is the whole point on a device that cannot afford them. A `pending` row
+arriving from a cloud pull is gated too, being exactly "a new game appearing on
+its own".
+
+The one place this is visible and could mislead: Settings' re-analyze buttons set
+rows to `pending`, which with the toggle off will not move. That path says so in
+its status line rather than flipping a setting the user just chose.
+`integration/auto-analyze` pins all three properties, and asserts a pending game
+*exists* alongside the "takes no work" assertion — without that precondition the
+test would pass on an empty table.
 
 ## Puzzles
 

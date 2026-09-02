@@ -483,6 +483,34 @@ export function _setInFlightForTest(
  *
  * A priority id is dropped once it is no longer analyzable (done, or deleted), so
  * the list drains itself rather than needing separate cleanup.
+ *
+ * ── `Settings.autoAnalyze` gates the second half only ─────────────────────
+ *
+ * The toggle reads "Automatically analyze imported games in the background", and
+ * that is exactly the fallback below — the unattended newest-first backfill. The
+ * priority list above it is the review page saying "I am showing this game and it
+ * has no analysis", which is the user asking directly and must keep working
+ * whatever the toggle says. Gating the whole chooser instead would mean a user
+ * who turned background analysis off could open an unanalyzed game and wait on a
+ * spinner forever, which is a worse bug than the inert toggle this replaces.
+ *
+ * Consulted here, between games, rather than at the top of `runLoop`, which has
+ * two consequences worth stating:
+ *
+ *   - Turning it off does NOT abort the game already in flight. The user asked to
+ *     stop starting new work, not to throw away a half-finished analysis, and
+ *     abandoning it would drop the in-flight position and leave the row back at
+ *     `pending`. It stops at the next game boundary.
+ *   - Turning it back on takes effect within one poll of the loop; nothing has to
+ *     be restarted. That is why this reads settings per call rather than caching
+ *     the flag — the read is a single keyed Dexie get against the cadence of a
+ *     loop that sleeps 2–4 s when idle.
+ *
+ * With it off and games still `pending`, the chooser returns nothing, so the loop
+ * takes its idle path and releases the engine workers after `IDLE_TEARDOWN_MS` —
+ * which is the point of the toggle on a device that cannot afford them. Games
+ * arriving from a cloud pull are covered too: a pulled `pending` row is a new game
+ * appearing on its own, which is the case the toggle is about.
  */
 async function nextGameToAnalyze() {
   const qstate = queueModuleState();
@@ -492,6 +520,8 @@ async function nextGameToAnalyze() {
     if (game && game.analysisStatus !== 'done') return game;
     qstate.priority.shift();
   }
+  const { autoAnalyze } = await getSettings();
+  if (!autoAnalyze) return undefined;
   return nextPendingGame();
 }
 
