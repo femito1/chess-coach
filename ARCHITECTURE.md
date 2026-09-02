@@ -1117,6 +1117,32 @@ prints the split.
 - Tables over user data render a bounded page (see `PAGE_SIZE` in `GamesPage`).
   Filters and counts still run over the whole library; only the mounted row
   count is capped.
+- **A wide table's horizontal scrollbar belongs on screen, not at the bottom of
+  the table.** `overflow-x-auto` puts it at the bottom of the scrolled element,
+  so on a table that is both wider than the window and several screens tall it
+  sits below the fold — the games table's was ~1 800 px down. `StickyXScroll`
+  draws it in a strip that is `position: sticky` to the bottom instead. It draws
+  the thumb rather than mirroring a native scrollbar into a second scroll
+  container, because a native thumb is invisible wherever the platform uses
+  overlay scrollbars — the strip would be an empty band until you were already
+  scrolling, which is the one thing a "you can scroll sideways here" affordance
+  must not be. It also means the thumb shows up in a screenshot, so
+  `games-sticky-scroll` can assert on it. `sticky` is defeated by a clipping or
+  scrolling ancestor, so the component renders its own wrapper — pass the surface
+  class (`card`) to it rather than nesting it inside one.
+- **A phone-width flex row shrinks whatever has an `auto` basis, and a `flex-1`
+  child has a basis of 0.** So the item you meant to be flexible absorbs none of
+  the shortfall and the fixed-size ones absorb all of it: the onboarding account
+  card lost its avatar to it, a 48 px circle rendering 32×48 at 320 px while the
+  username clipped to a third of its width. Two habits follow — give an
+  intrinsically-sized child (avatar, icon, badge) `shrink-0` so it cannot pay for
+  a shortfall that is not its to pay, and stack the row on phones
+  (`flex-col sm:flex-row`, full-width action) so there is no shortfall to
+  distribute. `NewGamesBanner` and `PlayerCard` are both this shape.
+  **`mobile-audit` cannot catch this class of bug**: shrinking is how flex
+  *avoids* overflow, so document width never exceeds window width and the audit
+  reports zero. Distortion needs its own assertion — `onboarding-mobile` checks
+  the avatar is still square and the name still unclipped.
 - `NAV_ITEMS` is exported from `AppLayout.tsx` and is the single definition of
   the nav; the mobile-drawer test derives its expected count from it rather than
   hard-coding one.

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { listGamesLight, requeueGame } from '@/db/queries';
+import { StickyXScroll } from '@/components/StickyXScroll';
 import type {
   AnalysisStatus,
   GameResult,
@@ -172,11 +173,14 @@ export function GamesPage() {
         />
       </div>
 
-      {/* Card wraps an overflow-x-auto scroller so the 8-column table
-          can horizontal-scroll on phones instead of breaking layout.
-          `min-w-[640px]` on the table forces the horizontal scroll on
-          narrow viewports while still letting the table fill wide ones. */}
-      <div className="card overflow-x-auto">
+      {/* The 8-column table horizontal-scrolls on narrow viewports rather than
+          breaking layout; `min-w-[640px]` is what forces that while still letting
+          it fill a wide window. `StickyXScroll` is what makes the scrollbar
+          reachable: a plain `overflow-x-auto` card put it at the bottom of the
+          *table*, so on a small window you had to scroll several screens down to
+          find it, scroll sideways, then come back up. The card is the sticky
+          container, so it must not clip — `.card` is only background + border. */}
+      <StickyXScroll className="card">
         <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-bg-raised text-text-muted text-xs">
             <tr>
@@ -270,7 +274,7 @@ export function GamesPage() {
             )}
           </tbody>
         </table>
-      </div>
+      </StickyXScroll>
     </div>
   );
 }

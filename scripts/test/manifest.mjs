@@ -62,6 +62,8 @@ export const BROWSER_TESTS = [
   { name: 'opening-popularity-build',   file: 'scripts/test/integration/opening-popularity-build.mjs',   category: 'integration' },
   { name: 'drill-add-lines',            file: 'scripts/test/integration/drill-add-lines.mjs',            category: 'integration' },
   { name: 'drill-selection-survives-add', file: 'scripts/test/integration/drill-selection-survives-add.mjs', category: 'integration' },
+  // The games table's horizontal scrollbar staying reachable in a small window.
+  { name: 'games-sticky-scroll',        file: 'scripts/test/integration/games-sticky-scroll.mjs',        category: 'integration' },
   { name: 'live-chesscom',              file: 'scripts/test/live/live-chesscom.mjs',                     category: 'live' },
 
   // --- UI / review page -------------------------------------------
@@ -74,6 +76,10 @@ export const BROWSER_TESTS = [
   { name: 'knight-arrow-toggle',        file: 'scripts/test/e2e/knight-arrow-toggle.mjs',                category: 'e2e' },
   { name: 'mobile-audit',               file: 'scripts/test/e2e/mobile-audit.mjs',                       category: 'e2e' },
   { name: 'mobile-review',              file: 'scripts/test/e2e/mobile-review.mjs',                      category: 'e2e' },
+  // The first screen a new user sees, at the narrowest width — and the one
+  // `mobile-audit` structurally cannot cover (it measures overflow; this bug
+  // was distortion, which is how flex AVOIDS overflow).
+  { name: 'onboarding-mobile',          file: 'scripts/test/e2e/onboarding-mobile.mjs',                 category: 'e2e' },
   { name: 'puzzle-library',             file: 'scripts/test/integration/puzzle-library.mjs',             category: 'integration' },
   { name: 'cloud-sync',                 file: 'scripts/test/integration/cloud-sync.mjs',                 category: 'integration' },
   { name: 'cloud-progress',             file: 'scripts/test/integration/cloud-progress.mjs',             category: 'integration' },

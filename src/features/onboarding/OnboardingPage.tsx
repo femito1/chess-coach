@@ -226,7 +226,12 @@ function UsernameStep({
     | { kind: 'found'; profile: ChessComPlayerProfile }
     | { kind: 'notFound' }
   >({ kind: 'idle' });
-  const [confirming, setConfirming] = useState(false);
+  // WHICH handle is being confirmed, not merely whether one is. A single
+  // boolean was shared by both PlayerCards below, so confirming either one put
+  // *both* into their loading label — the guessed account appeared to be
+  // signing in when you had picked the one you typed. The identity of the
+  // in-flight handle is the thing the UI needs, so it is the thing we store.
+  const [confirmingHandle, setConfirmingHandle] = useState<string | null>(null);
 
   // Auto-suggest: walk the candidate list (clerk username → first name →
   // email local part) and surface the first one that resolves to a
@@ -275,14 +280,22 @@ function UsernameStep({
   }, [manual]);
 
   async function confirm(handle: string) {
-    if (confirming) return;
-    setConfirming(true);
+    // Still one at a time: every card is disabled while any confirm is in
+    // flight, so this guard is belt-and-braces against a double tap landing
+    // before the re-render.
+    if (confirmingHandle !== null) return;
+    setConfirmingHandle(handle);
     try {
       await onConfirm(handle);
     } finally {
-      setConfirming(false);
+      setConfirmingHandle(null);
     }
   }
+  // Only the card whose handle is in flight shows progress; the others go
+  // inert without claiming to be doing anything. (If you type the same handle
+  // that was guessed, both cards are that handle and both show it — correct,
+  // they are the same account.)
+  const busy = confirmingHandle !== null;
 
   return (
     <div className="card p-6 space-y-5">
@@ -301,9 +314,13 @@ function UsernameStep({
         <PlayerCard
           profile={suggestion}
           headline={t('onboarding.username.isThisYou')}
-          actionLabel={confirming ? t('onboarding.username.confirming') : t('onboarding.username.yesItsMe')}
+          actionLabel={
+            confirmingHandle === suggestion.username
+              ? t('onboarding.username.confirming')
+              : t('onboarding.username.yesItsMe')
+          }
           onAction={() => confirm(suggestion.username)}
-          disabled={confirming}
+          disabled={busy}
         />
       )}
 
@@ -339,9 +356,13 @@ function UsernameStep({
           <PlayerCard
             profile={manualResult.profile}
             headline={t('onboarding.username.found', { username: manualResult.profile.username })}
-            actionLabel={confirming ? t('onboarding.username.confirming') : t('onboarding.username.useThis')}
+            actionLabel={
+              confirmingHandle === manualResult.profile.username
+                ? t('onboarding.username.confirming')
+                : t('onboarding.username.useThis')
+            }
             onAction={() => confirm(manualResult.profile.username)}
-            disabled={confirming}
+            disabled={busy}
           />
         )}
       </div>
@@ -349,8 +370,9 @@ function UsernameStep({
       <div className="flex items-center justify-between border-t border-border pt-4">
         <button
           type="button"
-          className="text-xs text-text-muted hover:text-text"
+          className="text-xs text-text-muted hover:text-text disabled:opacity-50"
           onClick={() => void onSkip()}
+          disabled={busy}
         >
           {t('onboarding.username.skip')}
         </button>
@@ -377,30 +399,47 @@ function PlayerCard({
   const country = profile.country
     ? profile.country.replace('https://api.chess.com/pub/country/', '')
     : null;
+  /**
+   * Layout: identity above a full-width action on phones (`flex-col`), one row
+   * on `>= sm`. Same shape as `NewGamesBanner`, for the same reasons.
+   *
+   * It used to be a single `flex` row at every width, which distorted the card
+   * on a phone. The mechanism is worth knowing, because it is not the obvious
+   * one: the text column is `flex-1`, i.e. `flex: 1 1 0%`, and shrink is
+   * distributed in proportion to each item's *basis* — so a basis of 0
+   * contributes nothing and the text absorbs none of the overflow. All of it
+   * came out of the two `auto`-basis items instead: the avatar, which has no
+   * `shrink-0` and so squashed from a 48 px circle into an ellipse, and the
+   * `whitespace-nowrap` button, whose label then overflowed its own box. Hence
+   * both fixes below — stacking buys the room, `shrink-0` stops the avatar
+   * paying for a shortfall that is not its to pay.
+   */
   return (
-    <div className="rounded-lg border border-accent/30 bg-accent/5 p-4 flex items-center gap-4">
-      {profile.avatar ? (
-        // chess.com hot-links are public; no auth needed.
-        <img
-          src={profile.avatar}
-          alt=""
-          className="w-12 h-12 rounded-full object-cover bg-bg-raised"
-        />
-      ) : (
-        <div className="w-12 h-12 rounded-full bg-bg-raised flex items-center justify-center text-text-muted text-lg font-semibold">
-          {profile.username.charAt(0).toUpperCase()}
-        </div>
-      )}
-      <div className="flex-1 min-w-0">
-        <div className="text-xs text-text-muted">{headline}</div>
-        <div className="font-medium truncate">{profile.username}</div>
-        <div className="text-xs text-text-muted truncate">
-          {[profile.name, country].filter(Boolean).join(' · ') || t('onboarding.username.playerCardFallback')}
+    <div className="rounded-lg border border-accent/30 bg-accent/5 p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+      <div className="flex items-center gap-3 min-w-0 sm:gap-4 sm:flex-1">
+        {profile.avatar ? (
+          // chess.com hot-links are public; no auth needed.
+          <img
+            src={profile.avatar}
+            alt=""
+            className="w-12 h-12 shrink-0 rounded-full object-cover bg-bg-raised"
+          />
+        ) : (
+          <div className="w-12 h-12 shrink-0 rounded-full bg-bg-raised flex items-center justify-center text-text-muted text-lg font-semibold">
+            {profile.username.charAt(0).toUpperCase()}
+          </div>
+        )}
+        <div className="min-w-0">
+          <div className="text-xs text-text-muted">{headline}</div>
+          <div className="font-medium truncate">{profile.username}</div>
+          <div className="text-xs text-text-muted truncate">
+            {[profile.name, country].filter(Boolean).join(' · ') || t('onboarding.username.playerCardFallback')}
+          </div>
         </div>
       </div>
       <button
         type="button"
-        className="btn-primary whitespace-nowrap"
+        className="btn-primary whitespace-nowrap w-full sm:w-auto sm:shrink-0"
         onClick={onAction}
         disabled={disabled}
       >

@@ -158,6 +158,23 @@ variation to a repertoire retires the row with no reload: that is the difference
 between reading the repertoire tree and merely checking whether a family
 repertoire exists, which is the behaviour the feature was specified on.
 
+`games-sticky-scroll` pins that the games table's horizontal scrollbar is on
+screen in a small window. Its first three assertions are preconditions — the table
+really is wider than the window, the page really is taller, and the scroller's own
+bottom edge really is far below the fold (~1 780 px in its fixture) — because in a
+window where the table simply fits, every later assertion passes for the wrong
+reason. It then drags the thumb and checks the table followed, rather than checking
+the thumb merely exists.
+
+`onboarding-mobile` pins the first screen a new user sees at 320 px. Read the note
+in it before assuming `mobile-audit` covers this: the bug it guards was a flex row
+squashing its avatar from a 48 px circle to 32×48, and shrinking is how flex
+*avoids* overflow — so document width never exceeded window width and the audit
+reported a clean zero. Distortion needs assertions of its own. It also pins that
+confirming one account card does not put the other into a loading label, which it
+observes by delaying `db.settings.put` from the test to hold the in-flight state,
+rather than by adding a seam to the page.
+
 `nnue-remote-net` pins the production NNUE deployment: it starts its own HTTP
 server on an ephemeral port to play the part of the object store, with CORS and
 CORP separately switchable, and asserts that the app loads the net cross-origin

@@ -337,6 +337,28 @@ html::-webkit-scrollbar-corner {
   background-clip: padding-box;
 }
 
+/* Hide a scrollbar without disabling the scrolling.
+ * ---------------------------------------------------------------- *
+ *
+ *  For an element whose scrollbar is being presented somewhere else —
+ *  `StickyXScroll` mirrors a wide table's horizontal scrollbar into a
+ *  strip pinned to the bottom of the viewport, and showing both would
+ *  read as two scrollbars for one axis.
+ *
+ *  Scrolling itself is untouched: wheel, trackpad, touch, keyboard and
+ *  programmatic `scrollLeft` all still work. So this is only safe where
+ *  a visible affordance genuinely exists elsewhere — never as a way to
+ *  tidy away a scrollbar the user still needs to find.
+ */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .move-cell.blunder {
   @apply text-blunder;
 }
