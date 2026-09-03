@@ -237,6 +237,53 @@ from the dashboard if you ever need to.
 
 ---
 
+## How long a login lasts
+
+Two things decide it, and **neither is in this repo** — no code change here can
+extend a session, so don't go looking for one.
+
+**1. Clerk's session lifetime (Dashboard → Sessions).** Two settings:
+
+| Setting | Default | Notes |
+|---|---|---|
+| Maximum lifetime | **7 days** | Expires the session regardless of activity. This is the one that logs an active user out. |
+| Inactivity timeout | disabled | Leave it off. |
+
+Raise Maximum lifetime to keep people signed in longer. Both are
+**Dashboard-only** — Clerk's docs state they "can't be changed via the CLI or
+Backend API", so this cannot be scripted or committed. And **at least one must
+stay enabled**: Clerk refuses to let you disable both, so there is no
+"never expires" — the goal is the largest maximum lifetime the Dashboard accepts,
+with the inactivity timeout off.
+
+**2. Which Clerk *instance* production runs.** As of 2026-09-03 it is a
+**development** instance: the deployed bundle embeds
+`pk_test_…` decoding to `close-falcon-62.clerk.accounts.dev`. That is the ceiling
+on how durable a session can be, whatever the lifetime says, because dev and
+production instances carry the session by different mechanisms:
+
+- **Development** keeps it in a cross-site `__clerk_db_jwt` token, since the app
+  domain and Clerk's Frontend API domain differ. Browsers' third-party-storage
+  protections are designed to disrupt exactly that; iOS Safari is the worst case.
+  Clerk also caps dev instances at 100 users and documents them as "not suitable
+  for production workloads".
+- **Production** keeps it in a same-site `HttpOnly` `__client` cookie, with the
+  Frontend API on a CNAME'd subdomain of your own domain. This is what makes a
+  long session actually last.
+
+So on the current instance, raising the lifetime helps on desktop Chrome/Firefox
+and does much less on a phone. Moving to a production instance is the real fix and
+is **deliberately deferred** (decided 2026-09-03). It needs a custom domain, which
+this project does not have yet — the assigned `chess-coach-bip.pages.dev` hostname
+cannot carry the required CNAME records. Note before planning it: **Clerk does not
+transfer user data between instances**, so existing accounts would have to sign up
+again.
+
+Unrelated to both, and already handled: the browser evicting the origin's storage
+takes the session *and* the library together. `navigator.storage.persist()` is
+requested at boot and the state is shown in Settings — see ARCHITECTURE.md
+§ Storage durability, which also records why that grant is not a guarantee.
+
 ## Production checklist
 
 None of these matter for local dev. They all matter for the deployed app
@@ -248,6 +295,9 @@ None of these matter for local dev. They all matter for the deployed app
       deploys, so OAuth redirects work there.
 - [ ] Clerk → **API Keys**: use a `pk_live_…` key for production
       (separate Clerk app, or the "Production" instance of the same one).
+      **Still outstanding as of 2026-09-03** — production runs a `pk_test_`
+      development instance, which is the ceiling on session durability. See
+      § How long a login lasts.
 - [ ] Supabase → **Authentication → URL Configuration**: add the
       production hostname to the allowed redirect list.
 - [ ] Confirm RLS is enabled on `profiles`. The `enable row level
