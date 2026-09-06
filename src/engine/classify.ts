@@ -22,9 +22,47 @@ export function moveAccuracy(winrateLossPct: number): number {
   return Math.max(0, Math.min(100, acc));
 }
 
+/** Centipawn stand-in for a mate score, before `cpToWinrate` clamps it. */
+export const MATE_CP = 10000;
+
 export function mateToCp(mate: number): number {
-  if (mate === 0) return 0;
-  return mate > 0 ? 10000 - mate : -10000 - mate;
+  // `mate 0` is not "no mate". It is Stockfish's reading for a position whose
+  // side to move is *already* checkmated — the worst score there is for them.
+  // Returning 0 here read a delivered mate as dead equal, which cost the
+  // winner ~48 points of winrate on the move that ended the game.
+  if (mate === 0) return -MATE_CP;
+  return mate > 0 ? MATE_CP - mate : -MATE_CP - mate;
+}
+
+/**
+ * Positions with no legal move, which are exactly the positions Stockfish
+ * cannot score.
+ *
+ * For these it answers `info depth 0 score mate 0` — with **no `pv`** — and
+ * `bestmove (none)`. `engine.ts` only folds an `info` line into its result
+ * when that line carries a pv, so both score fields arrive `null` and the
+ * caller reads 0 cp: dead equal. chess.js settles it for free, so the
+ * analyzer never has to ask.
+ */
+export type TerminalOutcome = 'checkmate' | 'stalemate';
+
+export function terminalOutcome(fen: string): TerminalOutcome | null {
+  try {
+    const c = new Chess(fen);
+    if (c.isCheckmate()) return 'checkmate';
+    if (c.isStalemate()) return 'stalemate';
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Side-to-move-perspective score of a terminal position. Checkmate is the
+ * mated side's floor; stalemate is a draw.
+ */
+export function terminalCpStm(outcome: TerminalOutcome): number {
+  return outcome === 'checkmate' ? mateToCp(0) : 0;
 }
 
 const PIECE_VALUE: Record<string, number> = {

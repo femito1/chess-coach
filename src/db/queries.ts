@@ -1,5 +1,9 @@
 import { db, getSettings, updateSettings, type Game, type Analysis, type AnalysisStatus, type Motif } from './schema';
-import { computeAccuracy, countUserBrilliancies } from '@/engine/analyzer';
+import {
+  computeAccuracy,
+  countUserBrilliancies,
+  repairTerminalMoveEval,
+} from '@/engine/analyzer';
 import { classifyMove } from '@/engine/classify';
 import { detectMotifs } from '@/engine/motifs';
 import {
@@ -23,7 +27,9 @@ import { looksLikePhone } from '@/engine/device';
  * Bump rules:
  *   RECOMPUTE_VERSION   — bump when classifyMove / detectMotifs /
  *                         computeAccuracy / detectPhase / clock-derivation
- *                         logic changes its output for existing data.
+ *                         logic changes its output for existing data, or when
+ *                         `repairTerminalMoveEval` learns to fix a stored
+ *                         reading it previously left alone.
  *
  *                         Do NOT bump this merely to stamp a new derived
  *                         field onto existing games. This pass re-runs
@@ -40,7 +46,7 @@ import { looksLikePhone } from '@/engine/device';
  *                         output for existing PGNs (e.g. updated openings
  *                         dataset).
  */
-export const RECOMPUTE_VERSION = 2;
+export const RECOMPUTE_VERSION = 3;
 export const OPENING_REFRESH_VERSION = 1;
 /** Version stamp for the boot-time `backfillUserTimeStats` pass. Bump
  *  this any time `computeUserTimeStats` would produce different output
@@ -617,7 +623,13 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
       const timeSpent = deriveTimeSpent(clocks, base);
 
       let changed = false;
-      const newMoves = a.moves.map((m, idx) => {
+      const newMoves = a.moves.map((raw, idx) => {
+        // Terminal positions first: an analysis produced before they were read
+        // off the board stored 0 cp for a checkmated `fenAfter`, so the move
+        // that ended the game looks like a ~48-point winrate collapse for the
+        // player who delivered it. `winrateAfter` feeds both the bucket below
+        // and `computeAccuracy`, so the repair has to happen before either.
+        const m = repairTerminalMoveEval(raw);
         const isBest = Boolean(m.bestMoveUci && m.uci && m.bestMoveUci === m.uci);
         const prevUci = idx > 0 ? a.moves[idx - 1].uci : undefined;
         const prevMoveToSquare = prevUci ? prevUci.slice(2, 4) : undefined;
@@ -669,6 +681,7 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
           motifs,
         };
         if (
+          m !== raw ||
           cls !== m.classification ||
           phase !== m.phase ||
           clockAfter !== m.clockAfter ||

@@ -74,6 +74,10 @@ function formatClock(seconds: number): string {
 }
 
 function formatEvalAfter(m: MoveEval): string {
+  // `mateInAfter === 0` is mate *delivered* — the side to move in `fenAfter`
+  // is mated now. "M0" reads as a countdown that never happens, so show the
+  // notation for it instead.
+  if (m.mateInAfter === 0) return '#';
   if (m.mateInAfter != null) return `M${m.mateInAfter}`;
   const v = m.evalCpAfter / 100;
   return `${v > 0 ? '+' : ''}${v.toFixed(2)}`;

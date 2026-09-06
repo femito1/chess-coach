@@ -1,7 +1,14 @@
 import { Chess } from 'chess.js';
 import { isBookFen } from './book';
 import type { AnalysisResult } from './engine';
-import { classifyMove, cpToWinrate, mateToCp, moveAccuracy } from './classify';
+import {
+  classifyMove,
+  cpToWinrate,
+  mateToCp,
+  moveAccuracy,
+  terminalCpStm,
+  terminalOutcome,
+} from './classify';
 import { detectMotifs } from './motifs';
 import {
   baseSecondsFromTimeControl,
@@ -125,7 +132,11 @@ export async function analyzeGamePgn(
     if (bookMoveIdx[i]) continue;
     needEval.add(fensBefore[i]);
     const after = i + 1 < history.length ? fensBefore[i + 1] : finalFen;
-    needEval.add(after);
+    // A position with no legal move is one the engine cannot score — see
+    // `terminalOutcome`. Asking anyway spends a search and gets 0.00 back,
+    // so the final position of a game that ended on the board is settled
+    // by chess.js instead.
+    if (!terminalOutcome(after)) needEval.add(after);
   }
   // The very final position contributes only to the last move's eval —
   // it's already covered by the loop above when the last move is
@@ -200,9 +211,12 @@ export async function analyzeGamePgn(
       continue;
     }
 
+    // Checkmate and stalemate are read off the board, not off the engine.
+    const afterTerminal = terminalOutcome(fenAfter);
+
     const [beforeRes, afterRes] = await Promise.all([
       evalByFen.get(fenBefore)!,
-      evalByFen.get(fenAfter)!,
+      afterTerminal ? Promise.resolve(null) : evalByFen.get(fenAfter)!,
     ]);
 
     // Convert engine scores (always from side-to-move) into White-POV centipawns.
@@ -210,10 +224,14 @@ export async function analyzeGamePgn(
       beforeRes.scoreMate != null
         ? mateToCp(beforeRes.scoreMate)
         : (beforeRes.scoreCp ?? 0);
-    const afterCpStm =
-      afterRes.scoreMate != null
-        ? mateToCp(afterRes.scoreMate)
-        : (afterRes.scoreCp ?? 0);
+    const afterCpStm = afterTerminal
+      ? terminalCpStm(afterTerminal)
+      : afterRes!.scoreMate != null
+        ? mateToCp(afterRes!.scoreMate)
+        : (afterRes!.scoreCp ?? 0);
+    // Mate delivered: the side to move in `fenAfter` is mated *now*.
+    const mateInAfter =
+      afterTerminal === 'checkmate' ? 0 : (afterRes?.scoreMate ?? undefined);
     const beforeCpWhite = sideToMove === 'w' ? beforeCpStm : -beforeCpStm;
     // After the move, side-to-move flips; afterCpStm is for the *opponent*, so negate twice -> same formula.
     const afterCpWhite = sideToMove === 'w' ? -afterCpStm : afterCpStm;
@@ -272,7 +290,7 @@ export async function analyzeGamePgn(
           winrateBefore: moverBeforeWinrate,
           winrateAfter: moverAfterWinrate,
           mateInBefore: beforeRes.scoreMate ?? undefined,
-          mateInAfter: afterRes.scoreMate ?? undefined,
+          mateInAfter,
         })
       : undefined;
 
@@ -291,7 +309,7 @@ export async function analyzeGamePgn(
       bestPvUci: beforeRes.pv && beforeRes.pv.length > 0 ? beforeRes.pv.slice(0, 10) : undefined,
       bestEvalCp: beforeCpWhite,
       mateInBefore: beforeRes.scoreMate ?? undefined,
-      mateInAfter: afterRes.scoreMate ?? undefined,
+      mateInAfter,
       classification,
       depth: beforeRes.depth,
       phase,
@@ -308,6 +326,42 @@ export async function analyzeGamePgn(
     engine: backend.id(),
     moves,
   };
+}
+
+/**
+ * Repair the after-move fields of a stored `MoveEval` whose `fenAfter` has no
+ * legal move.
+ *
+ * Analyses produced before terminal positions were read off the board recorded
+ * the engine's unscoreable answer as 0 cp, so the move that *ended* the game —
+ * usually the winner's mate — reads as a ~48-point winrate collapse and drags
+ * the whole harmonic mean down with it. The truth follows from `fenAfter`
+ * alone, which is what lets the boot recompute pass fix an existing library
+ * without re-running Stockfish over it.
+ *
+ * Returns the same object when there is nothing to repair, so the pass's
+ * changed-detection stays honest.
+ */
+export function repairTerminalMoveEval(m: MoveEval): MoveEval {
+  const outcome = terminalOutcome(m.fenAfter);
+  if (!outcome) return m;
+
+  // The mover is whoever is *not* to move in `fenAfter` — same conversion
+  // `analyzeGamePgn` does, kept in step with it deliberately.
+  const moverIsWhite = m.fenAfter.split(' ')[1] === 'b';
+  const cpStm = terminalCpStm(outcome);
+  const evalCpAfter = moverIsWhite ? -cpStm : cpStm;
+  const winrateAfter = cpToWinrate(moverIsWhite ? evalCpAfter : -evalCpAfter);
+  const mateInAfter = outcome === 'checkmate' ? 0 : undefined;
+
+  if (
+    m.evalCpAfter === evalCpAfter &&
+    m.winrateAfter === winrateAfter &&
+    m.mateInAfter === mateInAfter
+  ) {
+    return m;
+  }
+  return { ...m, evalCpAfter, winrateAfter, mateInAfter };
 }
 
 /**

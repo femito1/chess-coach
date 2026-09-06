@@ -168,9 +168,15 @@ used to stamp unconditionally, which cloud restore turned from a latent bug into
 a live one — a wiped device boots empty, stamps, and then never counts
 brilliancies on the library that arrives seconds later.
 
-**The recompute pass OWNS `MoveEval.classification`, `.motifs`, `.accuracy`.**
-It re-derives them from each move's *stored FENs* on every boot where the stamp
-is behind — it is not a one-time backfill. Consequences:
+**The recompute pass OWNS `MoveEval.classification`, `.motifs`, `.accuracy`, and
+the after-move fields of a terminal position.** It re-derives them from each
+move's *stored FENs* on every boot where the stamp is behind — it is not a
+one-time backfill. The terminal-position repair
+(`repairTerminalMoveEval`) is the one place it rewrites an *engine-derived*
+field: `winrateAfter` / `evalCpAfter` / `mateInAfter` for a `fenAfter` with no
+legal move. It can, because the truth there follows from the FEN alone, and it
+must, because otherwise a library analyzed before that fix could only be
+corrected by re-running Stockfish over all of it. Consequences:
 
 - A test or script that seeds synthetic `analyses` rows will have its motifs
   overwritten (placeholder FENs reclassify to something else, and a move that
@@ -202,6 +208,25 @@ the end of the array — stranding its own slot as permanently busy. That leaks 
 worker, pins `isIdle()` false so the WASM heap is never freed, and eventually
 has `pump()` call `.analyze()` on `undefined`, which surfaces as a game erroring
 for no visible reason. Pinned by `pool-shrink-desync.mjs`.
+
+**A position with no legal move is not the engine's to score, and it does not
+say so in a way the parser hears.** For checkmate and stalemate Stockfish 16
+answers `info depth 0 score mate 0` — carrying **no `pv`** — followed by
+`bestmove (none)`. `EngineWorker` only folds an `info` line into its result when
+that line has a pv, so both score fields arrive `null` and the caller reads
+`0 cp`: dead equal. That is why `analyzeGamePgn` settles terminal positions with
+chess.js (`terminalOutcome`) and never enqueues them.
+
+Getting this wrong is expensive and silent. The last move of a game that ended
+on the board is the mate, and reading its `fenAfter` as dead equal charged the
+*winner* a ~48-point winrate collapse for delivering it: one move accuracy of
+~10 inside a harmonic mean over ~11 scored plies. Measured on a real 15-move
+Danish Gambit win, White's game accuracy read **45.5** instead of **74.3**. The
+move list still labelled it `best` — `classifyMove` consults `isBest` and was
+never fooled — so the only visible symptom was a number that felt wrong, on
+about a third of a blitz library (260 of 798 games in the sample end in
+checkmate). `mateToCp(0)` returns the mated side's floor for the same reason:
+`mate 0` means "already mated", not "no mate".
 
 **`cancelAnalysis()` on the shared singleton kills whatever is running, whoever
 started it.** `useLiveEval` only calls it once its consumer refcount hits zero,

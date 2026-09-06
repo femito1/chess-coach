@@ -5,8 +5,11 @@ import {
   CLASSIFICATION_SYMBOL,
   classifyMove,
   cpToWinrate,
+  MATE_CP,
   mateToCp,
   moveAccuracy,
+  terminalCpStm,
+  terminalOutcome,
 } from './classify';
 
 describe('cpToWinrate', () => {
@@ -51,8 +54,41 @@ describe('mateToCp', () => {
   it('encodes mate-against in N as just over -10000', () => {
     expect(mateToCp(-1)).toBe(-9999);
   });
-  it('returns 0 for mate=0', () => {
-    expect(mateToCp(0)).toBe(0);
+  // `mate 0` is what Stockfish reports for a position whose side to move is
+  // already checkmated, not for "no mate in sight". Reading it as 0 cp made a
+  // delivered mate look like a ~48-point winrate collapse for the winner.
+  it('encodes mate=0 as the mated side-to-move floor', () => {
+    expect(mateToCp(0)).toBe(-MATE_CP);
+  });
+});
+
+describe('terminalOutcome', () => {
+  it('recognizes checkmate', () => {
+    // The position after 15.Qf7# in a Danish Gambit: Black is mated.
+    expect(
+      terminalOutcome('r2q1knr/p2nbQp1/2pp1p1p/1p6/4P3/1BN4P/PB3PP1/3RR1K1 b - - 3 15'),
+    ).toBe('checkmate');
+  });
+
+  it('recognizes stalemate', () => {
+    expect(terminalOutcome('7k/5Q2/6K1/8/8/8/8/8 b - - 0 1')).toBe('stalemate');
+  });
+
+  it('returns null for a position with legal moves', () => {
+    expect(
+      terminalOutcome('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'),
+    ).toBeNull();
+  });
+
+  it('returns null rather than throwing on an unparseable FEN', () => {
+    expect(terminalOutcome('not a fen')).toBeNull();
+  });
+});
+
+describe('terminalCpStm', () => {
+  it('puts a mated side to move at its floor and a stalemate at parity', () => {
+    expect(terminalCpStm('checkmate')).toBe(-MATE_CP);
+    expect(terminalCpStm('stalemate')).toBe(0);
   });
 });
 
