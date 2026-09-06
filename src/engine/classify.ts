@@ -46,9 +46,22 @@ export function mateToCp(mate: number): number {
  */
 export type TerminalOutcome = 'checkmate' | 'stalemate';
 
+/**
+ * Costs a full legal-move generation (~39 µs, against ~0.5 µs for
+ * `classifyMove` on a quiet ply), because "no legal move" is the only way to
+ * tell. **Call it once per game, on the final position — never per ply.** Any
+ * earlier position with no legal move would have ended the game, so there is
+ * nothing to find there, and paying this on every ply of every game is what
+ * turned the boot recompute pass from seconds into minutes.
+ */
 export function terminalOutcome(fen: string): TerminalOutcome | null {
   try {
     const c = new Chess(fen);
+    // This pair costs exactly one internal move generation, whichever branch
+    // wins: `isCheckmate()` short-circuits on `isCheck()` for a quiet position
+    // and `isStalemate()` short-circuits on it for a position in check. Do not
+    // "simplify" it to `moves().length === 0` — the public `moves()` also
+    // builds a SAN string per move, which measured 3x slower.
     if (c.isCheckmate()) return 'checkmate';
     if (c.isStalemate()) return 'stalemate';
     return null;

@@ -623,13 +623,19 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
       const timeSpent = deriveTimeSpent(clocks, base);
 
       let changed = false;
+      // Only the game's final position can be terminal — an earlier one with no
+      // legal move would have ended the game — and `terminalOutcome` costs a
+      // full legal-move generation, ~74x what classifying a quiet ply costs.
+      // Running it per ply is minutes of wasted work on a large library.
+      const lastIdx = a.moves.length - 1;
+
       const newMoves = a.moves.map((raw, idx) => {
-        // Terminal positions first: an analysis produced before they were read
-        // off the board stored 0 cp for a checkmated `fenAfter`, so the move
-        // that ended the game looks like a ~48-point winrate collapse for the
-        // player who delivered it. `winrateAfter` feeds both the bucket below
-        // and `computeAccuracy`, so the repair has to happen before either.
-        const m = repairTerminalMoveEval(raw);
+        // Terminal position first: an analysis produced before it was read off
+        // the board stored 0 cp for a checkmated `fenAfter`, so the move that
+        // ended the game looks like a ~48-point winrate collapse for the player
+        // who delivered it. `winrateAfter` feeds both the bucket below and
+        // `computeAccuracy`, so the repair has to happen before either.
+        const m = idx === lastIdx ? repairTerminalMoveEval(raw) : raw;
         const isBest = Boolean(m.bestMoveUci && m.uci && m.bestMoveUci === m.uci);
         const prevUci = idx > 0 ? a.moves[idx - 1].uci : undefined;
         const prevMoveToSquare = prevUci ? prevUci.slice(2, 4) : undefined;

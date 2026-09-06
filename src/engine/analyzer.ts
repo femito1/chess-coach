@@ -131,12 +131,14 @@ export async function analyzeGamePgn(
   for (let i = 0; i < history.length; i++) {
     if (bookMoveIdx[i]) continue;
     needEval.add(fensBefore[i]);
-    const after = i + 1 < history.length ? fensBefore[i + 1] : finalFen;
+    const isLastMove = i === history.length - 1;
+    const after = isLastMove ? finalFen : fensBefore[i + 1];
     // A position with no legal move is one the engine cannot score — see
     // `terminalOutcome`. Asking anyway spends a search and gets 0.00 back,
     // so the final position of a game that ended on the board is settled
-    // by chess.js instead.
-    if (!terminalOutcome(after)) needEval.add(after);
+    // by chess.js instead. Only that position can be terminal, and the check
+    // is not cheap, so it is asked once per game rather than once per ply.
+    if (!isLastMove || !terminalOutcome(after)) needEval.add(after);
   }
   // The very final position contributes only to the last move's eval —
   // it's already covered by the loop above when the last move is
@@ -211,8 +213,10 @@ export async function analyzeGamePgn(
       continue;
     }
 
-    // Checkmate and stalemate are read off the board, not off the engine.
-    const afterTerminal = terminalOutcome(fenAfter);
+    // Checkmate and stalemate are read off the board, not off the engine — and
+    // only the game's last position can be either.
+    const afterTerminal =
+      i === history.length - 1 ? terminalOutcome(fenAfter) : null;
 
     const [beforeRes, afterRes] = await Promise.all([
       evalByFen.get(fenBefore)!,
