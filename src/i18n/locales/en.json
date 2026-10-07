@@ -954,6 +954,7 @@
     "games": "{{up}} games up, {{down}} down",
     "analyses": "{{up}} analyses up, {{down}} down",
     "puzzles": "{{up}} puzzle results up, {{down}} down",
+    "repertoires": "{{up}} repertoires up, {{down}} down",
     "sessionTotal": "This session: {{up}} uploaded, {{down}} downloaded.",
     "archiveNote": "The cloud copy only ever grows — deleting a game here does not remove it there, and a later sync brings it back. That is what makes it a backup; prune from the Supabase dashboard if you ever need to.",
     "phase": {

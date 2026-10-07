@@ -954,6 +954,7 @@
     "games": "{{up}} partite caricate, {{down}} scaricate",
     "analyses": "{{up}} analisi caricate, {{down}} scaricate",
     "puzzles": "{{up}} risultati dei problemi caricati, {{down}} scaricati",
+    "repertoires": "{{up}} repertori caricati, {{down}} scaricati",
     "sessionTotal": "Questa sessione: {{up}} caricati, {{down}} scaricati.",
     "archiveNote": "La copia nel cloud può solo crescere — cancellare una partita qui non la rimuove là, e una sincronizzazione successiva la riporta. È questo che la rende un backup; se serve, rimuovi dal pannello Supabase.",
     "phase": {

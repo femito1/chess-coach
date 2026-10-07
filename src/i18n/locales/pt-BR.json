@@ -954,6 +954,7 @@
     "games": "{{up}} partidas enviadas, {{down}} baixadas",
     "analyses": "{{up}} análises enviadas, {{down}} baixadas",
     "puzzles": "{{up}} resultados de problemas enviados, {{down}} baixados",
+    "repertoires": "{{up}} repertórios enviados, {{down}} baixados",
     "sessionTotal": "Nesta sessão: {{up}} enviados, {{down}} baixados.",
     "archiveNote": "A cópia na nuvem só cresce — apagar uma partida aqui não a remove lá, e uma sincronização posterior a traz de volta. É isso que faz dela um backup; remova pelo painel do Supabase se precisar.",
     "phase": {

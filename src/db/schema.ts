@@ -677,6 +677,7 @@ export class CoachDB extends Dexie {
   notes!: EntityTable<PositionNote, 'fenKey'>;
   evalCache!: EntityTable<EvalCacheEntry, 'key'>;
   importRecords!: EntityTable<ImportRecord, 'id'>;
+  repertoireSyncBases!: EntityTable<RepertoireSyncBaseRow, 'repertoireId'>;
 
   constructor() {
     super('chess-coach');
@@ -952,7 +953,39 @@ export class CoachDB extends Dexie {
       importRecords:
         'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
     });
+    // v13: one new store, nothing touched. `repertoireSyncBases` is what this
+    // device last agreed with the cloud about each repertoire — the base of the
+    // three-way comparison in `features/sync/repertoireDiff.ts`. No `upgrade()`:
+    // an empty table reads as "never synced here", which is exactly the truth
+    // for every existing install, and the first sync merges rather than
+    // overwrites (see `planRepertoireSync`).
+    this.version(13).stores({
+      games:
+        'id, url, username, endTime, analysisStatus, timeClass, eco, result',
+      analyses: 'gameId, analyzedAt, depth',
+      settings: 'key',
+      puzzles: 'id, gameId, generatedAt, *motifs, *tags, [srs.dueAt+id]',
+      puzzleAttempts: 'puzzleId, lastAttemptedAt, rating',
+      repertoires: 'id, color, updatedAt',
+      repertoireNodes: 'id, repertoireId, fen, parentFen',
+      repertoireCards: 'id, repertoireId, fen, [srs.dueAt+id]',
+      repertoireLineStats: 'id, repertoireId, lastPracticedAt, family',
+      notes: 'fenKey, updatedAt',
+      evalCache: 'key, fen, depth, savedAt',
+      importRecords:
+        'id, source, username, archiveUrl, importedAt, [username+archiveUrl]',
+      repertoireSyncBases: 'repertoireId',
+    });
   }
+}
+
+/** Row shape of `repertoireSyncBases` — `SyncBase` from `repertoireDiff.ts`,
+ *  restated here so the schema module stays a leaf. */
+export interface RepertoireSyncBaseRow {
+  repertoireId: string;
+  rev: number;
+  hash: string;
+  deleted: boolean;
 }
 
 export const db = new CoachDB();

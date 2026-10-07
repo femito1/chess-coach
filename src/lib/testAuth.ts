@@ -292,6 +292,7 @@ const CLOUD_SYNC_TABLES = new Set([
   'cloud_games',
   'cloud_analyses',
   'cloud_puzzle_attempts',
+  'cloud_repertoires',
 ]);
 
 function emptyCloudBuilder(): BypassFromBuilder {

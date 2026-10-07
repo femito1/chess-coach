@@ -21,6 +21,8 @@ import {
   type CloudProgressSummary,
 } from './cloudProgress';
 import { createCoalescingRunner } from './coalescingRunner';
+import { isApplyingRemoteRepertoires, syncRepertoires } from './repertoireSync';
+import { db } from '@/db/schema';
 
 /**
  * Cloud-sync state and triggers.
@@ -68,6 +70,8 @@ function buildSyncStore() {
           analysesPulled: s.session.analysesPulled + c.analysesPulled,
           attemptsPushed: s.session.attemptsPushed + c.attemptsPushed,
           attemptsPulled: s.session.attemptsPulled + c.attemptsPulled,
+          repertoiresPushed: s.session.repertoiresPushed + c.repertoiresPushed,
+          repertoiresPulled: s.session.repertoiresPulled + c.repertoiresPulled,
           gamesSettled: s.session.gamesSettled + c.gamesSettled,
         },
       })),
@@ -166,6 +170,70 @@ const attemptRunner = createCoalescingRunner({
 });
 
 /**
+ * Repertoires upload on their own too, for the same reason as attempts: training
+ * changes SRS cards and line stats, and none of the full-sync triggers fire
+ * because of it. Unlike attempts there is no single call site to hang this on —
+ * the store, the openings library and both trainers all write — so table hooks
+ * below catch every write instead.
+ */
+const repertoireRunner = createCoalescingRunner({
+  delayMs: ATTEMPT_SYNC_DELAY_MS,
+  run: async () => {
+    const target = attemptTarget;
+    if (!target) return;
+    if (inFlight) await inFlight.catch(() => {});
+    const r = await syncRepertoires(target);
+    useSyncStore.getState().addCounts({
+      ...emptyCounts(),
+      repertoiresPushed: r.pushed + r.tombstoned + r.merged,
+      repertoiresPulled: r.pulled + r.deletedLocal + r.merged,
+    });
+  },
+  onError: (err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.error('[cloud-sync] repertoire upload failed:', err);
+    if (useSyncStore.getState().phase.kind !== 'syncing') {
+      useSyncStore.getState().setPhase({ kind: 'error', message });
+    }
+  },
+});
+
+/**
+ * Any write to a repertoire table schedules an upload. Registered once per
+ * page, pinned on `globalThis` like the store, so HMR or a duplicate module
+ * cannot stack a second set of hooks. The sync's own pull writes are skipped,
+ * or every pull would schedule a pointless follow-up.
+ */
+const HOOKS_KEY = '__chessCoachRepertoireSyncHooks';
+if (!(globalThis as Record<string, unknown>)[HOOKS_KEY]) {
+  (globalThis as Record<string, unknown>)[HOOKS_KEY] = true;
+  const onWrite = () => {
+    if (isApplyingRemoteRepertoires() || !attemptTarget) return;
+    repertoireRunner.request();
+  };
+  for (const table of [
+    db.repertoires,
+    db.repertoireNodes,
+    db.repertoireCards,
+    db.repertoireLineStats,
+  ]) {
+    // Dexie hooks run inside the writing transaction; scheduling a timer is all
+    // these do, and they must return nothing so the write is left unmodified.
+    table.hook('creating', () => {
+      onWrite();
+    });
+    table.hook('updating', () => {
+      onWrite();
+      return undefined;
+    });
+    table.hook('deleting', () => {
+      onWrite();
+    });
+  }
+}
+
+/**
  * Upload puzzle progress soon. Call after recording an attempt.
  *
  * Before this existed nothing about solving a puzzle triggered a sync, so a
@@ -186,8 +254,9 @@ export function requestAttemptSync(): void {
  *     freshly-analyzed games uploads without the user asking;
  *   - on demand from the Settings card.
  *
- * Puzzle attempts additionally upload on their own, seconds after each one
- * (`requestAttemptSync`), and when the tab is hidden.
+ * Puzzle attempts and repertoires additionally upload on their own, seconds
+ * after each change (`requestAttemptSync`, and table hooks for repertoires),
+ * and when the tab is hidden.
  *
  * There is deliberately no polling timer. Nothing changes the cloud except this
  * device and the user's other devices, and a timer would burn requests to
@@ -266,14 +335,18 @@ export function useCloudSync(): void {
 
   // ---- don't strand a pending attempt upload when the tab goes away -------
   useEffect(() => {
+    const flushAll = () => {
+      attemptRunner.flush();
+      repertoireRunner.flush();
+    };
     const flush = () => {
-      if (document.visibilityState === 'hidden') attemptRunner.flush();
+      if (document.visibilityState === 'hidden') flushAll();
     };
     document.addEventListener('visibilitychange', flush);
-    window.addEventListener('pagehide', attemptRunner.flush);
+    window.addEventListener('pagehide', flushAll);
     return () => {
       document.removeEventListener('visibilitychange', flush);
-      window.removeEventListener('pagehide', attemptRunner.flush);
+      window.removeEventListener('pagehide', flushAll);
     };
   }, []);
 }

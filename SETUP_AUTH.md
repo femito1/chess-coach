@@ -199,7 +199,7 @@ the failure in two:
 ## 5. Cloud sync (optional, per-account)
 
 By default Supabase holds only the small `profiles` row, and all heavy user data
-(games, analyses, puzzle progress) stays in IndexedDB on whichever device
+(games, analyses, puzzle progress, repertoires) stays in IndexedDB on whichever device
 produced it. **Cloud sync** mirrors that heavy data to Postgres so it survives a
 cleared browser and follows you between devices.
 
@@ -210,9 +210,10 @@ It is deliberately opt-in **per account**, enforced in the database:
    click **Run**. It is idempotent — re-running it changes nothing. **Re-run it
    after pulling changes to that file**: it adds columns with
    `add column if not exists`, and a column the code writes but the table lacks
-   makes every push fail. The most recent addition is
-   `cloud_analyses.recompute_version` (2026-09-01), which is what lets a
-   restored device skip reclassifying a library it just pulled down.
+   makes every push fail. The most recent addition is the
+   `cloud_repertoires` table (2026-10-07). Until it exists the app skips
+   repertoire backup with a console warning rather than failing the rest of
+   sync — so repertoires are **not** backed up until you re-run this file.
 3. The last statement prints the allowlist. You should see exactly one row, for
    the account you want to sync. If it prints none, the lookup found no matching
    profile; the file's closing comment explains how to insert the id by hand.

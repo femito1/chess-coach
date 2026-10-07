@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { db, type Analysis, type Game, type PuzzleAttempt } from '@/db/schema';
 import { listAllGamesLight, listAnalysesLight } from '@/db/queries';
 import { computeAccuracy, countUserBrilliancies } from '@/engine/analyzer';
+import { syncRepertoires } from './repertoireSync';
 import {
   BATCH_ANALYSES,
   BATCH_ATTEMPTS,
@@ -39,6 +40,9 @@ export interface SyncCounts {
   analysesPulled: number;
   attemptsPushed: number;
   attemptsPulled: number;
+  /** Repertoires sent up / brought down (a merge counts both ways). */
+  repertoiresPushed: number;
+  repertoiresPulled: number;
   /** Games whose local `analysisStatus` a pulled analysis settled to `done`.
    *  Not a transfer count — it is how many games the local queue no longer has
    *  to re-analyze — so `countsTotal` deliberately leaves it out. */
@@ -59,6 +63,8 @@ export const emptyCounts = (): SyncCounts => ({
   analysesPulled: 0,
   attemptsPushed: 0,
   attemptsPulled: 0,
+  repertoiresPushed: 0,
+  repertoiresPulled: 0,
   gamesSettled: 0,
 });
 
@@ -69,7 +75,9 @@ export function countsTotal(c: SyncCounts): number {
     c.analysesPushed +
     c.analysesPulled +
     c.attemptsPushed +
-    c.attemptsPulled
+    c.attemptsPulled +
+    c.repertoiresPushed +
+    c.repertoiresPulled
   );
 }
 
@@ -289,6 +297,16 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
   const attempts = await syncPuzzleAttempts({ supabase, userId, signal, onProgress });
   counts.attemptsPulled += attempts.pulled;
   counts.attemptsPushed += attempts.pushed;
+
+  // ---- repertoires -------------------------------------------------------
+  //
+  // Last, and self-contained: it reads its own manifest, and a cloud project
+  // that has not run the repertoire SQL yet skips it rather than failing the
+  // phases above that already succeeded. See `repertoireSync.ts`.
+  checkAbort(signal);
+  const reps = await syncRepertoires({ supabase, userId });
+  counts.repertoiresPushed += reps.pushed + reps.tombstoned + reps.merged;
+  counts.repertoiresPulled += reps.pulled + reps.deletedLocal + reps.merged;
 
   onProgress?.({ phase: 'done', done: 1, total: 1 });
   return { ...counts, bytesPushed, durationMs: Date.now() - startedAt };

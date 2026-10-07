@@ -16,7 +16,7 @@ Contents: [Data model](#data-model) ·
 ## Data model
 
 Everything is client-side: Dexie over IndexedDB (`src/db/schema.ts`, DB name
-`chess-coach`), no application server. **Current schema version: 12.**
+`chess-coach`), no application server. **Current schema version: 13.**
 
 | table | key | holds |
 |---|---|---|
@@ -26,6 +26,7 @@ Everything is client-side: Dexie over IndexedDB (`src/db/schema.ts`, DB name
 | `repertoires` / `repertoireNodes` / `repertoireCards` / `repertoireLineStats` | `id` | Repertoire trees, SM-2 cards, per-line practice stats. |
 | `evalCache` | `key` | Stockfish results, keyed by position **and evaluator**. |
 | `importRecords` | `id` | Which Chess.com archives have been imported. |
+| `repertoireSyncBases` | `repertoireId` | What this device last agreed with the cloud about each repertoire (v13). See § Cloud sync. |
 | `settings` | `key` (always `main`) | Single row: username, boot-pass stamps, prefs. |
 | `puzzles`, `notes` | `id` / `fenKey` | **Dead stores.** Nothing in `src/` reads or writes them. |
 
@@ -1081,9 +1082,34 @@ library of 2 000+ games. The attempt-only path reads and writes **only**
 `cloud_puzzle_attempts`: the game and analysis manifests are thousands of rows,
 fine once per app open, wasteful once per puzzle. It waits behind an in-flight
 full sync rather than racing it, since both diff the same rows. Pinned by step 8
-of `cloud-sync.mjs`. Note the larger gap beside it: **repertoires, their SM-2
-cards and line stats are not mirrored at all** — the cloud tables are games,
-analyses and attempts only — so a loss of local data takes them outright.
+of `cloud-sync.mjs`.
+
+**Repertoires sync as whole snapshots, three-way.** One `cloud_repertoires` row
+per repertoire holds its record, node tree, SRS cards and line stats, so a node
+and its card can never be split across two half-applied syncs. Unlike games they
+are edited in place and carry no per-row modification time, so each device keeps
+a `repertoireSyncBases` row (v13): the cloud `rev` and content hash as of the last
+agreement. Against it "changed here" and "changed there" are facts; only "changed
+on both" merges, and the merge never discards training — counters take the max,
+a card keeps its latest review, the tree is the union. The deliberate cost: a line
+deleted on one device while the same repertoire was edited on another comes back.
+Rules that must hold:
+
+- **Every cloud update is compare-and-swap** (`where rev = <planned rev>`), so a
+  push racing another device's is detected — and merged next sync — rather than
+  overwriting it. A duplicate insert's `23505` means the same.
+- **A pull replaces the repertoire and its base in one transaction.** A base
+  written apart from its data would misreport a half-applied pull as a local edit.
+- **Deletion is a tombstone** (`deleted = true`); there is no DELETE policy, and a
+  device that still has the repertoire must learn it was deleted.
+- **Changes are caught by Dexie table hooks**, not call sites: the store, the
+  openings library and both trainers all write. The hooks skip the sync's own
+  pull writes (`isApplyingRemoteRepertoires`), or every pull would schedule a
+  pointless follow-up.
+- **A project without the table skips the phase** with one warning: the app can
+  deploy before `supabase/cloud-sync.sql` is re-run, and that must not turn every
+  sync red. Policy is unit-tested in `repertoireDiff.test.ts`; plumbing, including
+  both conflict signals, in `repertoire-sync.mjs`.
 
 **`startSync` coalesces concurrent triggers, but never onto an aborted pass.**
 De-duping onto a pass whose signal is already aborted *drops the request

@@ -7,7 +7,8 @@
 --
 --  What it sets up: a cloud mirror of the heavy user data that until now lived
 --  only in IndexedDB, so reviewed games + their Stockfish analyses + puzzle
---  progress survive a cleared browser and follow you between devices.
+--  progress + opening repertoires survive a cleared browser and follow you
+--  between devices.
 --
 --  ── Why this is gated, and gated HERE ─────────────────────────────────────
 --
@@ -147,6 +148,27 @@ create table if not exists public.cloud_puzzle_attempts (
   primary key (user_id, puzzle_id)
 );
 
+-- Repertoires, one row per repertoire carrying its WHOLE state — the
+-- repertoire record, its node tree, its SRS cards and its line stats — in
+-- `data`. Unlike games these are edited in place and deleted, and a node and its
+-- card must never be split across two half-applied syncs, so the unit of sync is
+-- the repertoire rather than the record. See src/features/sync/repertoireSync.ts.
+--
+-- `rev` is the compare-and-swap token: a device updates a row only `where rev =`
+-- the value it last saw, so a concurrent push from another device is detected
+-- instead of overwritten. `deleted` is a tombstone — there is no DELETE policy
+-- (see § 4), and a deleted repertoire must stay deleted rather than be restored
+-- by the next sync of a device that still has it.
+create table if not exists public.cloud_repertoires (
+  user_id       text        not null,
+  repertoire_id text        not null,
+  rev           bigint      not null,
+  deleted       boolean     not null default false,
+  updated_at    timestamptz not null default now(),
+  data          jsonb       not null,
+  primary key (user_id, repertoire_id)
+);
+
 -- `user_id` leads every primary key, so the PK index already serves
 -- "everything for this user". No extra indexes needed.
 
@@ -184,7 +206,7 @@ declare
   t text;
 begin
   for t in
-    select unnest(array['cloud_games', 'cloud_analyses', 'cloud_puzzle_attempts'])
+    select unnest(array['cloud_games', 'cloud_analyses', 'cloud_puzzle_attempts', 'cloud_repertoires'])
   loop
     execute format('alter table public.%I enable row level security', t);
 

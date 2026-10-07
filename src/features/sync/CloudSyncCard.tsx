@@ -198,6 +198,14 @@ export function CloudSyncCard() {
                   })}
                 </li>
               )}
+              {last.repertoiresPushed + last.repertoiresPulled > 0 && (
+                <li>
+                  {t('sync.repertoires', {
+                    up: last.repertoiresPushed,
+                    down: last.repertoiresPulled,
+                  })}
+                </li>
+              )}
             </ul>
           )}
         </div>
@@ -211,9 +219,15 @@ export function CloudSyncCard() {
         <p className="text-[11px] text-text-muted">
           {t('sync.sessionTotal', {
             up:
-              session.gamesPushed + session.analysesPushed + session.attemptsPushed,
+              session.gamesPushed +
+              session.analysesPushed +
+              session.attemptsPushed +
+              session.repertoiresPushed,
             down:
-              session.gamesPulled + session.analysesPulled + session.attemptsPulled,
+              session.gamesPulled +
+              session.analysesPulled +
+              session.attemptsPulled +
+              session.repertoiresPulled,
           })}
         </p>
       )}

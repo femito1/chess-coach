@@ -160,7 +160,8 @@ Optional, and gated **per account by a row in the Supabase
 enrol from the Supabase dashboard (`SETUP_AUTH.md` §5). Unenrolled accounts
 run fully local and the Settings card stays hidden.
 
-It mirrors games, analyses and puzzle attempts as an accumulating archive.
+It mirrors games, analyses, puzzle attempts and opening repertoires (tree, SRS
+cards and line stats) as an accumulating archive.
 Read ARCHITECTURE.md § Cloud sync before changing anything in
 `src/features/sync/` — three ordering rules there are load-bearing.
 
