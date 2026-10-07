@@ -10,6 +10,7 @@ import {
   isAbort,
   isSyncEnabled,
   runCloudSync,
+  syncPuzzleAttempts,
   type SyncCounts,
   type SyncProgress,
   type SyncResult,
@@ -19,6 +20,7 @@ import {
   summarizeCloudProgress,
   type CloudProgressSummary,
 } from './cloudProgress';
+import { createCoalescingRunner } from './coalescingRunner';
 
 /**
  * Cloud-sync state and triggers.
@@ -120,6 +122,62 @@ let inFlightSignal: { aborted: boolean } | null = null;
 let inFlightToken: symbol | null = null;
 
 /**
+ * Where an attempt-only sync should go. Set once the allowlist check passes,
+ * cleared on sign-out or when the account is not enrolled, so a request from an
+ * unenrolled account is a no-op rather than a failing network call.
+ */
+let attemptTarget: {
+  supabase: Parameters<typeof runCloudSync>[0]['supabase'];
+  userId: string;
+} | null = null;
+
+/**
+ * Seconds, not immediately: a fast run of puzzles coalesces into one upload, and
+ * each upload re-reads the attempt history. The tab-hidden flush below covers
+ * the window this leaves.
+ */
+const ATTEMPT_SYNC_DELAY_MS = 10_000;
+
+const attemptRunner = createCoalescingRunner({
+  delayMs: ATTEMPT_SYNC_DELAY_MS,
+  run: async () => {
+    const target = attemptTarget;
+    if (!target) return;
+    // Behind a full sync rather than beside it: a full sync ends with this same
+    // phase, and two writers diffing the same rows at once would push twice.
+    if (inFlight) await inFlight.catch(() => {});
+    const { addCounts, setPhase } = useSyncStore.getState();
+    const { pulled, pushed } = await syncPuzzleAttempts(target);
+    addCounts({ ...emptyCounts(), attemptsPulled: pulled, attemptsPushed: pushed });
+    // Clear an earlier failure once uploads work again, but never stomp on a
+    // full sync's live progress.
+    if (useSyncStore.getState().phase.kind === 'error') setPhase({ kind: 'ready' });
+  },
+  onError: (err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.error('[cloud-sync] attempt upload failed:', err);
+    // Visible on purpose: silently failing uploads is how puzzle progress went
+    // missing in the first place. The Settings card shows this state.
+    if (useSyncStore.getState().phase.kind !== 'syncing') {
+      useSyncStore.getState().setPhase({ kind: 'error', message });
+    }
+  },
+});
+
+/**
+ * Upload puzzle progress soon. Call after recording an attempt.
+ *
+ * Before this existed nothing about solving a puzzle triggered a sync, so a
+ * session's progress reached the cloud only at the next app open — and was lost
+ * outright if local data went first. See `syncPuzzleAttempts`.
+ */
+export function requestAttemptSync(): void {
+  if (!attemptTarget) return;
+  attemptRunner.request();
+}
+
+/**
  * Mount once, high in the tree (`AppLayout`), alongside `useProfileSync`.
  *
  * Triggers a sync:
@@ -127,6 +185,9 @@ let inFlightToken: symbol | null = null;
  *   - when the analysis queue goes from running to idle, so a batch of
  *     freshly-analyzed games uploads without the user asking;
  *   - on demand from the Settings card.
+ *
+ * Puzzle attempts additionally upload on their own, seconds after each one
+ * (`requestAttemptSync`), and when the tab is hidden.
  *
  * There is deliberately no polling timer. Nothing changes the cloud except this
  * device and the user's other devices, and a timer would burn requests to
@@ -146,6 +207,7 @@ export function useCloudSync(): void {
     if (!isLoaded || !isSignedIn || !userId) {
       setPhase({ kind: 'idle' });
       enabledRef.current = false;
+      attemptTarget = null;
       return;
     }
     const signal = { aborted: false };
@@ -173,10 +235,12 @@ export function useCloudSync(): void {
       }
       if (!enabled) {
         enabledRef.current = false;
+        attemptTarget = null;
         setPhase({ kind: 'disabled' });
         return;
       }
       enabledRef.current = true;
+      attemptTarget = { supabase, userId };
       setPhase({ kind: 'ready' });
       await startSync({ supabase, userId, signal });
     })();
@@ -199,6 +263,19 @@ export function useCloudSync(): void {
     void startSync({ supabase, userId, signal: abortRef.current });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueRunning, userId]);
+
+  // ---- don't strand a pending attempt upload when the tab goes away -------
+  useEffect(() => {
+    const flush = () => {
+      if (document.visibilityState === 'hidden') attemptRunner.flush();
+    };
+    document.addEventListener('visibilitychange', flush);
+    window.addEventListener('pagehide', attemptRunner.flush);
+    return () => {
+      document.removeEventListener('visibilitychange', flush);
+      window.removeEventListener('pagehide', attemptRunner.flush);
+    };
+  }, []);
 }
 
 /** Imperative trigger shared by the hook and the Settings button. */

@@ -141,27 +141,12 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
   onProgress?.({ phase: 'manifest', done: 0, total: 0 });
 
   // ---- manifests (metadata only — no `data` blobs) ----------------------
-  const [remoteGames, remoteAnalyses, remoteAttempts] = await Promise.all([
+  const [remoteGames, remoteAnalyses] = await Promise.all([
     fetchAll<RemoteGameMeta>(supabase, 'cloud_games', 'game_id, analysis_status', userId),
     fetchAll<RemoteAnalysisMeta>(
       supabase,
       'cloud_analyses',
       'game_id, depth, analyzed_at, engine, recompute_version',
-      userId,
-    ),
-    // `data` (the whole PuzzleAttempt), not the metadata columns.
-    //
-    // Reconstructing an attempt from the metadata columns loses `firstSeenAt`
-    // and `msTaken`, and that broke two things at once: a restored device got
-    // `firstSeenAt` overwritten with `lastAttemptedAt`, and — because the
-    // reconstructed row never equalled the merge — every sync re-pushed every
-    // attempt forever, so the whole thing was not idempotent. Attempts are a
-    // few hundred bytes each, so fetching the real row is the honest trade:
-    // a 5 000-puzzle history is ~1 MB, once per sync, and always exact.
-    fetchAll<{ data: PuzzleAttempt }>(
-      supabase,
-      'cloud_puzzle_attempts',
-      'puzzle_id, data',
       userId,
     ),
   ]);
@@ -301,6 +286,57 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
   }
 
   // ---- puzzle attempts ---------------------------------------------------
+  const attempts = await syncPuzzleAttempts({ supabase, userId, signal, onProgress });
+  counts.attemptsPulled += attempts.pulled;
+  counts.attemptsPushed += attempts.pushed;
+
+  onProgress?.({ phase: 'done', done: 1, total: 1 });
+  return { ...counts, bytesPushed, durationMs: Date.now() - startedAt };
+}
+
+/**
+ * The puzzle-attempts phase on its own — callable without a full sync.
+ *
+ * It exists separately because attempts are the one thing a full sync almost
+ * never got to in time. A full sync runs at sign-in, when the local analysis
+ * queue finishes a batch, or from the Settings button; nothing about solving a
+ * puzzle triggers one. So a session's attempts sat on the device until the next
+ * app open — and since the off-laptop worker began delivering games already
+ * analyzed, the "queue finished a batch" trigger almost never fires either. Any
+ * loss of local data in that window (this device has lost its whole origin to a
+ * full disk before; see ARCHITECTURE.md § Storage durability) took the session
+ * with it. `requestAttemptSync` in `useCloudSync` calls this seconds after each
+ * attempt instead.
+ *
+ * It must not touch games or analyses: those manifests run to thousands of rows,
+ * which is fine once per app open and wasteful once per puzzle. Attempts are a
+ * few hundred bytes each.
+ */
+export async function syncPuzzleAttempts(args: {
+  supabase: SupabaseClient;
+  userId: string;
+  signal?: { aborted: boolean };
+  onProgress?: (p: SyncProgress) => void;
+}): Promise<{ pulled: number; pushed: number }> {
+  const { supabase, userId, signal, onProgress } = args;
+
+  // `data` (the whole PuzzleAttempt), not the metadata columns.
+  //
+  // Reconstructing an attempt from the metadata columns loses `firstSeenAt`
+  // and `msTaken`, and that broke two things at once: a restored device got
+  // `firstSeenAt` overwritten with `lastAttemptedAt`, and — because the
+  // reconstructed row never equalled the merge — every sync re-pushed every
+  // attempt forever, so the whole thing was not idempotent. Attempts are a
+  // few hundred bytes each, so fetching the real row is the honest trade:
+  // a 5 000-puzzle history is ~1 MB, once per sync, and always exact.
+  const remoteAttempts = await fetchAll<{ data: PuzzleAttempt }>(
+    supabase,
+    'cloud_puzzle_attempts',
+    'puzzle_id, data',
+    userId,
+  );
+  checkAbort(signal);
+
   const localAttempts = await db.puzzleAttempts.toArray();
   const attemptPlan = diffAttempts(
     localAttempts,
@@ -314,10 +350,10 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
 
   if (attemptPlan.writeLocal.length > 0) {
     await db.puzzleAttempts.bulkPut(attemptPlan.writeLocal);
-    counts.attemptsPulled += attemptPlan.writeLocal.length;
     for (const _ of attemptPlan.writeLocal) tickAttempts();
   }
 
+  let pushed = 0;
   for (const rows of chunk(attemptPlan.push, BATCH_ATTEMPTS)) {
     checkAbort(signal);
     const payload = rows.map((p) => toCloudAttempt(userId, p));
@@ -325,12 +361,11 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
       .from('cloud_puzzle_attempts')
       .upsert(payload, { onConflict: 'user_id,puzzle_id' });
     if (error) throw new Error(`push attempts: ${describe(error)}`);
-    counts.attemptsPushed += rows.length;
+    pushed += rows.length;
     for (const _ of rows) tickAttempts();
   }
 
-  onProgress?.({ phase: 'done', done: 1, total: 1 });
-  return { ...counts, bytesPushed, durationMs: Date.now() - startedAt };
+  return { pulled: attemptPlan.writeLocal.length, pushed };
 }
 
 /**

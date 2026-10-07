@@ -1070,6 +1070,21 @@ the 45 s interval in `useCloudProgress` is a read-only progress readout and a
 different thing. The store is pinned on `globalThis` so a duplicate module (HMR,
 dynamic import) cannot split the state.
 
+**Puzzle attempts upload on their own, ~10 s after each one and on tab hide**
+(`requestAttemptSync` → `syncPuzzleAttempts`). The three triggers above never
+fire because of a puzzle, so a session's progress sat on the device until the
+next app open; once the off-laptop worker started delivering games already
+analyzed, the queue-idle trigger nearly stopped firing too. Any loss of local data
+in that window — which this user's machine has suffered (§ Storage durability) —
+took the session with it, and the cloud ended up holding 27 attempts for a
+library of 2 000+ games. The attempt-only path reads and writes **only**
+`cloud_puzzle_attempts`: the game and analysis manifests are thousands of rows,
+fine once per app open, wasteful once per puzzle. It waits behind an in-flight
+full sync rather than racing it, since both diff the same rows. Pinned by step 8
+of `cloud-sync.mjs`. Note the larger gap beside it: **repertoires, their SM-2
+cards and line stats are not mirrored at all** — the cloud tables are games,
+analyses and attempts only — so a loss of local data takes them outright.
+
 **`startSync` coalesces concurrent triggers, but never onto an aborted pass.**
 De-duping onto a pass whose signal is already aborted *drops the request
 invisibly*: the aborted pass resolves, `isAbort` maps it to `phase: 'ready'` —

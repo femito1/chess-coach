@@ -33,6 +33,7 @@ import {
 } from './recommend';
 import { mistakeRowsForGame, type MistakeRow } from './mistakes';
 import { loadSolvedIds, recordAttempt } from './attempts';
+import { requestAttemptSync } from '@/features/sync/useCloudSync';
 import {
   BOARD_CLAMP_PX,
   BOARD_CLAMP_WITH_SUMMARY_PX,
@@ -97,6 +98,9 @@ export function PuzzlesPage() {
         hintUsed: outcome.hintUsed,
         msTaken: outcome.msTaken,
       });
+      // Progress is only as safe as its cloud copy — local data on this device
+      // has been wiped before — and nothing else would upload it this session.
+      requestAttemptSync();
       // Deliberately NOT refreshing `solved` here. Retiring the puzzle
       // mid-run would renumber the strip under the user and could yank the
       // current puzzle out from under them. The exclusion set is re-read
