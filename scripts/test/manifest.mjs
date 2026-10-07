@@ -37,6 +37,7 @@ export const BROWSER_TESTS = [
   { name: 'nnue-remote-net',            file: 'scripts/test/integration/nnue-remote-net.mjs',            category: 'integration' },
   { name: 'analysis-priority',          file: 'scripts/test/integration/analysis-priority.mjs',          category: 'integration' },
   { name: 'auto-analyze',               file: 'scripts/test/integration/auto-analyze.mjs',               category: 'integration' },
+  { name: 'settings-concurrent-update', file: 'scripts/test/integration/settings-concurrent-update.mjs', category: 'integration' },
 
   // --- Classification + accuracy + recompute -----------------------
   // `recompute-skip` is the strict superset of the old `recompute`

@@ -237,7 +237,7 @@ names its own cause instead of surfacing as a confusing empty result.
 `runBrowserTest` loads the **real** app, so by the time your `page.evaluate`
 runs, two things are already working on the same Dexie tables you are about to
 seed: the analysis queue's run loop, and the boot passes. Neither knows it is in
-a test. Three failures this suite has produced all came from this, every one of
+a test. Four failures this suite has produced all came from this, every one of
 them CI-only, because a slow runner changes who wins:
 
 | Test | What raced | Symptom |
@@ -245,6 +245,15 @@ them CI-only, because a slow runner changes who wins:
 | `cloud-sync` | boot reclassification rewriting `Game.accuracy` / row vintage between two syncs | "byte-identical after round trip", then "a second sync moves nothing" |
 | `queue-newest-first` | the analyzer claiming a pending game the test was about to drain | `order: [...3 of 4]` — correct ordering, one row short |
 | `e2e/exploration-classification` | engine workers fetching 38 MB nets, so the network never went quiet | `page.goto` timeout on `networkidle` |
+| `auto-analyze` | a boot pass stamping its version into the one `settings` row while the test turned `autoAnalyze` off | `expected null, got "auto-newer"` — the toggle had silently reverted |
+
+The last one was **an app bug the race exposed**, not a test bug: `updateSettings`
+was a bare read-then-put, so any two concurrent calls could lose one patch — 11 of
+12, measured — and a real user's toggle reverted the same way. Fixed by putting the
+read and write in one transaction; pinned deterministically by
+`settings-concurrent-update`. When a race-shaped failure involves a write the
+*app* makes, check whether the app's own read-modify-write is atomic before
+blaming the test.
 
 The pattern to copy, in order of preference:
 

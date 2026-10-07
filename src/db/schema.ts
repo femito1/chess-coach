@@ -1023,6 +1023,17 @@ export function normalizeTimeClassSelection(raw: unknown): TimeClassSelection {
 }
 
 export async function updateSettings(patch: Partial<Omit<Settings, 'key'>>): Promise<void> {
-  const current = await getSettings();
-  await db.settings.put({ ...current, ...patch });
+  // The read and the write MUST share one rw transaction. `settings` is a single
+  // row patched by many independent writers — every boot pass stamps its own
+  // version marker, the Settings page saves toggles, new-games checks record
+  // timestamps — and a bare read-then-put let two calls in flight both read the
+  // same row, so the second put wrote the first one's field back to its old
+  // value. Measured: of 12 concurrent patches, 11 were lost. In the app that
+  // reverts a toggle the user flips while a boot pass runs, silently.
+  // Dexie serializes rw transactions on a table, which is the whole fix.
+  // Pinned by `settings-concurrent-update.mjs`.
+  await db.transaction('rw', db.settings, async () => {
+    const current = await getSettings();
+    await db.settings.put({ ...current, ...patch });
+  });
 }
