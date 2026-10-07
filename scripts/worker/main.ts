@@ -1,17 +1,21 @@
 /**
  * Off-laptop analysis worker.
  *
- * Reads games from Supabase, analyzes them with native Stockfish, writes the
- * analyses back. Your laptop then picks them up through the normal cloud sync —
- * the worker is just another device that only ever produces analyses.
+ * Imports any new Chess.com games, analyzes them with native Stockfish, writes
+ * the analyses back. Your laptop then picks both up through the normal cloud
+ * sync — the worker is just another device, one that imports and analyzes.
  *
- *     laptop  ──sync──▶  cloud_games
- *                            │
- *     worker  ──────────────▶│   native Stockfish, N processes
- *                            ▼
- *                        cloud_analyses
- *                            │
- *     laptop  ◀──sync────────┘
+ *     chess.com ──import──▶ cloud_games ◀──sync── laptop
+ *                               │
+ *     worker  ─────────────────▶│   native Stockfish, N processes
+ *                               ▼
+ *                           cloud_analyses
+ *                               │
+ *     laptop  ◀──sync───────────┘
+ *
+ * Import is what makes the loop unattended. Without it the worker only ever saw
+ * games the laptop had already imported — by which point the laptop had usually
+ * analyzed them too, so the nightly run found nothing to do.
  *
  * It reuses `analyzeGamePgn` verbatim, so classifications, motifs, phases,
  * accuracies and book detection are computed by exactly the same code as in the
@@ -45,6 +49,10 @@ import {
 } from '@/engine/analyzer';
 import type { Analysis, Game } from '@/db/schema';
 import { selectCandidates } from '@/features/sync/selectCandidates';
+import { selectImportArchives } from '@/features/sync/selectImportArchives';
+import { toCloudGame } from '@/features/sync/diff';
+import { fetchArchives, fetchMonth } from '@/api/chesscom';
+import { chessComGameToGame } from '@/import/importer';
 import { WorkerPool, evaluatorId, type Evaluator } from './engine';
 import { cpus } from 'node:os';
 
@@ -61,6 +69,10 @@ interface Config {
   /** Stop after N games. For a smoke test before committing hours of compute. */
   limit: number | null;
   dryRun: boolean;
+  /** Import new Chess.com games before analyzing. On unless `IMPORT=0`. */
+  importGames: boolean;
+  /** Chess.com account to import from. Defaults to the one on the newest game. */
+  chesscomUsername: string | null;
 }
 
 function readConfig(): Config {
@@ -100,6 +112,8 @@ function readConfig(): Config {
     force: process.env.FORCE === '1',
     limit: process.env.LIMIT ? num('LIMIT', 0) : null,
     dryRun: process.env.DRY_RUN === '1',
+    importGames: process.env.IMPORT !== '0',
+    chesscomUsername: process.env.CHESSCOM_USERNAME?.trim() || null,
   };
 }
 
@@ -126,6 +140,81 @@ async function fetchAll<T>(
   }
 }
 
+/**
+ * Pull new Chess.com games into `cloud_games` and return the ids it added.
+ *
+ * Mirrors the browser's import exactly: the same `chessComGameToGame` mapping,
+ * so the id (a hash of the game URL), `userColor` and opening fields match what
+ * the laptop would have produced, and the same insert-if-absent rule as
+ * `upsertGames` — a row that already exists is never touched, because it may
+ * be `done` and carry an accuracy this import knows nothing about. The laptop
+ * then pulls these as it pulls any cloud-only game, and its new-games banner
+ * reconciles by exact id, so it will not offer them a second time.
+ *
+ * Never fatal. Chess.com being down for a night must not cost the analysis of
+ * games that are already here.
+ */
+async function importNewGames(
+  db: SupabaseClient,
+  cfg: Config,
+  known: ReadonlySet<string>,
+): Promise<string[]> {
+  try {
+    const { data, error } = await db
+      .from('cloud_games')
+      .select('end_time, username:data->>username')
+      .eq('user_id', cfg.userId)
+      .order('end_time', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(`newest game: ${error.message}`);
+    const newest = data as { end_time: number; username: string | null } | null;
+    const username = cfg.chesscomUsername ?? newest?.username ?? null;
+    if (!username) {
+      console.log('Import: no Chess.com username on file — skipping.');
+      return [];
+    }
+
+    const archives = selectImportArchives(
+      await fetchArchives(username),
+      newest?.end_time ?? null,
+    );
+    if (archives.length === 0) {
+      console.log(`Import: ${username} — no archives to read.`);
+      return [];
+    }
+
+    const added: string[] = [];
+    for (const url of archives) {
+      const fresh = (await fetchMonth(url))
+        .map((g) => chessComGameToGame(g, username))
+        .filter((g) => !known.has(g.id) && !added.includes(g.id));
+      if (fresh.length === 0) continue;
+      if (!cfg.dryRun) {
+        // `ignoreDuplicates` is ON CONFLICT DO NOTHING: the laptop may have
+        // pushed the same game since `known` was read, and its row wins.
+        const { error: insErr } = await db
+          .from('cloud_games')
+          .upsert(
+            fresh.map((g) => toCloudGame(cfg.userId, g)),
+            { onConflict: 'user_id,game_id', ignoreDuplicates: true },
+          );
+        if (insErr) throw new Error(`insert games: ${insErr.message}`);
+      }
+      added.push(...fresh.map((g) => g.id));
+    }
+    const months = archives.map((u) => u.split('/games/')[1]).join(', ');
+    console.log(
+      `Import: ${username} — read ${months}; ` +
+        `${added.length} new${cfg.dryRun ? ' (dry run, not written)' : ''}.`,
+    );
+    return added;
+  } catch (err) {
+    console.error(`Import failed, analyzing what is already here: ${(err as Error).message}`);
+    return [];
+  }
+}
+
 function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
@@ -146,6 +235,7 @@ async function main(): Promise<void> {
   console.log(`  evaluator   ${evaluatorId(cfg.evaluator)}`);
   console.log(`  concurrency ${cfg.concurrency}`);
   console.log(`  stockfish   ${cfg.stockfishPath}`);
+  console.log(`  import      ${cfg.importGames ? 'on' : 'off (IMPORT=0)'}`);
   if (cfg.dryRun) console.log('  DRY RUN — nothing will be written');
 
   // ---- what needs doing -------------------------------------------------
@@ -166,6 +256,16 @@ async function main(): Promise<void> {
         'worker has something to analyze.',
     );
     return;
+  }
+
+  if (cfg.importGames) {
+    console.log('');
+    const imported = await importNewGames(
+      db,
+      cfg,
+      new Set(games.map((g) => g.game_id)),
+    );
+    for (const id of imported) games.push({ game_id: id });
   }
 
   const existing = new Map(

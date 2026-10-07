@@ -1,18 +1,29 @@
 # Off-laptop analysis worker
 
-Analyzes your games on a server instead of your laptop, and delivers the results
-through the cloud sync you already have. The worker is just another device that
-only ever produces analyses.
+Imports your new Chess.com games and analyzes them on a server instead of your
+laptop, delivering both through the cloud sync you already have. The worker is
+just another device — one that imports and analyzes, and never needs you there.
 
 ```
-    laptop  ──sync──▶  cloud_games          your PGNs
-                           │
-    server  ──────────────▶│  native Stockfish 16, N processes
-                           ▼
-                       cloud_analyses
-                           │
-    laptop  ◀──sync────────┘               results come back
+    chess.com ──import──▶ cloud_games ◀──sync── laptop
+                              │
+    server  ─────────────────▶│  native Stockfish 16, N processes
+                              ▼
+                          cloud_analyses
+                              │
+    laptop  ◀──sync───────────┘               results come back
 ```
+
+**Import is what makes it unattended.** Before it existed the worker only saw
+games the laptop had already imported, and by then the laptop had usually
+analyzed them too — so the nightly run found nothing to do, every night, and
+"succeeded". It reads from one month before the newest game already in the cloud
+through the newest archive (`selectImportArchives`), so a missed night heals
+itself, and inserts only rows that are absent, so it never overwrites a game the
+laptop pushed. It never makes a *first* import: with no games in the cloud there
+is no anchor, and how much history to pull is the onboarding wizard's question.
+`IMPORT=0` turns it off; `CHESSCOM_USERNAME` overrides the account, which
+otherwise comes from the newest game.
 
 It reuses `analyzeGamePgn` from `src/` verbatim, so classifications, motifs,
 phases, accuracies and book detection are computed by exactly the same code the
@@ -206,15 +217,15 @@ npm run worker:deploy
 One command stands the whole thing up. Then the loop needs no human in it:
 
 ```
-   app (any device)  ──▶  cloud_games          uploads new PGNs on sign-in and
-          ▲                    │                whenever the analysis queue goes
-          │                    ▼                idle — already automatic, no button
-          │             Cloud Scheduler
-          │                    │  nightly
-          │                    ▼
-          │             Cloud Run job  ──▶  cloud_analyses
-          └────────────────────────────────────┘
-                     results arrive on the next app open
+          Cloud Scheduler  (nightly)
+                 │
+                 ▼
+          Cloud Run job ──import──▶ cloud_games ◀── chess.com
+                 │
+                 └──analyze──▶ cloud_analyses
+                                    │
+   app (any device) ◀──sync─────────┘   games *and* reviews arrive on the
+                                        next app open — no import click
 ```
 
 ### Why Cloud Run jobs
@@ -311,15 +322,14 @@ the deployed job, so these smoke tests leave the nightly config alone.
 
 Logs: `gcloud beta run jobs logs tail chess-coach-analysis --region=europe-west1`.
 
-### Then turn off analysis on your laptop
+### Optionally, let the server do all of it
 
-This is the switch that actually stops your laptop working:
-**Settings → "Analyze new games automatically" → off.**
-
-Without it the laptop still analyzes every new game itself, racing the server for
-the same work. Nothing breaks — cloud sync prefers the server's NNUE analysis over
-a local classical one even at lower depth — but the fans stay on, which was the
-thing you were trying to avoid.
+**Settings → "Analyze new games automatically" → off** stops the laptop's
+background sweep (it gates only that — a game you open with no analysis is still
+analyzed on demand). Leave it **on** if you want reviews the moment you import:
+the laptop and the server then race for the same games, which is harmless — sync
+prefers the server's NNUE analysis even at lower depth — and costs only laptop
+CPU. Turn it off if you would rather wait for the nightly run than hear the fans.
 
 ### Cost, and a guard
 

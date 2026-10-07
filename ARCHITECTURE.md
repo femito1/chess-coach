@@ -1101,12 +1101,21 @@ NNUE analysis.
 
 ## Off-laptop analysis worker
 
-`scripts/worker/` analyzes `cloud_games` with native Stockfish 16, writes
-`cloud_analyses` and stamps a summary back onto `cloud_games`; the laptop collects
-the results through cloud sync. It runs as a **scheduled Cloud Run job**
-(`npm run worker:deploy`). **Full docs: `scripts/worker/README.md`** — read the
-six load-bearing deployment decisions there before changing any of its flags.
-Three things that must not be missed:
+`scripts/worker/` imports new Chess.com games into `cloud_games`, analyzes them
+with native Stockfish 16, writes `cloud_analyses` and stamps a summary back onto
+`cloud_games`; the laptop collects both through cloud sync. It runs as a
+**scheduled Cloud Run job** (`npm run worker:deploy`). **Full docs:
+`scripts/worker/README.md`** — read the six load-bearing deployment decisions
+there before changing any of its flags. Four things that must not be missed:
+
+- **Import inserts only rows that are absent — never upserts over them.** A row
+  the laptop pushed may be `done` and carry an accuracy the import knows nothing
+  about; overwriting it with a fresh `pending` mapping would make the laptop
+  re-analyze it. It reuses `chessComGameToGame`, so the id is the same URL hash
+  the browser computes, and the laptop pulls the row as it pulls any cloud-only
+  game. Without import the worker was blind to new games until the laptop had
+  imported — and by then usually analyzed — them, so the nightly run reported
+  "Nothing to do" for weeks while every review still happened on the laptop.
 
 - **Run the verify job before any bulk run.** It proves the native binary
   reproduces the browser's evals with NNUE off, that NNUE genuinely changes them

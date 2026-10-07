@@ -14,22 +14,22 @@
  *
  * ── The whole automatic loop ─────────────────────────────────────────────
  *
- *   app (any device)  ──▶ cloud_games        uploads new PGNs
- *          ▲                   │                on sign-in and whenever the
- *          │                   ▼                analysis queue goes idle
- *          │            Cloud Scheduler          (useCloudSync — already
- *          │                   │                  automatic, no button)
- *          │                   ▼
- *          │            Cloud Run job  ──▶ cloud_analyses
- *          └───────────────────────────────────┘
- *                    results arrive on the next app open
+ *          Cloud Scheduler  (nightly)
+ *                 │
+ *                 ▼
+ *          Cloud Run job ──import──▶ cloud_games ◀── chess.com
+ *                 │
+ *                 └──analyze──▶ cloud_analyses
+ *                                    │
+ *   app (any device) ◀──sync─────────┘   games and reviews arrive on the
+ *                                        next app open — no import click
  *
- * So the only human action is opening the app, which you would do anyway to look
- * at your games. **To actually stop your laptop analyzing, turn off
- * Settings → "Analyze new games automatically"** — otherwise the laptop races the
- * server for the same games. Nothing breaks if you don't (sync prefers the
- * server's NNUE analysis over a local classical one), but the laptop keeps
- * burning CPU, which is the thing you were trying to avoid.
+ * The job imports new Chess.com games itself (see `importNewGames` in
+ * `main.ts`), so nothing depends on the app having been opened first. Laptop
+ * analysis can stay on: it races the server for the same games, harmlessly,
+ * since sync prefers the server's NNUE result. Settings → "Analyze new games
+ * automatically" gates the laptop's background sweep if you would rather it
+ * didn't.
  *
  * ── What this script does, idempotently ──────────────────────────────────
  *
@@ -607,10 +607,9 @@ console.log(
     'Logs:\n' +
     `  gcloud beta run jobs logs tail ${cfg.job} --region=${cfg.region} --project=${project}\n` +
     '\n' +
-    'Then, to actually stop analyzing on your laptop, turn OFF\n' +
-    'Settings → "Analyze new games automatically". Otherwise the laptop races the\n' +
-    'server for the same games — harmless, since sync prefers the server\'s NNUE\n' +
-    'result, but it keeps your fan on.\n' +
+    'Laptop analysis can stay on — it races the server harmlessly, since sync\n' +
+    'prefers the server\'s NNUE result. Settings → "Analyze new games\n' +
+    'automatically" gates the laptop\'s background sweep if you want it quiet.\n' +
     '\n' +
     'Worth doing once: set a budget alert at console.cloud.google.com/billing so a\n' +
     'surprise is an email rather than an invoice.\n',
