@@ -16,9 +16,9 @@ just another device — one that imports and analyzes, and never needs you there
 
 **Import is what makes it unattended.** Before it existed the worker only saw
 games the laptop had already imported, and by then the laptop had usually
-analyzed them too — so the nightly run found nothing to do, every night, and
+analyzed them too — so the scheduled run found nothing to do, every time, and
 "succeeded". It reads from one month before the newest game already in the cloud
-through the newest archive (`selectImportArchives`), so a missed night heals
+through the newest archive (`selectImportArchives`), so a missed run heals
 itself, and inserts only rows that are absent, so it never overwrites a game the
 laptop pushed. It never makes a *first* import: with no games in the cloud there
 is no anchor, and how much history to pull is the onboarding wizard's question.
@@ -43,8 +43,8 @@ the main README) — so the worker is not about engine strength. It is about two
 things the browser cannot do:
 
 - **Run with nobody there.** The browser analyzes only while the app is open, and
-  imports only when you click the new-games banner. The nightly job does both, so
-  games you played yesterday are imported and reviewed before you look.
+  imports only when you click the new-games banner. The hourly job does both, so
+  a game you played is imported and reviewed within the hour, before you look.
 - **Serve devices that cannot run the pool.** A phone runs one classical worker;
   the server runs seven NNUE engines at depth 18.
 
@@ -215,7 +215,7 @@ npm run worker:deploy
 One command stands the whole thing up. Then the loop needs no human in it:
 
 ```
-          Cloud Scheduler  (nightly)
+          Cloud Scheduler  (hourly, :17)
                  │
                  ▼
           Cloud Run job ──import──▶ cloud_games ◀── chess.com
@@ -229,11 +229,12 @@ One command stands the whole thing up. Then the loop needs no human in it:
 ### Why Cloud Run jobs
 
 The workload is a burst: CPU-bound, no inbound ports, resumable, idle most of the
-time. Cloud Run jobs scale to zero and bill by the second, and the free tier
-(~200 000 vCPU-seconds/month) covers a full-library NNUE re-analysis with room
-over — this work costs roughly **32 vCPU-seconds per game**, so ~1 800 games is
-~58 000. There is also no VM to remember to destroy, which is the usual way the
-"just rent a box for an hour" approach turns into a monthly bill.
+time. Cloud Run jobs scale to zero and bill **allocated** CPU and memory by the
+second — including the ~15–50 s of container start every run pays even when there
+is nothing to do. Analysis itself costs roughly **35 vCPU-seconds per game**. The
+free tier is ~180 000 vCPU-s and ~360 000 GiB-s a month. There is also no VM to
+remember to destroy, which is the usual way the "just rent a box for an hour"
+approach turns into a monthly bill.
 
 ### What the script creates
 
@@ -256,12 +257,21 @@ Reads `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `USER_ID` from the same
 
 ```bash
 npm run worker:deploy -- --region=us-central1
-npm run worker:deploy -- --schedule="17 4 * * *"   # cron, off the hour on purpose
-npm run worker:deploy -- --cpu=4 --memory=8Gi
+npm run worker:deploy -- --schedule="17 4 * * *"   # e.g. back to nightly
+npm run worker:deploy -- --cpu=8 --memory=16Gi     # e.g. for a big re-analysis
 npm run worker:deploy -- --no-schedule             # job only, no trigger
 ```
 
-### Six decisions worth understanding before you change them
+### Seven decisions worth understanding before you change them
+
+**Hourly, at 2 vCPU / 4 GiB.** Sized for the steady state, a handful of games an
+hour, not for a backlog. The size matters more than it looks because an idle run
+is billed for its whole allocation: at 8 vCPU / 16 GiB, 720 mostly idle runs a
+month came to ~230 000 vCPU-s and ~460 000 GiB-s, over the free tier. At 2 / 4 it
+is about a third of it. A big re-analysis still completes, an hour at a time —
+redeploy with `--cpu=8 --memory=16Gi` first only if it must finish faster, and
+then size back down. The trigger is still named `chess-coach-analysis-nightly`
+from when it ran nightly; renaming it means deleting and recreating it.
 
 **`--tasks=1`, always.** The worker has no lease or claiming — it selects every
 candidate game itself — so *N* parallel tasks would each analyze the same games
@@ -273,14 +283,14 @@ the task, via `CONCURRENCY` engine processes.
 core count rather than the cgroup limit. Left to guess, an 8-vCPU job could spawn
 dozens of Stockfish processes and thrash. The script sets it to `cpu - 1`.
 
-**`--task-timeout=2h`, deliberately short.** The worker is resumable by
-construction — every analysis is written the moment it finishes — so a task that
-times out loses nothing and the next execution continues. That makes a short
-timeout *safer* than a long one: a hung engine on 8 vCPU burns 28 800
-vCPU-seconds an hour against a ~200 000/month free tier, so a 24-hour timeout (the
-Cloud Run maximum) would let one stuck run blow the budget where two hours cannot.
-Two hours is also roughly what a ~1 800-game backlog needs, so the normal case
-finishes in one go anyway.
+**`--task-timeout=55m`, `--max-retries=0`: shorter than the schedule.** Cloud Run
+does not serialize executions of a job, and with no lease two overlapping runs
+would analyze the same games twice. A timeout under the hour makes overlap
+impossible, and no retries keeps a retry from running into the next execution.
+The worker is resumable — every analysis is written the moment it finishes — so a
+run cut off loses at most its in-flight game. **A backlog therefore shows as a
+string of timed-out executions, each making progress: that is the design working,
+not a fault.** It also bounds a hung engine to 55 minutes.
 
 **The schedule is created paused.** An unpaused trigger would run an unverified
 backlog overnight, and the whole point of `worker:verify` is that a wrong binary
@@ -316,13 +326,13 @@ gcloud scheduler jobs resume chess-coach-analysis-nightly --location=europe-west
 ```
 
 `--update-env-vars` on `execute` is an **execution override** — it does not mutate
-the deployed job, so these smoke tests leave the nightly config alone.
+the deployed job, so these smoke tests leave the scheduled config alone.
 
 Logs: `gcloud beta run jobs logs tail chess-coach-analysis --region=europe-west1`.
 
 ### Redeploying
 
-Re-running `worker:deploy` is how a code change reaches the server — the nightly
+Re-running `worker:deploy` is how a code change reaches the server — the scheduled
 job runs whatever image was last pushed, so a fix in `src/` that the worker
 reuses (`analyzeGamePgn`, the importer) does **not** reach it until you redeploy.
 Three of the script's defaults are wrong for a machine that is not set up
@@ -354,12 +364,16 @@ background sweep (it gates only that — a game you open with no analysis is sti
 analyzed on demand). Leave it **on** if you want reviews the moment you import:
 the laptop and the server then race for the same games, which is harmless — sync
 prefers the server's NNUE analysis even at lower depth — and costs only laptop
-CPU. Turn it off if you would rather wait for the nightly run than hear the fans.
+CPU. Turn it off if you would rather wait up to an hour for the server than hear
+the fans.
 
 ### Cost, and a guard
 
-A nightly run that finds nothing costs a few vCPU-seconds. The one-time backlog is
-~58 000 of a ~200 000 monthly allowance. So this should be $0 indefinitely.
+Hourly at 2 vCPU / 4 GiB is roughly a third of the free tier in a normal month,
+almost all of it container start-up. A full-library re-analysis (~2 000 games ×
+~35 vCPU-s) adds ~70 000 vCPU-s, so one in a month still fits. Measure real cost
+from execution durations (`gcloud run jobs executions list`), not from this
+paragraph.
 
 Set a budget alert anyway (`console.cloud.google.com/billing`) so a surprise is an
 email rather than an invoice. Note that Cloud Run needs a billing account attached

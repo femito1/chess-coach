@@ -73,8 +73,14 @@ const DEFAULTS = {
   repo: 'chess-coach',
   secret: 'chess-coach-supabase-service-role',
   serviceAccount: 'chess-coach-worker',
-  /** Off the hour on purpose: :00 is where every cron in the world piles up. */
-  schedule: '17 4 * * *',
+  /**
+   * Hourly, off the hour on purpose: :00 is where every cron in the world piles
+   * up. Hourly rather than nightly so a game played in the afternoon is reviewed
+   * the same afternoon. Affordable only because `cpu`/`memory` below are sized
+   * for one hour's games, not a backlog: billing is allocated resources × run
+   * time, and a run with nothing to do still lasts ~15–50 s of container start.
+   */
+  schedule: '17 * * * *',
   /**
    * Cloud Scheduler defaults to UTC, which quietly makes "run at 04:17" mean
    * something else wherever you live — 06:17 in Rome in summer, and a different
@@ -90,26 +96,33 @@ const DEFAULTS = {
         return 'Etc/UTC';
       }
     })(),
-  cpu: '8',
-  memory: '16Gi',
+  /**
+   * Sized for the steady state — a handful of games per hour, ~35 s each on one
+   * engine — not for a backlog. At 8 vCPU / 16 GiB, 720 mostly idle runs a month
+   * came to ~230 000 vCPU-s and ~460 000 GiB-s, over the free tier (~180 000 /
+   * ~360 000). At 2 / 4 it is roughly a third of it. A big re-analysis still
+   * completes, across consecutive hourly runs (see `taskTimeout`); redeploy with
+   * `--cpu=8 --memory=16Gi` first only if it must finish faster.
+   */
+  cpu: '2',
+  memory: '4Gi',
   depth: '18',
   evaluator: 'nnue',
   /**
-   * Bounded deliberately, and shorter than you might expect.
+   * Shorter than the schedule's period, so two executions can never overlap.
    *
-   * The worker is resumable by construction — every analysis is written as it
-   * finishes — so a task that times out loses nothing; the next execution
-   * continues. That makes a SHORT timeout strictly safer than a long one: a hung
-   * engine on 8 vCPU burns 28 800 vCPU-seconds per hour, and the whole monthly
-   * free tier is ~200 000. A 24-hour timeout (the Cloud Run maximum) would let
-   * one stuck run blow the budget; two hours cannot.
-   *
-   * Two hours is also about what a ~1 800-game backlog needs, so the normal case
-   * finishes in one execution anyway.
+   * Cloud Run does not serialize executions of a job, and the worker has no lease:
+   * two overlapping runs would each select the same unanalyzed games and do the
+   * work twice. The worker is resumable by construction — every analysis is
+   * written as it finishes — so a run cut off at 55 minutes loses at most its
+   * in-flight game, and the next hourly run continues. A long backlog therefore
+   * shows up as consecutive timed-out executions making steady progress; that is
+   * the design working, not a fault. It also bounds a hung engine to 55 minutes.
    */
-  taskTimeout: '2h',
-  /** Retries are safe for the same reason: a retry resumes rather than repeats. */
-  maxRetries: '1',
+  taskTimeout: '55m',
+  /** No retries, for the same reason: a retry right after a timeout would run
+   *  into the next scheduled execution. A transient failure waits an hour. */
+  maxRetries: '0',
 };
 
 /* ---------------------------------------------------------------- utils --- */
