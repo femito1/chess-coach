@@ -35,9 +35,11 @@ Two things run outside the page:
 - **Chrome extension** (`extension/`) — detects the end of a Chess.com game and
   offers a one-click deep link into your review. Build with
   `npm run extension:build -- --coach-origin=<url>`; see DEPLOY.md §9.
-- **Off-laptop analysis worker** (`scripts/worker/`) — native Stockfish on a box
-  you provision, feeding results back through cloud sync. It is **code, not a
-  running service**. See `scripts/worker/README.md`.
+- **Off-laptop worker** (`scripts/worker/`) — a nightly Cloud Run job that
+  imports new Chess.com games and analyzes them with native Stockfish at depth 18,
+  delivering both through cloud sync, so yesterday's games are reviewed before
+  you open the app. It runs the last image pushed: **redeploy after changing any
+  `src/` code it reuses**. See `scripts/worker/README.md`.
 
 ## Stack
 

@@ -273,27 +273,20 @@ red test for a test that no longer checks the thing it was written for.
 
 ## Known-failing
 
-Treat any red as yours, with these exceptions:
+Treat any red as yours, with these exceptions — each of which reads exactly like
+a code regression:
 
 - **Anything that loads `lib/env.ts` without the three `VITE_*` auth vars.**
-  `env.ts` throws at module load when they are missing, so every importer dies
-  before its own code runs. There is no committed `.env.local`; CI supplies the
-  values from repo secrets.
+  `env.ts` throws at module load when they are missing. In the unit tier that is
+  `useProfileSync.test.ts` collecting 0 tests; in the browser tiers `AppLayout`
+  reaches it too, so about half the integration tests fail as ordinary assertion
+  failures ("AppLayout header rendered: expected true, got false") with the real
+  cause only in the page-error log (`[env] Missing required auth env vars`).
+  There is no committed `.env.local`; CI supplies the values from repo secrets.
 
-  This was recorded here as **one** expected failure —
-  `src/features/auth/useProfileSync.test.ts`, which collects 0 tests. That
-  undercounted it badly. `AppLayout` reaches `env.ts` too, so on a machine with
-  no `.env.local` **16 of 34 integration tests** also fail, including
-  `auth-bypass`, `cloud-sync` and both `drill-*`. They fail as ordinary
-  assertion failures ("AppLayout header rendered: expected true, got false")
-  with the real cause only in the page-error log, which is exactly how it reads
-  as a code regression.
-
-  **The values do not have to be real.** The vars are only required to *exist*;
-  the browser tiers stub the network and take the auth bypass, so placeholders
-  turn the whole suite green — measured 2026-09-02 at unit 711/711 (53 files,
-  `useProfileSync` included), integration 34/34, e2e 11/11. Put this in
-  `.env.local` (gitignored) when you want the full local gate:
+  **The values do not have to be real** — the browser tiers stub the network and
+  take the auth bypass — so placeholders turn the whole suite green. Put this in
+  `.env.local` (gitignored) for the full local gate, then restart `npm run dev`:
 
   ```
   VITE_CLERK_PUBLISHABLE_KEY=pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk
@@ -302,26 +295,24 @@ Treat any red as yours, with these exceptions:
   VITE_E2E_AUTH_BYPASS=true
   ```
 
-  Restart `npm run dev` after adding it — Vite reads env at startup. Two
-  consequences of keeping it: **`VITE_E2E_AUTH_BYPASS=true` makes your local dev
-  app skip auth**, and a real sign-in will fail against the placeholder Clerk
-  key. Delete the file to get honest auth back. Before concluding a change broke
-  a browser test on a machine without it, check the page-error log for
-  `[env] Missing required auth env vars`, or baseline the tier on a clean tree.
-- **`integration/puzzle-library`** is intermittent and predates any current
-  work. It fails as `matched-to summary shown: expected true, got false`, with
-  the log line above it reading `recommended chips: []` where a pass reads
-  `["Walked into a fork…", …]` — so the flake is in the weakness-motif
-  recommendation seeding, not in the puzzle rendering the test spends most of
-  its assertions on. Re-run it in isolation before investigating; it usually
-  passes there. Not root-caused.
+  While it exists your local dev app skips auth and a real sign-in fails against
+  the placeholder key; delete it to get honest auth back.
+- **A stale Vite dependency cache.** Browser tests that fail *every* run locally,
+  identically with the change under test reverted, while CI passes the same
+  code: restart the dev server with `npx vite --force` (re-optimizes
+  `node_modules/.vite`) before investigating anything. Seen as
+  `TransactionInactiveError` in `queue-newest-first` and 0 account cards in
+  `e2e/onboarding-mobile`; both passed immediately on a forced restart.
+- **A missing Playwright browser** (`browserType.launch: Executable doesn't
+  exist`) after `~/.cache` is cleaned: `npx playwright install chromium`.
+- **`integration/puzzle-library`** is intermittent and not root-caused. It fails
+  as `matched-to summary shown: expected true, got false` with `recommended
+  chips: []` logged above it, so the flake is in the weakness-motif seeding, not
+  the puzzle rendering. Re-run it in isolation before investigating.
 - **`e2e/mobile-audit`** fails with `Page.captureScreenshot: Unable to capture
-  screenshot` / `ERR_INSUFFICIENT_RESOURCES` **when the disk is nearly full** —
-  it takes ~45 full-page screenshots of WASM-heavy pages and Chromium cannot
-  write them. This was long recorded here as a local Chromium resource limit,
-  reproducible even on a pristine worktree, which was true but not the cause: it
-  reproduced because the disk stayed full. With ~9 GB free the whole e2e tier
-  passes 11/11. So if this fails, check `df -h /` before anything else.
+  screenshot` / `ERR_INSUFFICIENT_RESOURCES` when the disk is low — it takes ~45
+  full-page screenshots of WASM-heavy pages. Reliable from ~12 GB free, flaky at
+  8–9 GB, broken near full. Check `df -h /`, then re-run it alone.
 
 ## Run on demand
 

@@ -594,10 +594,10 @@ merge, and a direct push still ships.
 keyed by origin; if you move users from `chess-coach-bip.pages.dev` to
 `yourchess.app` later, every imported game and cached analysis looks
 "missing" on the new origin. There is no in-app export/import to dig them
-out with. Cloud sync can restore games, analyses and puzzle progress onto
-the new origin, but only for an account enrolled in
+out with. Cloud sync can restore games, analyses, puzzle progress and
+repertoires onto the new origin, but only for an account enrolled in
 `cloud_sync_allowlist` — it is not a general migration path, and it does
-not carry repertoires, settings or the eval cache.
+not carry settings or the eval cache.
 
 So: **decide your production hostname before sharing the URL with anyone
 real.** If you'll use a custom domain eventually, do it now.

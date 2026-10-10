@@ -36,27 +36,21 @@ see it as analyzed after a sync.
 
 ---
 
-## Why this exists, and the thing it fixes
+## Why this exists
 
-The browser's bundled Stockfish ships with **`Use NNUE` off** and no network file
-(a 575 KB `.wasm` against a 40 MB net), so every analysis the app has ever
-produced came from Stockfish 16's **classical** evaluator. On tactics that is
-fine — search finds a forced mate regardless of who is evaluating. On quiet
-positions it is not:
+The browser analyzes too — NNUE on desktop, classical by default on phones (see
+the main README) — so the worker is not about engine strength. It is about two
+things the browser cannot do:
 
-| position | classical | NNUE |
-|---|---|---|
-| rook endgame | **+0.53** ("equal") | **+3.77** ("winning") |
-| queenless middlegame | −1.13 | −2.96 |
-
-For a tool that tells you whether you converted an endgame well, that gap is the
-difference between useful and misleading. A server has no 40 MB download to
-worry about, so it runs the real thing — which is why the default here is
-`EVALUATOR=nnue`.
+- **Run with nobody there.** The browser analyzes only while the app is open, and
+  imports only when you click the new-games banner. The nightly job does both, so
+  games you played yesterday are imported and reviewed before you look.
+- **Serve devices that cannot run the pool.** A phone runs one classical worker;
+  the server runs seven NNUE engines at depth 18.
 
 Analyses record which evaluator produced them (`Analysis.engine`), and cloud sync
 prefers NNUE over classical for the same game **even at lower depth**, so a
-laptop re-analysis can never silently overwrite the server's better work.
+phone's classical analysis can never overwrite the server's NNUE one.
 
 ---
 
@@ -81,11 +75,13 @@ laptop re-analysis can never silently overwrite the server's better work.
 > required and every query filters on it explicitly, so a typo cannot touch
 > another account's rows.
 
-### 2. Get your games into the cloud
+### 2. Get your games into the cloud — once
 
-The worker reads from `cloud_games`, so sync once from the app first:
-**Settings → Cloud sync → Sync now**. That uploads your PGNs (a couple of MB).
-If you skip this the worker will tell you it found no games.
+The worker imports *new* games itself, anchored on the newest game already in
+the cloud, but never makes a first import: how much history to pull is the
+onboarding wizard's question. So on a fresh account, import in the app and sync
+once (**Settings → Cloud sync → Sync now**). With no games in the cloud the
+worker says so and exits.
 
 ### 3. Configure
 
@@ -165,7 +161,9 @@ the rest of your library.
 | `STOCKFISH_PATH` | `stockfish` | path to the binary |
 | `LIMIT` | — | stop after N games — use for a smoke test |
 | `FORCE` | — | `1` re-analyzes even adequate games |
-| `DRY_RUN` | — | `1` reports what it would do, runs no engine |
+| `DRY_RUN` | — | `1` reports what it would import and analyze; writes nothing, runs no engine |
+| `IMPORT` | on | `0` skips the Chess.com import step |
+| `CHESSCOM_USERNAME` | newest game's | account to import from |
 
 Start with `DRY_RUN=1` to see the plan, then `LIMIT=5` to confirm results land,
 then the full run.
@@ -175,9 +173,9 @@ then the full run.
 ## What it picks up
 
 An existing analysis is good enough only if its evaluator is at least as strong
-**and** its depth at least as deep. So switching from classical to NNUE makes
-every previously-analyzed game a candidate — that is the intent, not a bug: it is
-how the library becomes uniformly NNUE. `DRY_RUN=1` shows the breakdown
+**and** its depth at least as deep. So raising `DEPTH`, or a library holding
+classical analyses (from phones) when the worker runs NNUE, makes those games
+candidates — a re-analysis, by design. `DRY_RUN=1` shows the breakdown
 (`missing`, `weaker-evaluator`, `shallower`, and `forced` under `FORCE=1`).
 
 The worker never downgrades: running with `EVALUATOR=classical` leaves existing
@@ -322,6 +320,33 @@ the deployed job, so these smoke tests leave the nightly config alone.
 
 Logs: `gcloud beta run jobs logs tail chess-coach-analysis --region=europe-west1`.
 
+### Redeploying
+
+Re-running `worker:deploy` is how a code change reaches the server — the nightly
+job runs whatever image was last pushed, so a fix in `src/` that the worker
+reuses (`analyzeGamePgn`, the importer) does **not** reach it until you redeploy.
+Three of the script's defaults are wrong for a machine that is not set up
+exactly like the original, and each fails quietly:
+
+| default | how it goes wrong | pass |
+|---|---|---|
+| project = `gcloud config get-value project` | a stale default deploys a second, parallel stack into another project | `--project=<id>` |
+| `USER_ID` from `worker.env`, else the allowlist | an empty value in a dry run shows `USER_ID=` | `USER_ID=<id>` in the env |
+| timezone detected from the host | the schedule silently shifts | `--time-zone=<tz>` |
+
+`--no-schedule` leaves the live trigger untouched (an existing trigger is updated
+in place either way, but a dry run cannot show that branch). So:
+
+```bash
+USER_ID=user_… npm run worker:deploy -- \
+  --project=<id> --time-zone=<tz> --no-schedule --dry-run   # compare against:
+gcloud run jobs describe chess-coach-analysis --region=europe-west1 --project=<id>
+# then the same command without --dry-run, then the verify → dry run → LIMIT=20 order above
+```
+
+`npm run typecheck` covers `src/` only, not `scripts/worker/` — esbuild bundles
+without type-checking, so a type error in the worker surfaces at runtime.
+
 ### Optionally, let the server do all of it
 
 **Settings → "Analyze new games automatically" → off** stops the laptop's
@@ -342,6 +367,6 @@ even to use the free tier.
 
 ## After it finishes
 
-Sync from the app (**Settings → Cloud sync → Sync now**) to pull the analyses
-down. Because they are NNUE and your local ones are classical, sync will replace
-the local copies — which is the upgrade you asked for.
+Nothing to do: the app syncs on sign-in, so the next time you open it the new
+games and their analyses come down. **Settings → Cloud sync → Sync now** if the
+app is already open.

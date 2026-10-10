@@ -67,8 +67,8 @@ and paths stay right.
 | `screenshot-extension.mjs` | `extension:screenshots` | Regenerates the extension's store screenshots. |
 | `worker/build.mjs` | `worker:build` | esbuilds `scripts/worker/{main,verify}.ts` into `dist-worker/`. |
 | `worker/verify.ts` | `worker:verify` | Proves a native Stockfish binary matches the browser's evals and that NNUE is really loaded. **Run before any bulk worker run.** |
-| `worker/main.ts` | `worker:run` | The off-laptop analysis worker. See `scripts/worker/README.md`. |
-| `worker/deploy-cloudrun.mjs` | `worker:deploy` | Deploys the worker as a **scheduled** Cloud Run job — Artifact Registry, Secret Manager, two jobs, and a Cloud Scheduler trigger created *paused*. Idempotent; `--dry-run` prints every command. The design decisions (`--tasks=1`, pinned `CONCURRENCY`, short task timeout) are documented in `scripts/worker/README.md` § Automatic — read them before changing the flags. |
+| `worker/main.ts` | `worker:run` | The off-laptop worker: imports new Chess.com games, then analyzes. See `scripts/worker/README.md`. |
+| `worker/deploy-cloudrun.mjs` | `worker:deploy` | Deploys the worker as a **scheduled** Cloud Run job — Artifact Registry, Secret Manager, two jobs, and a Cloud Scheduler trigger created *paused*. Idempotent; `--dry-run` prints every command. The design decisions (`--tasks=1`, pinned `CONCURRENCY`, short task timeout) are documented in `scripts/worker/README.md` § Automatic — read them before changing the flags, and § Redeploying before re-running it: three of its defaults go wrong quietly. |
 | `check-errors.mjs` | — | Ad-hoc DB diagnostic. |
 
 Data-pipeline rationale and traps live in `ARCHITECTURE.md`; the worker has its

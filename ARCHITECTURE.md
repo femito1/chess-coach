@@ -43,6 +43,13 @@ Two schema rules:
   example of a deliberate wipe: its `upgrade()` clears the four repertoire
   tables and nothing else.
 
+**Write `settings` only through `updateSettings`.** It is one row patched by many
+independent writers — every boot pass stamps a version marker into it — and
+`updateSettings` does its read and write in one rw transaction. A hand-rolled
+`getSettings()` then `db.settings.put()` loses concurrent patches (11 of 12, in
+`settings-concurrent-update.mjs`), which shows up as a toggle the user flipped
+quietly reverting.
+
 **`games` carries denormalized fields derived from `analyses`.** Move
 classifications live in `analyses`, keyed by game id. The Games table and
 dashboard must not read that table per render — a 1 k-game library is ~2 MB of
@@ -218,16 +225,32 @@ that line has a pv, so both score fields arrive `null` and the caller reads
 `0 cp`: dead equal. That is why `analyzeGamePgn` settles terminal positions with
 chess.js (`terminalOutcome`) and never enqueues them.
 
-Getting this wrong is expensive and silent. The last move of a game that ended
-on the board is the mate, and reading its `fenAfter` as dead equal charged the
-*winner* a ~48-point winrate collapse for delivering it: one move accuracy of
-~10 inside a harmonic mean over ~11 scored plies. Measured on a real 15-move
-Danish Gambit win, White's game accuracy read **45.5** instead of **74.3**. The
-move list still labelled it `best` — `classifyMove` consults `isBest` and was
-never fooled — so the only visible symptom was a number that felt wrong, on
-about a third of a blitz library (260 of 798 games in the sample end in
-checkmate). `mateToCp(0)` returns the mated side's floor for the same reason:
-`mate 0` means "already mated", not "no mate".
+Getting this wrong is silent and expensive: the last move of a game won on the
+board is the mate, so reading its `fenAfter` as equal charges the *winner* a
+~48-point winrate drop — one move accuracy of ~10 inside a harmonic mean over a
+dozen scored plies, enough to take a 74 game to 45. The move list still says
+`best` (`classifyMove` consults `isBest`), so the only symptom is a number that
+feels wrong, on roughly a third of a blitz library. `mateToCp(0)` returns the
+mated side's floor for the same reason: `mate 0` means "already mated".
+
+**Ask `terminalOutcome` once per game, of the final position only.** An earlier
+position with no legal move would have ended the game, and the check costs a full
+legal-move generation — ~80× what classifying a quiet ply costs. Per ply, it made
+the boot recompute pass minutes slower on a large library. Keep it as the
+`isCheckmate()` / `isStalemate()` pair: `moves().length === 0` reads simpler and
+measured 3× slower, because public `moves()` builds a SAN string per move.
+
+**Game accuracy under-scores low-rated play by ~10 points — open.**
+`CURRENT_ACCURACY_MODEL.gapMultiplier = 1.5` amplifies distance from 100, and was
+fitted on elite archives (Carlsen, Nakamura) where that distance is small. Against
+Chess.com's own figures on ~700-rated games every score came out low (MAE 10.3,
+bias −10.3); `m ≈ 1.1` fitted those at MAE 3.3, though on only 8 colour-scores.
+A proper re-fit has ground truth to hand: Chess.com publishes `accuracies` on a
+minority of games (61 of ~800 in this user's recent archive), fetchable without
+auth from `api.chess.com/pub/player/<user>/games/YYYY/MM`. Decide whether book
+plies stay excluded (`includeBook: false`) and whether one multiplier is the right
+form before fitting. Any change needs a `RECOMPUTE_VERSION` bump to reach stored
+games.
 
 **`cancelAnalysis()` on the shared singleton kills whatever is running, whoever
 started it.** `useLiveEval` only calls it once its consumer refcount hits zero,
@@ -1072,17 +1095,16 @@ different thing. The store is pinned on `globalThis` so a duplicate module (HMR,
 dynamic import) cannot split the state.
 
 **Puzzle attempts upload on their own, ~10 s after each one and on tab hide**
-(`requestAttemptSync` → `syncPuzzleAttempts`). The three triggers above never
-fire because of a puzzle, so a session's progress sat on the device until the
-next app open; once the off-laptop worker started delivering games already
-analyzed, the queue-idle trigger nearly stopped firing too. Any loss of local data
-in that window — which this user's machine has suffered (§ Storage durability) —
-took the session with it, and the cloud ended up holding 27 attempts for a
-library of 2 000+ games. The attempt-only path reads and writes **only**
-`cloud_puzzle_attempts`: the game and analysis manifests are thousands of rows,
-fine once per app open, wasteful once per puzzle. It waits behind an in-flight
-full sync rather than racing it, since both diff the same rows. Pinned by step 8
-of `cloud-sync.mjs`.
+(`requestAttemptSync` → `syncPuzzleAttempts`). None of the three triggers above
+fires because of a puzzle, and the queue-idle one rarely fires at all now that
+the worker delivers games already analyzed — so without this, a session's
+progress waits on the device for the next app open, and any loss of local data in
+that window (§ Storage durability) takes it. **Anything new the user produces
+locally needs the same treatment**: a full-sync trigger will not cover it. The
+attempt-only path reads and writes **only** `cloud_puzzle_attempts` — the game and
+analysis manifests are thousands of rows, fine once per app open, wasteful once
+per puzzle — and waits behind an in-flight full sync rather than racing it, since
+both diff the same rows. Pinned by step 8 of `cloud-sync.mjs`.
 
 **Repertoires sync as whole snapshots, three-way.** One `cloud_repertoires` row
 per repertoire holds its record, node tree, SRS cards and line stats, so a node
@@ -1147,17 +1169,19 @@ with native Stockfish 16, writes `cloud_analyses` and stamps a summary back onto
 `cloud_games`; the laptop collects both through cloud sync. It runs as a
 **scheduled Cloud Run job** (`npm run worker:deploy`). **Full docs:
 `scripts/worker/README.md`** — read the six load-bearing deployment decisions
-there before changing any of its flags. Four things that must not be missed:
+there before changing any of its flags. Five things that must not be missed:
 
 - **Import inserts only rows that are absent — never upserts over them.** A row
   the laptop pushed may be `done` and carry an accuracy the import knows nothing
   about; overwriting it with a fresh `pending` mapping would make the laptop
   re-analyze it. It reuses `chessComGameToGame`, so the id is the same URL hash
   the browser computes, and the laptop pulls the row as it pulls any cloud-only
-  game. Without import the worker was blind to new games until the laptop had
-  imported — and by then usually analyzed — them, so the nightly run reported
-  "Nothing to do" for weeks while every review still happened on the laptop.
-
+  game. Import is what makes the job useful at all: without it the worker only
+  sees games the laptop already imported, and usually analyzed.
+- **A fix in shared `src/` code reaches the worker only on redeploy.** The job
+  runs the last pushed image. The deploy script's project, `USER_ID` and timezone
+  defaults are each wrong on a machine not set up like the original; the worker
+  README § Redeploying has the command.
 - **Run the verify job before any bulk run.** It proves the native binary
   reproduces the browser's evals with NNUE off, that NNUE genuinely changes them
   with it on (the check that catches a net failing to load), and that
@@ -1172,10 +1196,9 @@ there before changing any of its flags. Four things that must not be missed:
   answered locally — see § Engine.
 
 Auth is the Supabase **service_role** key, which bypasses RLS entirely — hence
-`USER_ID` is mandatory and every query filters on it. Because a classical
-analysis counts as inadequate when NNUE is requested, the first NNUE run
-re-analyzes the whole library rather than only unanalyzed games; `DRY_RUN=1`
-prints the split.
+`USER_ID` is mandatory and every query filters on it. A classical analysis counts
+as inadequate when NNUE is requested, so classical rows (from phones) are
+re-analyzed; `DRY_RUN=1` prints the split.
 
 ## UI conventions
 
