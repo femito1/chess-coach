@@ -629,17 +629,17 @@ export interface PositionNote {
  *  Progress against the bundled Lichess puzzle corpus (see
  *  `src/features/puzzles/corpus.ts`).
  *
- *  Only the user's own progress is persisted here — never puzzle content.
- *  The corpus ships as immutable, content-hashed TSV shards under
- *  `public/puzzles/<buildId>/`, so it's already cached by the browser and
- *  by Cloudflare; copying it into IndexedDB would duplicate megabytes for
- *  nothing and force a migration on every corpus refresh.
+ *  The corpus is never copied in wholesale: it ships as immutable,
+ *  content-hashed TSV shards under `public/puzzles/<buildId>/`, already
+ *  cached by the browser and by Cloudflare, so copying it into IndexedDB
+ *  would duplicate megabytes for nothing. Each row does carry a snapshot of
+ *  the ONE puzzle it records (~200 bytes) so history and Review never need
+ *  a ~400 KB shard to show it.
  *
- *  Deliberately stores raw attempt facts rather than an SM-2 schedule.
- *  Spaced repetition can be layered on top later by deriving a schedule
- *  from these fields, with no data migration — whereas baking `SrsState`
- *  in now would commit us to one algorithm before we know the page is
- *  even used that way.
+ *  Deliberately stores raw attempt facts rather than a schedule. Review's
+ *  spacing and the puzzle rating are both derived from `history` at read
+ *  time (`puzzles/stats.ts`, `puzzles/rating.ts`), so either can be retuned
+ *  without a data migration.
  */
 export interface PuzzleAttempt {
   /** Lichess puzzle id (5 chars) — primary key. */
@@ -662,6 +662,35 @@ export interface PuzzleAttempt {
   /** Rating of the puzzle at attempt time, denormalized so progress
    *  stats don't need to re-fetch shards to know what you solved. */
   rating: number;
+  /** One entry per finished attempt, oldest first, capped at
+   *  `MAX_ATTEMPT_HISTORY` (in `features/sync/diff.ts`, which both writers
+   *  import). Absent on rows recorded before 2026-10 — `puzzles/stats.ts`
+   *  synthesizes what those rows can honestly say from the aggregate
+   *  fields above. Lives only in the synced `data` blob, so it needed no
+   *  DDL. */
+  history?: PuzzleAttemptEvent[];
+  /** The puzzle itself, copied from the shard when first attempted, so the
+   *  history grid can draw it and Review can serve it without fetching a
+   *  shard. Absent on legacy rows until `backfillAttemptContent` runs. */
+  fen?: string;
+  solution?: string[];
+  themes?: string[];
+}
+
+/** How one attempt ended. Only `clean` counts as a win for the puzzle
+ *  rating: a hint or a wrong move means the position beat you, which is
+ *  the same rule Lichess applies. */
+export type PuzzleOutcome = 'clean' | 'mistake' | 'hint' | 'revealed';
+
+export interface PuzzleAttemptEvent {
+  at: number;
+  outcome: PuzzleOutcome;
+  ms?: number;
+  /** The solver's correct and wrong moves in this attempt — the inputs to
+   *  move accuracy, which separates "found 3 of 4 moves" from "lost on
+   *  move one" where a pass/fail can't. */
+  good?: number;
+  bad?: number;
 }
 
 export class CoachDB extends Dexie {

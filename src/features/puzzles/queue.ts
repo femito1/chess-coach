@@ -1,9 +1,16 @@
-import type { PuzzleShardMeta } from '@/data/puzzles.meta.generated';
+import {
+  PUZZLE_SHARDS,
+  RATING_MAX,
+  RATING_MIN,
+  type PuzzleShardMeta,
+} from '@/data/puzzles.meta.generated';
 import { loadShard, type LibraryPuzzle } from './corpus';
 import { puzzleMatchesMotif, type RecommendationPlan } from './recommend';
+import { themeCountInWindow } from './themeCatalog';
 
 /**
- * Turns a tier (or a recommendation plan) into a served run of puzzles.
+ * Turns a rating window (or a recommendation plan) into a served run of
+ * puzzles.
  *
  * Both builders take an injectable `load` so `queue.test.ts` can drive them
  * over synthetic shards with no network.
@@ -15,82 +22,89 @@ import { puzzleMatchesMotif, type RecommendationPlan } from './recommend';
 
 export type ShardLoader = (shard: PuzzleShardMeta) => Promise<LibraryPuzzle[]>;
 
-/** Position within a tier's shard list. Held by the page so successive
- *  `takeTierPuzzles` calls resume instead of rescanning from the start —
- *  which matters once a user has solved a few thousand puzzles and the
- *  early shards are mostly exhausted. */
-export interface QueueCursor {
-  shardIdx: number;
-  rowIdx: number;
-}
-
-export const START_CURSOR: QueueCursor = { shardIdx: 0, rowIdx: 0 };
-
-export interface TakeResult {
-  puzzles: LibraryPuzzle[];
-  cursor: QueueCursor;
-  /** True when the shard list ran out before `count` was filled. */
-  exhausted: boolean;
-}
-
 /**
- * Take the next `count` unsolved puzzles from a tier, in ascending rating
- * order.
+ * Rating window for a Train run.
  *
- * Ascending order is a deliberate UX choice, not an implementation detail.
- * Combined with skipping already-solved puzzles, it makes each tier a
- * ladder: you always face the easiest thing you haven't yet solved, and the
- * difficulty rises as you clear it. Serving a tier in random order would
- * give the same inventory a much worse learning curve.
+ * Starts narrow — ±60 around the target, so "Normal" really means puzzles
+ * at your level rather than a 600-point tier — and widens only as far as
+ * the theme needs to fill a few runs. Mixed puzzles never widen (every
+ * 100-point band holds ~8k); `forks` at 1500 doesn't either (~1.7k per
+ * band); `smotheredMate` at 1800 has ~6 per band, so it widens until it
+ * finds enough, and the UI says so rather than quietly serving 1100s.
+ *
+ * Widening is decided from the bundled per-band theme index, before any
+ * shard is fetched — finding out by loading shards one ~400 KB file at a
+ * time is what this replaces.
  */
-export async function takeTierPuzzles(args: {
-  shards: readonly PuzzleShardMeta[];
-  cursor: QueueCursor;
-  count: number;
-  /** Puzzles to skip — typically the ids solved cleanly already. */
-  isExcluded: (id: string) => boolean;
-  load?: ShardLoader;
-}): Promise<TakeResult> {
-  const { shards, count, isExcluded, load = loadShard } = args;
-  const puzzles: LibraryPuzzle[] = [];
-  let { shardIdx, rowIdx } = args.cursor;
+export const TRAIN_HALF_WINDOWS: readonly number[] = [60, 100, 150, 250, 400, 700, 1300];
 
-  while (puzzles.length < count && shardIdx < shards.length) {
-    const rows = await load(shards[shardIdx]);
-    while (rowIdx < rows.length && puzzles.length < count) {
-      const p = rows[rowIdx++];
-      if (!isExcluded(p.id)) puzzles.push(p);
-    }
-    if (rowIdx >= rows.length) {
-      shardIdx++;
-      rowIdx = 0;
+export function windowForTheme(args: {
+  center: number;
+  theme: string | null;
+  /** Puzzles the window should hold at minimum. */
+  want: number;
+}): { lo: number; hi: number; widened: boolean } {
+  const center = Math.max(RATING_MIN, Math.min(RATING_MAX, Math.round(args.center)));
+  let lo = center;
+  let hi = center;
+  for (const half of TRAIN_HALF_WINDOWS) {
+    lo = Math.max(RATING_MIN, center - half);
+    hi = Math.min(RATING_MAX, center + half);
+    if (themeCountInWindow(args.theme, lo, hi) >= args.want) {
+      return { lo, hi, widened: half > TRAIN_HALF_WINDOWS[0] };
     }
   }
-
-  return {
-    puzzles,
-    cursor: { shardIdx, rowIdx },
-    exhausted: puzzles.length < count && shardIdx >= shards.length,
-  };
+  return { lo, hi, widened: true };
 }
 
 /**
- * Build the Recommended run: puzzles matching the plan's motifs, drawn in
- * roughly the plan's per-motif proportions, inside its rating window.
+ * Draw `count` unattempted puzzles from a rating window, optionally of one
+ * theme, in random order.
  *
- * Two things differ from the tier ladder:
+ * Random rather than ascending: the old tier ladder served each tier
+ * easiest-first, which inside a 600-point tier was a real learning curve.
+ * Inside a ±60 window it would just mean always getting the same corner of
+ * it. Shards are visited in a seeded shuffle and loading stops once the
+ * pool can fill the run, so the common case is a single shard fetch.
+ */
+export async function buildTrainQueue(args: {
+  lo: number;
+  hi: number;
+  theme: string | null;
+  count: number;
+  isExcluded: (id: string) => boolean;
+  seed: number;
+  /** Defaults to the shipped manifest; tests pass synthetic shards. */
+  shards?: readonly PuzzleShardMeta[];
+  load?: ShardLoader;
+}): Promise<LibraryPuzzle[]> {
+  const { lo, hi, theme, count, isExcluded, seed, load = loadShard } = args;
+  const shards = seededShuffle(
+    (args.shards ?? PUZZLE_SHARDS).filter((s) => s.maxRating >= lo && s.minRating <= hi).slice(),
+    seed,
+  );
+  const pool: LibraryPuzzle[] = [];
+  for (const shard of shards) {
+    if (pool.length >= count) break;
+    for (const p of await load(shard)) {
+      if (p.rating < lo || p.rating > hi) continue;
+      if (theme && !p.themes.includes(theme)) continue;
+      if (isExcluded(p.id)) continue;
+      pool.push(p);
+    }
+  }
+  return seededShuffle(pool, seed ^ 0x9e3779b9).slice(0, count);
+}
+
+/**
+ * Build the "From your games" run: puzzles matching the plan's motifs,
+ * drawn in roughly the plan's per-motif proportions, inside its rating
+ * window. Shards are visited in a seeded shuffle, as in `buildTrainQueue`.
  *
- *  - **Shards are visited in a seeded shuffle**, not ascending order. The
- *    window is only ~5 bands wide, so ordering by rating inside it buys
- *    little, whereas visiting the same shard first every session would
- *    serve the same puzzles every session. Seeding (rather than
- *    `Math.random`) keeps it reproducible under test.
- *
- *  - **The result is interleaved across motifs** rather than grouped. If
- *    your two weakest motifs are forks and back-rank, a queue of 15 forks
- *    followed by 15 back-rankers is really two sessions; alternating them
- *    keeps you pattern-switching, which is the harder and more useful
- *    exercise.
+ * The result is **interleaved across motifs** rather than grouped. If your
+ * two weakest motifs are forks and back-rank, a queue of 15 forks followed
+ * by 15 back-rankers is really two sessions; alternating them keeps you
+ * pattern-switching, which is the harder and more useful exercise.
  */
 export async function buildRecommendedQueue(args: {
   plan: RecommendationPlan;

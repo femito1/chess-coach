@@ -133,7 +133,7 @@ place. It also key-checks that `pgn` and `moves` are absent rather than merely
 unread: a row that still carries the field costs the memory whether anyone reads
 it or not, and that is invisible to the type checker.
 
-Its last section covers `forEachAnalysis`, the cursor the Recommended tab reads
+Its last section covers `forEachAnalysis`, the cursor Puzzles' "From your games" theme reads
 full move lists through. It builds the mistake rows both ways in one run — streamed,
 and via the `bulkGet` + `buildMistakes` form it replaced — and asserts they are
 field-for-field identical, having first asserted the fixture yields rows at all.
@@ -305,10 +305,12 @@ a code regression:
   `e2e/onboarding-mobile`; both passed immediately on a forced restart.
 - **A missing Playwright browser** (`browserType.launch: Executable doesn't
   exist`) after `~/.cache` is cleaned: `npx playwright install chromium`.
-- **`integration/puzzle-library`** is intermittent and not root-caused. It fails
-  as `matched-to summary shown: expected true, got false` with `recommended
-  chips: []` logged above it, so the flake is in the weakness-motif seeding, not
-  the puzzle rendering. Re-run it in isolation before investigating.
+- **`integration/puzzle-library`** used to be intermittent, failing as
+  `matched-to summary shown: expected true, got false` with no motif chips.
+  The likely cause was a fixed 1.8 s sleep before reading the summary; the
+  2026-10 rewrite waits on the summary line instead and passed 4/4 runs. If the
+  old signature returns, the flake was the weakness-motif seeding after all —
+  re-run it in isolation before investigating.
 - **`e2e/mobile-audit`** fails with `Page.captureScreenshot: Unable to capture
   screenshot` / `ERR_INSUFFICIENT_RESOURCES` when the disk is low — it takes ~45
   full-page screenshots of WASM-heavy pages. Reliable from ~12 GB free, flaky at

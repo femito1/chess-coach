@@ -24,7 +24,7 @@
     "extension:build": "node scripts/build-extension-icons.mjs && node scripts/build-extension.mjs",
     "openings:snapshot": "node scripts/snapshot-opening-popularity.mjs",
     "openings:build": "node scripts/build-openings.mjs",
-    "puzzles:build": "node scripts/build-puzzles.mjs",
+    "puzzles:build": "node scripts/build-puzzles.mjs && node scripts/build-puzzle-theme-index.mjs",
     "worker:build": "node scripts/worker/build.mjs",
     "worker:run": "node dist-worker/worker.mjs",
     "worker:verify": "node dist-worker/verify.mjs",

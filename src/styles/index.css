@@ -453,3 +453,27 @@ html::-webkit-scrollbar-corner {
     }
   }
 }
+
+/* ---------------------------------------------------------------- *
+ *  Static board thumbnail (`components/MiniBoard.tsx`).
+ * ---------------------------------------------------------------- *
+ *
+ *  One conic-gradient tile covers 2x2 squares, light top-left, which is
+ *  right for either orientation (a8 and h1 are both light). Colours are
+ *  the brown theme's, so a thumbnail reads as the same board.
+ *
+ *  `will-change: auto` undoes chessground's `will-change: transform` on
+ *  pieces: harmless on one live board, but a grid of 30 thumbnails would
+ *  otherwise ask for ~600 compositor layers, which a phone pays for.
+ */
+.cg-wrap.mini-board {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  height: auto;
+  background: repeating-conic-gradient(#b58863 0 25%, #f0d9b5 0 50%) 0 0 / 25% 25%;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.cg-wrap.mini-board piece {
+  will-change: auto;
+}

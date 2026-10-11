@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
+  db,
   getSettings,
   normalizeTimeClassSelection,
+  type PuzzleOutcome,
   type TimeClassSelection,
 } from '@/db/schema';
 import { forEachAnalysis, listAllGamesLight, type GameLight } from '@/db/queries';
@@ -11,28 +14,22 @@ import { useThrottledLiveQuery } from '@/lib/useThrottledLiveQuery';
 import { gameMatchesSelection } from '@/lib/timeClass';
 import { usePersistedState } from '@/lib/usePersistedState';
 import { tMotifLabel } from '@/i18n/chess';
-import { PUZZLE_TOTAL } from '@/data/puzzles.meta.generated';
-import {
-  shardsForRatingWindow,
-  shardsForTier,
-  tierPuzzleCount,
-  tierRatingRange,
-  type LibraryPuzzle,
-  type TierId,
-} from './corpus';
-import {
-  buildRecommendedQueue,
-  START_CURSOR,
-  takeTierPuzzles,
-  type QueueCursor,
-} from './queue';
+import { shardsForRatingWindow, type LibraryPuzzle } from './corpus';
+import { buildRecommendedQueue, buildTrainQueue, windowForTheme } from './queue';
 import {
   estimateUserRating,
   recommendationPlan,
   type RecommendationPlan,
 } from './recommend';
 import { mistakeRowsForGame, type MistakeRow } from './mistakes';
-import { loadSolvedIds, recordAttempt } from './attempts';
+import {
+  findPuzzle,
+  loadAttemptedIds,
+  puzzleFromAttempt,
+  recordAttempt,
+} from './attempts';
+import { ratingFromAttempts, reviewQueue } from './stats';
+import type { PuzzleRating } from './rating';
 import { requestAttemptSync } from '@/features/sync/useCloudSync';
 import {
   BOARD_CLAMP_PX,
@@ -40,174 +37,455 @@ import {
   LibraryPuzzleSolver,
   type SolveOutcome,
 } from './LibraryPuzzleSolver';
+import {
+  TrainBar,
+  centerFor,
+  isDifficulty,
+  isThemeChoice,
+  type Difficulty,
+  type ThemeChoice,
+} from './TrainBar';
+import { ProgressView } from './ProgressView';
+import { formatThemeName } from './themeLabels';
 
 /**
  * The Puzzles page.
  *
  * Serves the bundled Lichess corpus (191k vetted, human-rated positions —
- * see `scripts/build-puzzles.mjs`) across five tabs. Four are difficulty
- * ladders; the fifth, Recommended, is matched to the motifs the user has
- * been fumbling *lately* (`recommend.ts`).
+ * see `scripts/build-puzzles.mjs`) through three views:
  *
- * This replaces a page that generated puzzles from the user's own blunders.
- * That model produced a small, uneven pool of positions the user had
- * already seen, which doesn't hold up for someone playing a lot of games.
+ *  - **Train** — new puzzles. A theme (mixed, one Lichess theme, or "from
+ *    your games", which targets the motifs you've been blundering lately —
+ *    `recommend.ts`) and a difficulty *relative to your puzzle rating*
+ *    (`rating.ts`). Replaces five tabs of fixed tiers that were each ~600
+ *    points wide.
+ *  - **Review** — puzzles you missed, back on a spaced schedule
+ *    (`stats.ts` § Review).
+ *  - **Progress** — rating history, accuracy, per-theme strengths and
+ *    weaknesses measured against your own rating, and a grid of every
+ *    puzzle you've done, each re-playable.
  */
 
-type TabId = TierId | 'recommended';
+type View = 'train' | 'review' | 'progress';
+const VIEWS: View[] = ['train', 'review', 'progress'];
 
-const TABS: TabId[] = ['recommended', 'easy', 'medium', 'hard', 'all'];
+/** New puzzles fetched per batch. Small on purpose: the rating window is
+ *  re-centred on your *current* rating at every batch, so a short batch is
+ *  what keeps difficulty tracking you within a session. */
+const TRAIN_BATCH = 10;
+/** Run length "From your games" plans allocate across motifs. */
+const RECOMMENDED_RUN = 20;
 
-/** Puzzles fetched per run. One shard is 4k rows, so a 20-puzzle run is
- *  always satisfied from a single fetch in the common case. */
-const RUN_LENGTH = 20;
-
-function isTabId(v: unknown): v is TabId {
-  return typeof v === 'string' && (TABS as string[]).includes(v);
+function isView(v: unknown): v is View {
+  return typeof v === 'string' && (VIEWS as string[]).includes(v);
 }
+
+/** What the solver is currently working through. */
+type RunSpec =
+  | { kind: 'train' }
+  | { kind: 'review'; ids: string[]; startedAt: number }
+  | { kind: 'single'; puzzle: LibraryPuzzle; from: View };
 
 export function PuzzlesPage() {
   const { t } = useTranslation();
-  const [tab, setTab] = usePersistedState<TabId>('puzzles.tab', 'recommended', {
-    isValid: isTabId,
+  const [view, setView] = usePersistedState<View>('puzzles.view', 'train', {
+    isValid: isView,
   });
-
-  const solved = useSolvedIds();
-  // Only pay for the games + analyses read when Recommended is actually
-  // showing. Analyses carry full move lists, so this is the single most
-  // expensive read on the page and the tier tabs don't need it at all.
-  const recommendation = useRecommendation(tab === 'recommended');
-
-  const run = useRun({
-    tab,
-    solved: solved.ids,
-    solvedLoaded: solved.loaded,
-    plan: recommendation.plan,
-    planLoaded: recommendation.loaded,
+  const [theme, setTheme] = usePersistedState<ThemeChoice>('puzzles.theme', 'mix', {
+    isValid: isThemeChoice,
   });
-
-  const [streak, setStreak] = useState(0);
-
-  const onDone = useCallback(
-    async (outcome: SolveOutcome) => {
-      setStreak((n) => (outcome.clean ? n + 1 : 0));
-      await recordAttempt({
-        puzzleId: outcome.puzzleId,
-        rating: outcome.rating,
-        clean: outcome.clean,
-        hintUsed: outcome.hintUsed,
-        msTaken: outcome.msTaken,
-      });
-      // Progress is only as safe as its cloud copy — local data on this device
-      // has been wiped before — and nothing else would upload it this session.
-      requestAttemptSync();
-      // Deliberately NOT refreshing `solved` here. Retiring the puzzle
-      // mid-run would renumber the strip under the user and could yank the
-      // current puzzle out from under them. The exclusion set is re-read
-      // when the next run is built.
-    },
-    [],
+  const [difficulty, setDifficulty] = usePersistedState<Difficulty>(
+    'puzzles.difficulty',
+    'rel:0',
+    { isValid: isDifficulty },
   );
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const rows = useThrottledLiveQuery(() => db.puzzleAttempts.toArray(), [], 1000);
+  // Minute resolution is plenty for "is it due yet", and keeps the memos
+  // below from recomputing on every render.
+  const now = useMinuteClock();
+  const rating = useMemo(() => ratingFromAttempts(rows ?? [], now), [rows, now]);
+  const review = useMemo(() => reviewQueue(rows ?? [], now), [rows, now]);
+
+  /* ------------------------------------------------------------ run spec */
+  const [spec, setSpec] = useState<RunSpec>({ kind: 'train' });
+  const runKey =
+    spec.kind === 'single'
+      ? `single:${spec.puzzle.id}`
+      : spec.kind === 'review'
+        ? `review:${spec.startedAt}`
+        : `train:${theme}:${difficulty}`;
+
+  // "From your games" centres its plan on the puzzle rating once that's
+  // established — captured when the run starts, not tracked live: the plan
+  // feeds the run, so a plan that moved with every puzzle would rebuild the
+  // run under the user mid-session.
+  const rowsLoaded = rows !== undefined;
+  const [planCenter, setPlanCenter] = useState<number | null>(null);
+  useEffect(() => {
+    setPlanCenter(rating.provisional ? null : centerFor(difficulty, rating.rating));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runKey, rowsLoaded]);
+  const recommendation = useRecommendation(
+    view === 'train' && theme === 'foryou',
+    planCenter,
+    difficulty,
+  );
+
+  // `/puzzles?puzzle=<id>&rating=<n>` opens one puzzle. The rating narrows
+  // the lookup to one or two shards (there is no id index). Also the hook
+  // the browser tests use to get a known puzzle without a random draw.
+  const deepId = searchParams.get('puzzle');
+  const deepRating = Number(searchParams.get('rating'));
+  useEffect(() => {
+    if (!deepId || !Number.isFinite(deepRating)) return;
+    let cancelled = false;
+    void findPuzzle(deepId, deepRating).then((p) => {
+      if (cancelled || !p) return;
+      setView('train');
+      setSpec({ kind: 'single', puzzle: p, from: 'train' });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepId, deepRating]);
+
+  const closeSingle = useCallback(
+    (from: View) => {
+      if (searchParams.has('puzzle')) setSearchParams({}, { replace: true });
+      setSpec({ kind: 'train' });
+      setView(from);
+    },
+    [searchParams, setSearchParams, setView],
+  );
+
+  // Leaving a view abandons its review run or single puzzle.
+  const switchView = (v: View) => {
+    if (searchParams.has('puzzle')) setSearchParams({}, { replace: true });
+    setSpec({ kind: 'train' });
+    setView(v);
+  };
+
+  /* ------------------------------------------------------ batch loading */
+  // Read at batch-build time through refs, NOT listed as run deps: the
+  // rating moves after every puzzle, and a dep on it would rebuild the run
+  // under the user mid-session.
+  const ratingRef = useRef(rating);
+  ratingRef.current = rating;
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  /** Ids served in this page session, excluded on top of recorded attempts
+   *  so a batch built before the last attempt was written can't repeat it. */
+  const servedRef = useRef(new Set<string>());
+  const [trainWindow, setTrainWindow] = useState<{
+    lo: number;
+    hi: number;
+    widened: boolean;
+  } | null>(null);
+
+  const solving = spec.kind !== 'train' || view === 'train';
+  const runReady = spec.kind !== 'train' || theme !== 'foryou' || recommendation.loaded;
+
+  const loadBatch = useCallback(
+    async (generation: number): Promise<LibraryPuzzle[]> => {
+      if (spec.kind === 'single') return generation === 0 ? [spec.puzzle] : [];
+      if (spec.kind === 'review') {
+        if (generation > 0) return [];
+        const byId = new Map((rowsRef.current ?? []).map((r) => [r.puzzleId, r]));
+        const out: LibraryPuzzle[] = [];
+        for (const id of spec.ids) {
+          const row = byId.get(id);
+          if (!row) continue;
+          const p = puzzleFromAttempt(row) ?? (await findPuzzle(row.puzzleId, row.rating));
+          if (p) out.push(p);
+        }
+        return out;
+      }
+
+      const attempted = await loadAttemptedIds();
+      const isExcluded = (id: string) => attempted.has(id) || servedRef.current.has(id);
+      const seed = generation * 7919 + Math.floor(Date.now() / 60_000);
+
+      if (theme === 'foryou') {
+        const plan = recommendation.plan;
+        if (!plan || plan.allocation.length === 0) return [];
+        setTrainWindow({ lo: plan.ratingLo, hi: plan.ratingHi, widened: false });
+        return buildRecommendedQueue({
+          plan,
+          shards: shardsForRatingWindow(plan.ratingLo, plan.ratingHi),
+          isExcluded,
+          seed,
+        });
+      }
+
+      const themeFilter = theme === 'mix' ? null : theme;
+      const win = windowForTheme({
+        center: centerFor(difficulty, ratingRef.current.rating),
+        theme: themeFilter,
+        want: TRAIN_BATCH * 6,
+      });
+      setTrainWindow(win);
+      return buildTrainQueue({
+        lo: win.lo,
+        hi: win.hi,
+        theme: themeFilter,
+        count: TRAIN_BATCH,
+        isExcluded,
+        seed,
+      });
+    },
+    // `runKey` covers spec/theme/difficulty; the plan is read when it lands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runKey, recommendation.plan],
+  );
+
+  const run = useRun({ runKey, ready: solving && runReady, loadBatch });
+  useEffect(() => {
+    for (const p of run.puzzles) servedRef.current.add(p.id);
+  }, [run.puzzles]);
+
+  /* ----------------------------------------------------------- recording */
+  const [results, setResults] = useState<PuzzleOutcome[]>([]);
+  useEffect(() => setResults([]), [runKey]);
+  const [ratingChange, setRatingChange] = useState<{
+    id: string;
+    from: number;
+    to: number;
+  } | null>(null);
+
+  const onDone = useCallback(async (outcome: SolveOutcome) => {
+    setResults((r) => [...r, outcome.outcome]);
+    // Read fresh rather than from the live query, which is throttled and
+    // can lag the previous puzzle's write.
+    const before = await db.puzzleAttempts.toArray();
+    const firstAttempt = !before.some((r) => r.puzzleId === outcome.puzzle.id);
+    const saved = await recordAttempt({
+      puzzle: outcome.puzzle,
+      outcome: outcome.outcome,
+      good: outcome.good,
+      bad: outcome.bad,
+      msTaken: outcome.msTaken,
+    });
+    if (firstAttempt) {
+      const t0 = Date.now();
+      setRatingChange({
+        id: outcome.puzzle.id,
+        from: ratingFromAttempts(before, t0).rating,
+        to: ratingFromAttempts([...before, saved], t0).rating,
+      });
+    }
+    // Progress is only as safe as its cloud copy — local data on this device
+    // has been wiped before — and nothing else would upload it this session.
+    requestAttemptSync();
+  }, []);
 
   const current = run.puzzles[run.idx];
-  const showRecommendedSummary = Boolean(
-    tab === 'recommended' &&
-      recommendation.loaded &&
-      recommendation.plan &&
-      recommendation.plan.motifs.length > 0,
-  );
+  const loadedRows = rows ?? [];
 
   return (
     <div className="space-y-4">
-      <Header tab={tab} />
+      <Header rating={rating} hasHistory={loadedRows.length > 0} />
 
-      <TabBar tab={tab} onChange={setTab} />
+      <ViewTabs view={view} onChange={switchView} reviewDue={review.due.length} />
 
-      {showRecommendedSummary && recommendation.plan && (
-        <RecommendedSummary plan={recommendation.plan} />
-      )}
-
-      {run.error && (
-        <div
-          role="alert"
-          className="card p-4 text-sm border-blunder/40 bg-blunder/5 space-y-1"
-        >
-          <div className="font-medium text-blunder">{t('puzzles.loadFailed')}</div>
-          <div className="text-text-muted text-xs font-mono">{run.error}</div>
-        </div>
-      )}
-
-      {!run.error && run.loading && (
-        <div className="text-text-muted text-sm">{t('common.loading')}</div>
-      )}
-
-      {!run.error && !run.loading && !current && (
-        <EmptyState tab={tab} recommendation={recommendation} />
-      )}
-
-      {!run.error && current && (
-        <LibraryPuzzleSolver
-          key={current.id}
-          puzzle={current}
-          index={run.idx + 1}
-          total={run.puzzles.length}
-          streak={streak}
-          // The Recommended summary card sits above the board, so the board
-          // has less vertical room there than on a tier tab.
-          boardClampPx={
-            showRecommendedSummary ? BOARD_CLAMP_WITH_SUMMARY_PX : BOARD_CLAMP_PX
-          }
-          sessionNote={
-            tab === 'recommended' && recommendation.plan
-              ? sessionNoteFor(recommendation.plan, t)
-              : undefined
-          }
-          onDone={onDone}
-          onNext={run.next}
-          hasNext={run.idx + 1 < run.puzzles.length || run.canExtend}
+      {view === 'train' && spec.kind === 'train' && (
+        <TrainBar
+          theme={theme}
+          onTheme={setTheme}
+          difficulty={difficulty}
+          onDifficulty={setDifficulty}
+          rating={rating}
+          rows={loadedRows}
+          window={trainWindow}
+          plan={recommendation.plan}
+          planLoaded={recommendation.loaded}
+          hasAnalyzedGames={recommendation.hasAnalyzedGames}
         />
+      )}
+
+      {spec.kind === 'single' && (
+        <button
+          type="button"
+          className="btn text-xs"
+          onClick={() => closeSingle(spec.from)}
+        >
+          {spec.from === 'progress' ? t('puzzles.backToProgress') : t('puzzles.backToTraining')}
+        </button>
+      )}
+
+      {view === 'review' && spec.kind !== 'review' && spec.kind !== 'single' && (
+        <ReviewOverview
+          review={review}
+          now={now}
+          onStart={(ids) => setSpec({ kind: 'review', ids, startedAt: Date.now() })}
+        />
+      )}
+
+      {view === 'progress' && spec.kind !== 'single' && (
+        <ProgressView
+          rows={loadedRows}
+          loaded={rows !== undefined}
+          rating={rating}
+          now={now}
+          reviewDue={review.due.length}
+          onOpen={(row) => {
+            const p = puzzleFromAttempt(row);
+            if (p) setSpec({ kind: 'single', puzzle: p, from: 'progress' });
+          }}
+          onTrainTheme={(th) => {
+            setTheme(th);
+            switchView('train');
+          }}
+        />
+      )}
+
+      {solving && (
+        <>
+          {run.error && (
+            <div
+              role="alert"
+              className="card p-4 text-sm border-blunder/40 bg-blunder/5 space-y-1"
+            >
+              <div className="font-medium text-blunder">{t('puzzles.loadFailed')}</div>
+              <div className="text-text-muted text-xs font-mono">{run.error}</div>
+            </div>
+          )}
+
+          {!run.error && run.loading && (
+            <div className="text-text-muted text-sm">{t('common.loading')}</div>
+          )}
+
+          {!run.error && !run.loading && !current && spec.kind === 'review' && (
+            <ReviewDone results={results} onBack={() => setSpec({ kind: 'train' })} />
+          )}
+
+          {!run.error && !run.loading && !current && spec.kind === 'train' && (
+            <EmptyState
+              theme={theme}
+              recommendation={recommendation}
+              onMix={() => setTheme('mix')}
+            />
+          )}
+
+          {!run.error && current && (
+            <LibraryPuzzleSolver
+              key={current.id}
+              puzzle={current}
+              session={{
+                results,
+                position:
+                  spec.kind === 'review'
+                    ? t('puzzles.progressOf', { index: run.idx + 1, total: run.puzzles.length })
+                    : undefined,
+              }}
+              ratingChange={
+                ratingChange?.id === current.id
+                  ? { from: ratingChange.from, to: ratingChange.to }
+                  : undefined
+              }
+              unratedNote={
+                // Only where it's always true. A train puzzle's rating change
+                // lands a beat after the solve, and must not be preceded by
+                // a flash of "doesn't count".
+                spec.kind === 'review' || (spec.kind === 'single' && spec.from === 'progress')
+                  ? t('puzzles.retryUnrated')
+                  : undefined
+              }
+              boardClampPx={
+                spec.kind === 'train' && theme === 'foryou' && recommendation.plan?.motifs.length
+                  ? BOARD_CLAMP_WITH_SUMMARY_PX
+                  : BOARD_CLAMP_PX
+              }
+              sessionNote={
+                spec.kind === 'train' && theme === 'foryou' && recommendation.plan
+                  ? sessionNoteFor(recommendation.plan, t)
+                  : spec.kind === 'train' && theme !== 'mix' && theme !== 'foryou'
+                    ? t('puzzles.themeSessionNote', { theme: formatThemeName(theme) })
+                    : undefined
+              }
+              onDone={onDone}
+              onNext={
+                spec.kind === 'single' && run.idx + 1 >= run.puzzles.length
+                  ? () => closeSingle(spec.from)
+                  : run.next
+              }
+              hasNext={
+                spec.kind === 'single' || run.idx + 1 < run.puzzles.length || run.canExtend
+              }
+              nextLabel={
+                spec.kind === 'single'
+                  ? spec.from === 'progress'
+                    ? t('puzzles.backToProgress')
+                    : t('puzzles.startTraining')
+                  : spec.kind === 'review' && run.idx + 1 >= run.puzzles.length
+                    ? t('puzzles.review.finish')
+                    : undefined
+              }
+            />
+          )}
+        </>
       )}
     </div>
   );
 }
 
 /* =======================================================================
- *  Header + tabs
+ *  Header + view tabs
  * =======================================================================
  */
 
-function Header({ tab }: { tab: TabId }) {
+function Header({ rating, hasHistory }: { rating: PuzzleRating; hasHistory: boolean }) {
   const { t } = useTranslation();
   return (
     <div className="flex items-end justify-between gap-4 flex-wrap">
       <div>
         <h1 className="text-xl font-semibold tracking-tight">{t('puzzles.title')}</h1>
-        <p className="text-sm text-text-muted mt-0.5">
-          {tab === 'recommended'
-            ? t('puzzles.subtitleRecommended')
-            : t('puzzles.subtitleLibrary', { total: PUZZLE_TOTAL.toLocaleString() })}
-        </p>
+        <p className="text-sm text-text-muted mt-0.5">{t('puzzles.subtitle')}</p>
       </div>
+      {hasHistory && (
+        <div
+          className="text-right"
+          title={t('puzzles.ratingTitle', { rd: Math.round(rating.rd) })}
+        >
+          <div className="text-[10px] uppercase tracking-wide text-text-muted">
+            {t('puzzles.yourRating')}
+          </div>
+          <div className="text-lg font-semibold tabular-nums leading-tight">
+            {Math.round(rating.rating)}
+            {rating.provisional && <span className="text-text-muted">?</span>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 /**
- * Tab bar. Each tier tab carries its real rating range as a subtitle,
- * pulled from the shard manifest rather than hard-coded — so the label can
- * never claim a range the shipped corpus doesn't actually hold.
+ * View switcher. Three short labels fit any width, so this is a plain flex
+ * row with no overflow handling — the old tab bar's `overflow-x-auto`, with
+ * the `-mb-px` underline poking 1px past it, produced a vertical scrollbar
+ * that scrolled nothing.
  */
-function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void }) {
+function ViewTabs({
+  view,
+  onChange,
+  reviewDue,
+}: {
+  view: View;
+  onChange: (v: View) => void;
+  reviewDue: number;
+}) {
   const { t } = useTranslation();
   return (
     <div
       role="tablist"
       aria-label={t('puzzles.title')}
-      className="flex gap-1 overflow-x-auto border-b border-border -mb-px"
+      className="inline-flex gap-1 p-1 rounded-lg bg-bg-soft border border-border"
     >
-      {TABS.map((id) => {
-        const active = id === tab;
-        const range = id === 'recommended' ? null : tierRatingRange(id);
+      {VIEWS.map((id) => {
+        const active = id === view;
         return (
           <button
             key={id}
@@ -215,20 +493,16 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
             aria-selected={active}
             type="button"
             onClick={() => onChange(id)}
-            className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 -mb-px transition-colors ${
-              active
-                ? 'border-accent text-accent'
-                : 'border-transparent text-text-muted hover:text-text'
+            className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap transition-colors flex items-center gap-1.5 ${
+              active ? 'bg-bg-raised text-text font-medium' : 'text-text-muted hover:text-text'
             }`}
           >
-            <span className="block font-medium">{t(`puzzles.tabs.${id}`)}</span>
-            <span className="block text-[10px] tabular-nums opacity-70">
-              {id === 'recommended'
-                ? t('puzzles.tabs.forYou')
-                : range
-                  ? `${range.lo}-${range.hi}`
-                  : '—'}
-            </span>
+            {t(`puzzles.views.${id}`)}
+            {id === 'review' && reviewDue > 0 && (
+              <span className="text-[10px] tabular-nums px-1.5 rounded-full bg-accent/20 text-accent">
+                {reviewDue}
+              </span>
+            )}
           </button>
         );
       })}
@@ -236,49 +510,98 @@ function TabBar({ tab, onChange }: { tab: TabId; onChange: (t: TabId) => void })
   );
 }
 
-/**
- * The session-level "why these puzzles" line for Recommended.
- *
- * Names the matched motifs ONCE for the whole run. It deliberately stops
- * there: it never says which motif the puzzle on screen belongs to, because
- * that would be handing over the answer. You know the session is about
- * forks and back-rank; you don't know which one this position is.
+/* =======================================================================
+ *  Review
+ * =======================================================================
  */
-function RecommendedSummary({ plan }: { plan: RecommendationPlan }) {
+
+function ReviewOverview({
+  review,
+  now,
+  onStart,
+}: {
+  review: ReturnType<typeof reviewQueue>;
+  now: number;
+  onStart: (ids: string[]) => void;
+}) {
   const { t } = useTranslation();
-  if (plan.motifs.length === 0) return null;
+  const { due, later, learned, nextDueAt } = review;
+  const nextDueIn =
+    nextDueAt !== null ? Math.max(1, Math.round((nextDueAt - now) / 3_600_000)) : null;
 
   return (
-    <div className="card p-3 space-y-2">
-      <div className="text-xs uppercase tracking-wide text-text-muted">
-        {t('puzzles.matchedTo')}
+    <div className="card p-4 space-y-4 max-w-2xl">
+      <div className="grid grid-cols-3 gap-3 text-center">
+        <Count n={due.length} label={t('puzzles.review.dueNow')} accent />
+        <Count n={later.length} label={t('puzzles.review.later')} />
+        <Count n={learned} label={t('puzzles.review.learned')} />
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {plan.motifs.map((m) => (
-          <span
-            key={m.motif}
-            className="text-xs px-2 py-1 rounded bg-bg-raised flex items-baseline gap-1.5"
-            title={t('puzzles.motifWeight', {
-              count: m.mistakeCount,
-              days: Math.max(1, Math.round((Date.now() - m.lastSeenAt) / 86_400_000)),
-            })}
+      <p className="text-xs text-text-muted leading-relaxed">{t('puzzles.review.explain')}</p>
+      <div className="flex flex-wrap gap-2">
+        {due.length > 0 ? (
+          <button
+            type="button"
+            className="btn border-accent/50 text-accent hover:bg-accent/10"
+            onClick={() => onStart(due.map((r) => r.puzzleId))}
           >
-            <span className="font-medium">{tMotifLabel(t, m.motif)}</span>
-            <span className="text-text-muted tabular-nums">
-              {Math.round(m.share * 100)}%
-            </span>
-          </span>
-        ))}
+            {t('puzzles.review.start', { count: due.length })}
+          </button>
+        ) : (
+          <p className="text-sm text-text-muted">
+            {later.length > 0 && nextDueIn !== null
+              ? t('puzzles.review.nothingDueNext', { hours: nextDueIn })
+              : t('puzzles.review.empty')}
+          </p>
+        )}
+        {due.length === 0 && later.length > 0 && (
+          <button
+            type="button"
+            className="btn text-xs"
+            onClick={() => onStart(later.map((r) => r.puzzleId))}
+          >
+            {t('puzzles.review.early', { count: later.length })}
+          </button>
+        )}
       </div>
-      <p className="text-[11px] text-text-muted">
-        {t('puzzles.recencyNote', {
-          lo: plan.ratingLo,
-          hi: plan.ratingHi,
-        })}
-      </p>
     </div>
   );
 }
+
+function Count({ n, label, accent }: { n: number; label: string; accent?: boolean }) {
+  return (
+    <div>
+      <div className={`text-2xl font-semibold tabular-nums ${accent && n > 0 ? 'text-accent' : ''}`}>
+        {n}
+      </div>
+      <div className="text-[11px] text-text-muted">{label}</div>
+    </div>
+  );
+}
+
+function ReviewDone({ results, onBack }: { results: PuzzleOutcome[]; onBack: () => void }) {
+  const { t } = useTranslation();
+  const clean = results.filter((r) => r === 'clean').length;
+  return (
+    <div className="card p-4 space-y-3 max-w-2xl text-sm">
+      <div className="font-medium">
+        {results.length > 0
+          ? t('puzzles.review.doneScore', { clean, total: results.length })
+          : t('puzzles.review.empty')}
+      </div>
+      {results.length > clean && (
+        <p className="text-xs text-text-muted">{t('puzzles.review.doneMissed')}</p>
+      )}
+      <button type="button" className="btn text-xs" onClick={onBack}>
+        {t('puzzles.review.backToOverview')}
+      </button>
+    </div>
+  );
+}
+
+/* =======================================================================
+ *  Empty states + notes
+ * =======================================================================
+ */
 
 function sessionNoteFor(
   plan: RecommendationPlan,
@@ -295,32 +618,34 @@ function sessionNoteFor(
 }
 
 function EmptyState({
-  tab,
+  theme,
   recommendation,
+  onMix,
 }: {
-  tab: TabId;
+  theme: ThemeChoice;
   recommendation: ReturnType<typeof useRecommendation>;
+  onMix: () => void;
 }) {
   const { t } = useTranslation();
 
-  if (tab === 'recommended') {
+  if (theme === 'foryou') {
     // Distinguish "no analyzed games yet" from "analyzed games, but no
     // motif cleared the noise floor" — they need different next steps.
     const reason = recommendation.hasAnalyzedGames
       ? t('puzzles.recommendedNoMotifs')
       : t('puzzles.recommendedNeedsGames');
     return (
-      <div className="card p-6 text-sm text-text-muted space-y-2">
+      <div className="card p-6 text-sm text-text-muted space-y-3">
         <p>{reason}</p>
-        <p>{t('puzzles.recommendedFallbackHint')}</p>
+        <button type="button" className="btn text-xs" onClick={onMix}>
+          {t('puzzles.switchToMixed')}
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="card p-6 text-sm text-text-muted">
-      {t('puzzles.tierExhausted', { count: tierPuzzleCount(tab as TierId) })}
-    </div>
+    <div className="card p-6 text-sm text-text-muted">{t('puzzles.windowExhausted')}</div>
   );
 }
 
@@ -329,29 +654,26 @@ function EmptyState({
  * =======================================================================
  */
 
-function useSolvedIds(): { ids: Set<string>; loaded: boolean } {
-  const [ids, setIds] = useState<Set<string>>(() => new Set());
-  const [loaded, setLoaded] = useState(false);
+function useMinuteClock(): number {
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    let cancelled = false;
-    void loadSolvedIds().then((s) => {
-      if (cancelled) return;
-      setIds(s);
-      setLoaded(true);
-    });
-    return () => {
-      cancelled = true;
-    };
+    const id = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(id);
   }, []);
-  return { ids, loaded };
+  return now;
 }
 
+/** An established puzzle rating is on the corpus's own scale, so "From your
+ *  games" can centre on it with a tighter window than the game-rating
+ *  fallback needs (see `ratingWindowFor`). */
+const RECOMMENDED_HALF_WINDOW_ESTABLISHED = 150;
+
 /**
- * Compute the recommendation plan from the user's analyzed games.
+ * Compute the "From your games" plan from the user's analyzed games.
  *
  * Only runs when `active`: scoring needs every move of every analyzed game, so
- * there is no point paying for it until the user opens the tab. Throttled live
- * queries keep it from refiring on every write during an analysis run.
+ * there is no point paying for it until the user picks that theme. Throttled
+ * live queries keep it from refiring on every write during an analysis run.
  *
  * It reads those move lists through a cursor and folds each one into
  * `MistakeRow`s as it arrives (`forEachAnalysis` + `mistakeRowsForGame`). It used
@@ -361,7 +683,13 @@ function useSolvedIds(): { ids: Set<string>; loaded: boolean } {
  * blundery moves survive the fold, so what stays resident is a few thousand small
  * rows instead of ~1 200 full move lists.
  */
-function useRecommendation(active: boolean): {
+function useRecommendation(
+  active: boolean,
+  /** Puzzle-rating centre, offset already applied; null while the rating is
+   *  provisional, which falls back to game rating + offset. */
+  center: number | null,
+  difficulty: Difficulty,
+): {
   plan: RecommendationPlan | null;
   loaded: boolean;
   hasAnalyzedGames: boolean;
@@ -375,12 +703,10 @@ function useRecommendation(active: boolean): {
   /**
    * Time-class selection from Settings, default `['rapid']`.
    *
-   * Recommended honours it for the reason the setting exists: bullet
-   * mistakes are high-volume and low-signal — you blunder in bullet because
-   * of the clock, not because of a pattern gap — so letting them into the
-   * motif scoring would drown out the mistakes that actually indicate a
-   * weakness. This is the same filter the old Weaknesses and Puzzles pages
-   * applied, and `Settings.timeClassFilter` is documented as governing it.
+   * Honoured for the reason the setting exists: bullet mistakes are
+   * high-volume and low-signal — you blunder in bullet because of the clock,
+   * not because of a pattern gap — so letting them into the motif scoring
+   * would drown out the mistakes that actually indicate a weakness.
    */
   const [timeClasses, setTimeClasses] = useState<TimeClassSelection>(['rapid']);
   useEffect(() => {
@@ -419,22 +745,24 @@ function useRecommendation(active: boolean): {
     1000,
   );
 
+  const gameCenter = estimateUserRating(analyzed);
+
   const plan = useMemo(() => {
     if (!active || !games || !mistakes) return null;
     return recommendationPlan({
       // Row order does not matter: `scoreMotifs` sums into a map keyed by motif
-      // and sorts its own output, and `estimateUserRating` re-sorts by date. Worth
-      // knowing, because the cursor delivers in game-id order rather than the
-      // order `analyzed` is in.
+      // and sorts its own output.
       rows: mistakes,
       now: Date.now(),
-      userRating: estimateUserRating(analyzed),
-      queueLength: RUN_LENGTH,
+      userRating:
+        center ?? (gameCenter !== undefined ? centerFor(difficulty, gameCenter) : undefined),
+      queueLength: RECOMMENDED_RUN,
+      halfWindow: center !== null ? RECOMMENDED_HALF_WINDOW_ESTABLISHED : undefined,
     });
     // `Date.now()` in a memo is fine here: the deps only change on a data
     // refire, and re-scoring on a stale clock would at worst shift decay
     // weights by minutes on a 30-day half-life.
-  }, [active, games, mistakes, analyzed]);
+  }, [active, games, mistakes, center, gameCenter, difficulty]);
 
   return {
     plan,
@@ -446,17 +774,14 @@ function useRecommendation(active: boolean): {
 /**
  * Owns the current run of puzzles and the position within it.
  *
- * Tier tabs walk their shards with a persistent cursor, so asking for more
- * resumes where the last run stopped rather than rescanning shards the user
- * has already cleared. Recommended rebuilds from its plan instead — its
- * selection isn't a linear walk, so there's no cursor to advance.
+ * `loadBatch(generation)` supplies puzzles: generation 0 when `runKey`
+ * changes, and the next generation when the user reaches the end of a
+ * batch. An empty batch marks the run exhausted.
  */
 function useRun(args: {
-  tab: TabId;
-  solved: Set<string>;
-  solvedLoaded: boolean;
-  plan: RecommendationPlan | null;
-  planLoaded: boolean;
+  runKey: string;
+  ready: boolean;
+  loadBatch: (generation: number) => Promise<LibraryPuzzle[]>;
 }): {
   puzzles: LibraryPuzzle[];
   idx: number;
@@ -465,95 +790,46 @@ function useRun(args: {
   canExtend: boolean;
   next: () => void;
 } {
-  const { tab, solved, solvedLoaded, plan, planLoaded } = args;
-
+  const { runKey, ready, loadBatch } = args;
   const [puzzles, setPuzzles] = useState<LibraryPuzzle[]>([]);
   const [idx, setIdx] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
-  const cursorRef = useRef<QueueCursor>(START_CURSOR);
-  /** Bumped to pull the NEXT batch after the user finishes a run. */
   const [generation, setGeneration] = useState(0);
-  /** Which tab the current `cursorRef` belongs to, so we can tell a tab
-   *  switch (reset the cursor) from a run extension (keep it). */
-  const cursorTabRef = useRef<TabId | null>(null);
+  const keyRef = useRef<string | null>(null);
 
-  const ready = solvedLoaded && (tab !== 'recommended' || planLoaded);
-
-  // ONE effect owns loading.
-  //
-  // This used to be two — a reset effect keyed on `tab` that bumped
-  // `generation`, plus this loader. That double-loaded on every tab switch
-  // (both effects listed `tab`), and the two async loads then raced for
-  // `cursorRef`: whichever read it first won, so the user non-
-  // deterministically got either the first 20 puzzles or puzzles 20-40,
-  // silently skipping the easiest ones. Keeping a single effect makes the
-  // load order unambiguous.
+  // ONE effect owns loading. Two effects (a reset keyed on the run plus a
+  // loader) double-loaded on every switch and raced each other — see git
+  // history of this file for the bug that taught that.
   useEffect(() => {
     if (!ready) return;
-    let cancelled = false;
-
-    // A tab switch restarts that tier's ladder from its easiest unsolved
-    // puzzle. Resuming mid-tier would be wrong: solved puzzles are already
-    // filtered out by `isExcluded`, so restarting costs only a rescan and
-    // guarantees "hardest thing you haven't cleared" stays true even after
-    // you solve some, navigate away, and come back.
-    if (cursorTabRef.current !== tab) {
-      cursorRef.current = START_CURSOR;
-      cursorTabRef.current = tab;
+    let gen = generation;
+    if (keyRef.current !== runKey) {
+      keyRef.current = runKey;
+      gen = 0;
+      if (generation !== 0) {
+        // Reset and let the effect re-fire with generation 0.
+        setGeneration(0);
+        return;
+      }
     }
-
+    let cancelled = false;
     setLoading(true);
     setError(null);
-    // Clear immediately so the previous tab's puzzle can't stay on screen
+    // Clear immediately so the previous run's puzzle can't stay on screen
     // (and be interacted with) while this load is in flight.
     setPuzzles([]);
     setIdx(0);
-    // Otherwise a tab whose ladder was exhausted leaves `canExtend` false on
-    // the next tab, disabling its "Next puzzle" button.
     setExhausted(false);
-
-    const isExcluded = (id: string) => solved.has(id);
 
     void (async () => {
       try {
-        if (tab === 'recommended') {
-          if (!plan || plan.allocation.length === 0) {
-            if (!cancelled) {
-              setPuzzles([]);
-              setExhausted(true);
-            }
-            return;
-          }
-          const shards = shardsForRatingWindow(plan.ratingLo, plan.ratingHi);
-          const got = await buildRecommendedQueue({
-            plan,
-            shards,
-            isExcluded,
-            // Vary the run between sessions, but keep it stable across the
-            // re-renders within one.
-            seed: generation * 7919 + Math.floor(Date.now() / 3_600_000),
-          });
-          if (cancelled) return;
-          setPuzzles(got);
-          setIdx(0);
-          setExhausted(got.length === 0);
-          return;
-        }
-
-        const shards = shardsForTier(tab);
-        const res = await takeTierPuzzles({
-          shards,
-          cursor: cursorRef.current,
-          count: RUN_LENGTH,
-          isExcluded,
-        });
+        const got = await loadBatch(gen);
         if (cancelled) return;
-        cursorRef.current = res.cursor;
-        setPuzzles(res.puzzles);
+        setPuzzles(got);
         setIdx(0);
-        setExhausted(res.puzzles.length === 0);
+        setExhausted(got.length === 0);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : String(err));
@@ -565,11 +841,9 @@ function useRun(args: {
     return () => {
       cancelled = true;
     };
-    // `solved` is intentionally not a dep: it's captured for exclusion at
-    // run-build time, and re-running on every recorded attempt would
-    // rebuild the run mid-session.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, ready, plan, generation]);
+    // `loadBatch` is keyed on `runKey` (and the plan landing), so it is a
+    // fair dep; listing it means a plan arriving re-fires the first batch.
+  }, [runKey, ready, generation, loadBatch]);
 
   const next = useCallback(() => {
     // Branch outside the updater: calling `setGeneration` from inside a
@@ -579,18 +853,9 @@ function useRun(args: {
     if (idx + 1 < puzzles.length) {
       setIdx(idx + 1);
     } else {
-      // End of the run: pull the next batch. Tier tabs continue from
-      // `cursorRef`; Recommended re-draws from its plan.
       setGeneration((g) => g + 1);
     }
   }, [idx, puzzles.length]);
 
-  return {
-    puzzles,
-    idx,
-    loading,
-    error,
-    canExtend: !exhausted,
-    next,
-  };
+  return { puzzles, idx, loading, error, canExtend: !exhausted, next };
 }

@@ -1,10 +1,7 @@
 import {
-  BAND_WIDTH,
   PUZZLE_BUILD_ID,
   PUZZLE_SHARDS,
   PUZZLE_THEMES,
-  PUZZLE_TIERS,
-  RATING_MIN,
   type PuzzleShardMeta,
 } from '@/data/puzzles.meta.generated';
 
@@ -42,8 +39,6 @@ export interface LibraryPuzzle {
   themes: string[];
 }
 
-export type TierId = 'easy' | 'medium' | 'hard' | 'all';
-
 /* =======================================================================
  *  Shard fetching
  * =======================================================================
@@ -71,7 +66,7 @@ export function shardKey(shard: PuzzleShardMeta): string {
  *
  * Theme codes are fixed-width 2-char base36 indices into `PUZZLE_THEMES`.
  * Malformed rows are skipped rather than thrown on: a single bad row
- * shouldn't blank a whole tab.
+ * shouldn't blank a whole run.
  */
 export function parseShard(text: string): LibraryPuzzle[] {
   const out: LibraryPuzzle[] = [];
@@ -153,69 +148,11 @@ export function __clearShardCache(): void {
 }
 
 /* =======================================================================
- *  Tiers + shard selection
+ *  Shard selection
  * =======================================================================
  */
 
-function tierBounds(tier: TierId): { min: number; max: number } {
-  if (tier === 'all') return { min: 0, max: Infinity };
-  let lower = 0;
-  for (const t of PUZZLE_TIERS) {
-    const upper = t.maxExclusive ?? Infinity;
-    if (t.id === tier) return { min: lower, max: upper };
-    lower = upper;
-  }
-  return { min: 0, max: Infinity };
-}
-
-/** Inclusive rating range actually present in a tier's shards, for UI
- *  labels. Derived from the manifest so a label can never claim a range
- *  the corpus doesn't hold. Returns null for an empty tier. */
-export function tierRatingRange(tier: TierId): { lo: number; hi: number } | null {
-  const shards = shardsForTier(tier);
-  if (shards.length === 0) return null;
-  let lo = Infinity;
-  let hi = -Infinity;
-  for (const s of shards) {
-    if (s.minRating < lo) lo = s.minRating;
-    if (s.maxRating > hi) hi = s.maxRating;
-  }
-  return { lo, hi };
-}
-
-export function tierPuzzleCount(tier: TierId): number {
-  return shardsForTier(tier).reduce((a, s) => a + s.rows, 0);
-}
-
-/**
- * Shards belonging to a tier, in ascending difficulty order.
- *
- * A shard is included when its rating span overlaps the tier at all. Band
- * width (100) is much narrower than any tier, and tier edges are multiples
- * of 100, so in practice shards don't straddle a boundary — the overlap
- * test is just belt-and-braces against a future tier edge that isn't
- * band-aligned.
- */
-export function shardsForTier(tier: TierId): PuzzleShardMeta[] {
-  const { min, max } = tierBounds(tier);
-  return PUZZLE_SHARDS.filter((s) => s.maxRating >= min && s.minRating < max).slice();
-}
-
-/** Shards overlapping an explicit rating window, ascending. Used by the
- *  Recommended queue, which targets a band around the user's strength
- *  rather than a fixed tier. */
+/** Shards overlapping an explicit rating window, ascending. */
 export function shardsForRatingWindow(lo: number, hi: number): PuzzleShardMeta[] {
   return PUZZLE_SHARDS.filter((s) => s.maxRating >= lo && s.minRating <= hi).slice();
-}
-
-export function bandRatingRange(band: number): { lo: number; hi: number } {
-  const lo = RATING_MIN + band * BAND_WIDTH;
-  return { lo, hi: lo + BAND_WIDTH - 1 };
-}
-
-export function tierForRating(rating: number): Exclude<TierId, 'all'> {
-  for (const t of PUZZLE_TIERS) {
-    if (rating < (t.maxExclusive ?? Infinity)) return t.id as Exclude<TierId, 'all'>;
-  }
-  return 'hard';
 }

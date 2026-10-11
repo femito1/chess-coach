@@ -304,9 +304,24 @@ describe('recommendationPlan', () => {
     expect(plan.motifs).toEqual([]);
     expect(plan.allocation).toEqual([]);
     expect(plan.themes).toEqual([]);
-    // The caller falls back to a tier, but the window must still be sane.
+    // The caller falls back to mixed puzzles, but the window must still be sane.
     expect(plan.ratingLo).toBe(1700 - RATING_WINDOW);
     expect(plan.ratingHi).toBe(1700 + RATING_WINDOW);
+  });
+
+  it('honours a narrower halfWindow', () => {
+    // An established puzzle rating is a confident centre, so the page asks
+    // for a tighter window than the games-derived fallback.
+    const plan = recommendationPlan({
+      rows: many,
+      now: NOW,
+      userRating: 1500,
+      queueLength: 10,
+      halfWindow: 80,
+    });
+    expect(plan.ratingLo).toBe(1420);
+    expect(plan.ratingHi).toBe(1580);
+    expect(ratingWindowFor(1500, 80)).toEqual({ lo: 1420, hi: 1580 });
   });
 
   it('never allocates a negative or fractional count', () => {

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { Analysis, AnalysisStatus, PuzzleAttempt } from '@/db/schema';
+import type {
+  Analysis,
+  AnalysisStatus,
+  PuzzleAttempt,
+  PuzzleAttemptEvent,
+} from '@/db/schema';
 import {
+  MAX_ATTEMPT_HISTORY,
   attemptDiffers,
   chunk,
   diffAnalyses,
@@ -452,6 +458,80 @@ describe('mergeAttempt', () => {
     expect(mergeAttempt(once, b)).toEqual(once);
     expect(mergeAttempt(once, a)).toEqual(once);
   });
+
+  describe('history and content', () => {
+    const ev = (at: number, outcome: PuzzleAttemptEvent['outcome'] = 'clean') => ({
+      at,
+      outcome,
+    });
+
+    it('unions histories, keeping the shared attempt once, in time order', () => {
+      // Both devices hold the attempt made before the last sync (t=100);
+      // each then attempted once more on its own.
+      const phone = attempt({ attempts: 2, history: [ev(100, 'mistake'), ev(300)] });
+      const laptop = attempt({ attempts: 2, history: [ev(100, 'mistake'), ev(200, 'hint')] });
+      const merged = mergeAttempt(phone, laptop);
+      expect(merged.history).toEqual([ev(100, 'mistake'), ev(200, 'hint'), ev(300)]);
+      // `attempts` can't lag the history it summarises.
+      expect(merged.attempts).toBe(3);
+    });
+
+    it('caps history to the newest MAX_ATTEMPT_HISTORY', () => {
+      const a = attempt({
+        attempts: MAX_ATTEMPT_HISTORY,
+        history: Array.from({ length: MAX_ATTEMPT_HISTORY }, (_, i) => ev(i * 2)),
+      });
+      const b = attempt({
+        attempts: MAX_ATTEMPT_HISTORY,
+        history: Array.from({ length: MAX_ATTEMPT_HISTORY }, (_, i) => ev(i * 2 + 1)),
+      });
+      const merged = mergeAttempt(a, b);
+      expect(merged.history).toHaveLength(MAX_ATTEMPT_HISTORY);
+      const total = 2 * MAX_ATTEMPT_HISTORY;
+      expect(merged.history!.map((e) => e.at)).toEqual(
+        Array.from({ length: MAX_ATTEMPT_HISTORY }, (_, i) => total - MAX_ATTEMPT_HISTORY + i),
+      );
+      expect(merged.attempts).toBeGreaterThanOrEqual(merged.history!.length);
+    });
+
+    it('keeps history from a side when the other is a legacy row', () => {
+      const legacy = attempt({ attempts: 4 });
+      const recorded = attempt({ attempts: 1, history: [ev(100)] });
+      const merged = mergeAttempt(legacy, recorded);
+      expect(merged.history).toEqual([ev(100)]);
+      expect(merged.attempts).toBe(4);
+      expect(mergeAttempt(attempt(), attempt()).history).toBeUndefined();
+    });
+
+    it('keeps puzzle content that only one side has', () => {
+      const content = { fen: '8/8/8/8/8/8/8/K6k w - - 0 1', solution: ['a1a2'], themes: ['fork'] };
+      // The newer row lacks content (a legacy row touched on another device);
+      // content is immutable, so the older side's copy must survive.
+      const old = attempt({ lastAttemptedAt: 1_000, ...content });
+      const fresh = attempt({ lastAttemptedAt: 9_000 });
+      for (const merged of [mergeAttempt(old, fresh), mergeAttempt(fresh, old)]) {
+        expect(merged.fen).toBe(content.fen);
+        expect(merged.solution).toEqual(content.solution);
+        expect(merged.themes).toEqual(content.themes);
+      }
+    });
+
+    it('is commutative and idempotent including history and content', () => {
+      const a = attempt({
+        attempts: 2,
+        lastAttemptedAt: 500,
+        history: [ev(100, 'mistake'), ev(500)],
+        fen: '8/8/8/8/8/8/8/K6k w - - 0 1',
+        solution: ['a1a2'],
+        themes: ['pin'],
+      });
+      const b = attempt({ attempts: 3, lastAttemptedAt: 900, history: [ev(100, 'mistake'), ev(700, 'hint'), ev(900)] });
+      const ab = mergeAttempt(a, b);
+      expect(ab).toEqual(mergeAttempt(b, a));
+      expect(mergeAttempt(ab, a)).toEqual(ab);
+      expect(mergeAttempt(ab, b)).toEqual(ab);
+    });
+  });
 });
 
 describe('attemptDiffers', () => {
@@ -469,6 +549,17 @@ describe('attemptDiffers', () => {
     expect(attemptDiffers(base, { ...base, lastAttemptedAt: 1 })).toBe(true);
     expect(attemptDiffers(base, { ...base, rating: 1 })).toBe(true);
     expect(attemptDiffers(base, { ...base, msTaken: 1 })).toBe(true);
+  });
+
+  it('notices a change in only the history or the content', () => {
+    const base = attempt({ history: [{ at: 1_000, outcome: 'mistake' }] });
+    expect(
+      attemptDiffers(base, { ...base, history: [...base.history!, { at: 2_000, outcome: 'clean' }] }),
+    ).toBe(true);
+    expect(attemptDiffers(base, { ...base, history: [{ at: 1_000, outcome: 'hint' }] })).toBe(true);
+    expect(attemptDiffers(base, { ...base, fen: '8/8/8/8/8/8/8/K6k w - - 0 1' })).toBe(true);
+    // A structurally equal copy is not a change.
+    expect(attemptDiffers(base, { ...base, history: [{ at: 1_000, outcome: 'mistake' }] })).toBe(false);
   });
 });
 

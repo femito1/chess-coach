@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   PUZZLE_SHARDS,
   PUZZLE_THEMES,
-  PUZZLE_TIERS,
   PUZZLE_TOTAL,
   RATING_MIN,
   RATING_MAX,
@@ -11,10 +10,6 @@ import {
   decodeThemeCodes,
   parseShard,
   shardsForRatingWindow,
-  shardsForTier,
-  tierForRating,
-  tierPuzzleCount,
-  tierRatingRange,
 } from './corpus';
 
 /** Encode theme indices the way build-puzzles.mjs does: fixed-width 2-char
@@ -118,48 +113,6 @@ describe('shard manifest coherence', () => {
   it('gives every shard a distinct (band, n)', () => {
     const keys = PUZZLE_SHARDS.map((s) => `${s.band}-${s.n}`);
     expect(new Set(keys).size).toBe(keys.length);
-  });
-});
-
-describe('tiers', () => {
-  it('partitions the corpus with no gaps or overlaps', () => {
-    const perTier = (['easy', 'medium', 'hard'] as const).map(tierPuzzleCount);
-    expect(perTier.reduce((a, b) => a + b, 0)).toBe(PUZZLE_TOTAL);
-  });
-
-  it('`all` covers everything', () => {
-    expect(tierPuzzleCount('all')).toBe(PUZZLE_TOTAL);
-    expect(shardsForTier('all').length).toBe(PUZZLE_SHARDS.length);
-  });
-
-  it('every tier has usable inventory', () => {
-    // A tab that loads nothing is worse than no tab; if a future tier edge
-    // or per-band cap starves one, fail here rather than in the UI.
-    for (const tier of ['easy', 'medium', 'hard'] as const) {
-      expect(tierPuzzleCount(tier), `tier ${tier} is empty`).toBeGreaterThan(1000);
-    }
-  });
-
-  it('reports a rating range consistent with its shards', () => {
-    for (const tier of ['easy', 'medium', 'hard'] as const) {
-      const range = tierRatingRange(tier)!;
-      expect(range).not.toBeNull();
-      expect(range.lo).toBeLessThanOrEqual(range.hi);
-      for (const s of shardsForTier(tier)) {
-        expect(s.minRating).toBeGreaterThanOrEqual(range.lo);
-        expect(s.maxRating).toBeLessThanOrEqual(range.hi);
-      }
-    }
-  });
-
-  it('assigns a rating to the tier whose bound contains it', () => {
-    const easyMax = PUZZLE_TIERS[0].maxExclusive!;
-    const mediumMax = PUZZLE_TIERS[1].maxExclusive!;
-    expect(tierForRating(easyMax - 1)).toBe('easy');
-    expect(tierForRating(easyMax)).toBe('medium');
-    expect(tierForRating(mediumMax - 1)).toBe('medium');
-    expect(tierForRating(mediumMax)).toBe('hard');
-    expect(tierForRating(9999)).toBe('hard');
   });
 });
 

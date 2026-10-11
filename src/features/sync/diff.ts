@@ -1,4 +1,10 @@
-import type { Analysis, AnalysisStatus, Game, PuzzleAttempt } from '@/db/schema';
+import type {
+  Analysis,
+  AnalysisStatus,
+  Game,
+  PuzzleAttempt,
+  PuzzleAttemptEvent,
+} from '@/db/schema';
 
 /**
  * Pure reconciliation logic for cloud sync.
@@ -329,12 +335,22 @@ function isBetter(
  *   firstSeenAt     min      — earliest sighting anywhere
  *   lastAttemptedAt max      — latest activity anywhere
  *   msTaken, rating          — taken from whichever row is more recent
+ *   history         union    — keyed by timestamp, so the attempt both rows
+ *                              share appears once; sorted, capped to the
+ *                              newest `MAX_ATTEMPT_HISTORY`
+ *   fen/solution/themes      — immutable puzzle content: whichever side has it
  *
  * `max` for `attempts` rather than a sum: a sum would double-count the attempt
  * that produced both rows, and would keep inflating on every sync (not
  * idempotent). Max under-counts when two devices each attempt independently,
  * which is the safer error for a number only used to display history.
  */
+/** Attempts kept per puzzle. Lives here rather than in the schema because
+ *  this module is shared with the Node worker and must not pull in Dexie;
+ *  `recordAttempt` caps with the same constant. A puzzle tried 25 times
+ *  has told you everything a 26th entry would. */
+export const MAX_ATTEMPT_HISTORY = 25;
+
 export function mergeAttempt(
   local: PuzzleAttempt,
   remote: PuzzleAttempt,
@@ -351,7 +367,42 @@ export function mergeAttempt(
   };
   const ms = newer.msTaken ?? local.msTaken ?? remote.msTaken;
   if (ms !== undefined) merged.msTaken = ms;
+
+  if (local.history || remote.history) {
+    const byKey = new Map<string, PuzzleAttemptEvent>();
+    for (const e of [...(local.history ?? []), ...(remote.history ?? [])]) {
+      const key = `${e.at}:${e.outcome}`;
+      const prior = byKey.get(key);
+      byKey.set(key, prior ? mergeEvent(prior, e) : e);
+    }
+    merged.history = [...byKey.values()]
+      .sort((a, b) => a.at - b.at || (a.outcome < b.outcome ? -1 : 1))
+      .slice(-MAX_ATTEMPT_HISTORY);
+    merged.attempts = Math.max(merged.attempts, merged.history.length);
+  }
+  const content = newer.fen ? newer : local.fen ? local : remote;
+  if (content.fen) {
+    merged.fen = content.fen;
+    if (content.solution) merged.solution = content.solution;
+    if (content.themes) merged.themes = content.themes;
+  }
   return merged;
+}
+
+/** Two copies of one event. Field-wise and order-free, so the merge stays
+ *  commutative: a defined field beats a missing one, and two defined values
+ *  (which should not differ for the same attempt) resolve by max. */
+function mergeEvent(a: PuzzleAttemptEvent, b: PuzzleAttemptEvent): PuzzleAttemptEvent {
+  const out: PuzzleAttemptEvent = { at: a.at, outcome: a.outcome };
+  for (const k of ['ms', 'good', 'bad'] as const) {
+    const v = a[k] === undefined ? b[k] : b[k] === undefined ? a[k] : Math.max(a[k]!, b[k]!);
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+function historyKey(row: PuzzleAttempt): string {
+  return (row.history ?? []).map((e) => `${e.at}:${e.outcome}`).join(',');
 }
 
 /** True when a merge would change `row` — i.e. that side needs writing. */
@@ -363,7 +414,9 @@ export function attemptDiffers(row: PuzzleAttempt, merged: PuzzleAttempt): boole
     row.firstSeenAt !== merged.firstSeenAt ||
     row.lastAttemptedAt !== merged.lastAttemptedAt ||
     row.rating !== merged.rating ||
-    row.msTaken !== merged.msTaken
+    row.msTaken !== merged.msTaken ||
+    row.fen !== merged.fen ||
+    historyKey(row) !== historyKey(merged)
   );
 }
 

@@ -703,7 +703,7 @@ paths hardcoded relative to the repo root (no env vars):
 | knob | value | note |
 |---|---|---|
 | `PER_BAND_CAP` | 8000 | Capped **per 100-point rating band** (`BAND_WIDTH`), not globally. Lichess ratings cluster near 1500, so a global top-N starves Easy and Hard. |
-| `TIERS` | easy `<1300`, medium `<1900`, hard rest | `maxExclusive`; `Infinity` serializes as `null` in the manifest. |
+| `TIERS` | easy `<1300`, medium `<1900`, hard rest | **Vestigial.** Only the build's band report and the manifest's `PUZZLE_TIERS` use it; the page stopped serving tiers in 2026-10. Drop it next time the script is touched. |
 | `MIN_NB_PLAYS` / `MIN_POPULARITY` / `MAX_RATING_DEVIATION` | 100 / 85 / 90 | The quality gate. Loosen it and the corpus grows with worse puzzles. |
 | `SHARD_ROWS` | 4000 | Rows per shard. |
 
@@ -713,13 +713,61 @@ re-download from <https://database.lichess.org/lichess_db_puzzle.csv.zst>) and
 `public/puzzles/` that isn't the new one**, so commit the new shards and the
 regenerated manifest together.
 
-**Two UX rules that are product decisions, not accidents.** A puzzle's themes
-stay hidden until it is solved or revealed (`Rail` in
-`LibraryPuzzleSolver.tsx`) — the theme *is* the answer. And `solvedClean`, not
-"attempted", is what retires a puzzle from the queue.
+`npm run puzzles:build` then runs `scripts/build-puzzle-theme-index.mjs`, which
+reads the **shards** (not the CSV, so it can run alone) and writes
+`src/data/puzzleThemeCounts.generated.ts`: puzzles per theme per 100-point band.
+The theme picker shows those counts, and `windowForTheme` uses them to widen a
+rare theme's rating window up front rather than by fetching shards until one
+fills. `puzzleThemeCounts.test.ts` fails if its build id drifts from
+`PUZZLE_BUILD_ID` — the guard against refreshing the corpus without it.
 
-**Recommended** (`src/features/puzzles/recommend.ts`) scores the user's own
-mistake motifs — `buildMistakes` in `src/features/puzzles/mistakes.ts` — and
+**Three views.** *Train* serves new puzzles: a theme (mixed, one Lichess
+theme, or "From your games") at a difficulty **relative to the user's puzzle
+rating** — presets −400…+400, or an exact rating. *Review* brings back missed
+puzzles on a schedule. *Progress* is stats plus a grid of every puzzle done,
+each re-playable. This replaced five tabs of fixed tiers (400-1299, 1300-1899,
+1900+), each ~600 points wide.
+
+**Product rules, not accidents:**
+
+- A puzzle's themes stay hidden until it is solved or revealed (`Rail` in
+  `LibraryPuzzleSolver.tsx`) — the theme *is* the answer. (Picking a theme in
+  Train discloses that one theme, by the user's choice.)
+- **Any attempt, not only a clean solve, retires a puzzle from Train**
+  (`loadAttemptedIds`). Misses go to Review instead, so a fresh run is fresh
+  and the rating only ever sees first attempts.
+- Only `clean` (no wrong move, no hint, no reveal) counts as a win — for the
+  rating, for Review, and for first-try stats. A wrong move then Restart is
+  still a `mistake`: the solver tallies moves in refs that `restart()` does
+  not reset.
+
+**Puzzle rating** (`rating.ts`) is Glicko-1 replayed over each puzzle's
+**first** attempt, from 1500 / RD 350; puzzle RD is taken as 75 (the build
+keeps Lichess RD ≤ 90). RD floors at 60, regains ~8²/day idle, and reads as
+provisional above 110. It is derived at read time, never stored. A run's
+window is re-centred on the current rating every `TRAIN_BATCH` (10) puzzles —
+not per puzzle, because the run must not rebuild under the user.
+
+**Train window** (`windowForTheme`, `queue.ts`): ±60 around the target, widened
+through `TRAIN_HALF_WINDOWS` only until the per-band theme index says it holds
+`TRAIN_BATCH × 6`. Puzzles are drawn in a seeded shuffle, not ascending: inside
+±60 an easiest-first ladder would just mean always the same corner.
+
+**Review** (`stats.ts` § Review): miss → due in 20 h; first clean retry → 3 days;
+second → learned; any miss restarts. Two steps, not an open SM-2 ladder — fresh
+puzzles of the same pattern are always available, so the goal is to fix the
+miss, not keep one position alive for months.
+
+**Per-theme strengths** (`themeStats`) rank by *clean − expected*, where
+expected is the rating's pre-result prediction for each puzzle. Raw success
+rate would mostly rank themes by how hard their puzzles happened to be.
+`themeCatalog.ts` groups the 72 themes (tactics / mates / phases / length /
+other); `other` holds descriptors (`crushing`, `superGM`) and is excluded from
+ranking. `themeCatalog.test.ts` fails if a corpus refresh adds an ungrouped
+theme.
+
+**"From your games"** (`src/features/puzzles/recommend.ts`, the Recommended tab
+until 2026-10) scores the user's own mistake motifs — `buildMistakes` in `src/features/puzzles/mistakes.ts` — and
 fills a run of 20 from the corpus:
 
 | constant | value | meaning |
@@ -730,23 +778,31 @@ fills a run of 20 from the corpus:
 | `MAX_MOTIFS` | 5 | |
 | `RATING_WINDOW` / `RATING_SAMPLE_GAMES` | 250 / 20 | Window ±250 around the middle rating of the last 20 rated games (`DEFAULT_CENTER_RATING = 1400` if none carry one). |
 
-Lichess puzzle Glicko is not Chess.com game Elo, so that centring is a
-heuristic — which is why the manual tier tabs exist alongside Recommended.
+Lichess puzzle Glicko is not Chess.com game Elo, so that centring is only the
+fallback: once the puzzle rating is established (not provisional), the plan
+centres on it plus the difficulty offset, ±150 — captured when the run starts,
+for the same don't-rebuild-mid-run reason.
 
 **`motifThemes.ts` maps our `Motif` union to Lichess theme strings, and
 `motifThemes.test.ts` fails if any mapped theme is absent from
 `PUZZLE_THEMES`.** That vocabulary is derived from the surviving rows of the
 last build, so this test is the guard for a corpus refresh: if Lichess renames a
-theme, it goes red instead of Recommended silently returning nothing. The same
+theme, it goes red instead of "From your games" silently returning nothing. The same
 test forbids mapping onto descriptor themes (`short`, `crushing`, `master`,
 `middlegame`, …), which describe the puzzle rather than the tactic.
 
-`puzzleAttempts` deliberately stores **raw attempt facts**
-(`attempts`, `solvedClean`, `hintUsed`, `firstSeenAt`, `lastAttemptedAt`,
-`msTaken`, `rating`) and not an SM-2 schedule, so spaced repetition can be
-layered on later without a migration. `solvedClean` is deliberately **not**
-indexed: IndexedDB cannot key on a boolean and Dexie *silently skips* such rows,
-so `attempts.ts` scans and filters in JS.
+`puzzleAttempts` deliberately stores **raw attempt facts**, and the rating,
+Review schedule and stats are all derived from them at read time, so any of
+those can be retuned with no migration. Since 2026-10 each row also carries
+`history` (one `{at, outcome, ms, good, bad}` per attempt, capped at
+`MAX_ATTEMPT_HISTORY` = 25 in `sync/diff.ts`) and a snapshot of its puzzle
+(`fen`, `solution`, `themes`, ~200 bytes) so the history grid and Review need no
+shard. All of it lives in the synced `data` jsonb, so it needed **no DDL**.
+Older rows have neither: `eventsOf` reconstructs only what their aggregates
+prove (first attempt always; last attempt when `solvedClean` after 2+), and
+`backfillAttemptContent` fetches their content once when Progress opens.
+`solvedClean` is deliberately **not** indexed: IndexedDB cannot key on a boolean
+and Dexie *silently skips* such rows, so `attempts.ts` scans and filters in JS.
 
 ## Openings
 
@@ -1062,7 +1118,7 @@ Conflict rules, all in `diff.ts`:
 |---|---|
 | analyses | `isBetter`: **NNUE beats classical above depth**, then deeper, then newer. A classical search at depth 20 is a weaker judge searching further, not a better analysis — ranking depth first would let a laptop's classical re-analysis overwrite the server's NNUE work. |
 | games | Whichever side is analyzed wins, **except** that a local `pending`/`running` is left alone. |
-| puzzle attempts | Field-by-field merge: max `attempts`, OR the sticky `solvedClean`/`hintUsed`, min `firstSeenAt`, max `lastAttemptedAt`, and `rating`/`msTaken` from the more recent side. |
+| puzzle attempts | Field-by-field merge: max `attempts`, OR the sticky `solvedClean`/`hintUsed`, min `firstSeenAt`, max `lastAttemptedAt`, `rating`/`msTaken` from the more recent side, `history` unioned by `at`+`outcome` (copies of one event merged field-wise, so it stays commutative), content from whichever side has it. |
 
 Attempts are the only genuinely concurrent table, and their merge is
 **commutative and idempotent** (both pinned in `diff.test.ts`) so two devices

@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { PuzzleShardMeta } from '@/data/puzzles.meta.generated';
+import {
+  RATING_MAX,
+  RATING_MIN,
+  type PuzzleShardMeta,
+} from '@/data/puzzles.meta.generated';
 import type { LibraryPuzzle } from './corpus';
 import {
-  START_CURSOR,
+  TRAIN_HALF_WINDOWS,
   buildRecommendedQueue,
+  buildTrainQueue,
   interleave,
   seededShuffle,
-  takeTierPuzzles,
+  windowForTheme,
 } from './queue';
 import type { RecommendationPlan } from './recommend';
+import { themeCountInWindow } from './themeCatalog';
 
 /* ---------- synthetic corpus -------------------------------------------- */
 
@@ -56,106 +62,102 @@ function loaderSpy() {
 
 const none = () => false;
 
-/* ---------- tier ladder ------------------------------------------------- */
+/* ---------- train queue ------------------------------------------------ */
 
-describe('takeTierPuzzles', () => {
-  it('serves in ascending rating order across shards', async () => {
-    const { load } = loaderSpy();
-    const res = await takeTierPuzzles({
-      shards: SHARDS,
-      cursor: START_CURSOR,
-      count: 6,
+describe('buildTrainQueue', () => {
+  const train = (over: Partial<Parameters<typeof buildTrainQueue>[0]> = {}) => {
+    const spy = loaderSpy();
+    const got = buildTrainQueue({
+      lo: 0,
+      hi: 9999,
+      theme: null,
+      count: 99,
       isExcluded: none,
-      load,
+      seed: 1,
+      shards: SHARDS,
+      load: spy.load,
+      ...over,
     });
-    expect(res.puzzles.map((p) => p.id)).toEqual(['a1', 'a2', 'a3', 'a4', 'b1', 'b2']);
-    expect(res.exhausted).toBe(false);
+    return { got, calls: spy.calls };
+  };
+
+  it('only returns puzzles inside the window', async () => {
+    const got = await train({ lo: 420, hi: 610 }).got;
+    expect(got.map((p) => p.id).sort()).toEqual(
+      ['a3', 'a4', 'b1', 'b2', 'b3', 'b4', 'c1', 'c2'].sort(),
+    );
   });
 
-  it('only loads the shards it needs', async () => {
-    const { load, calls } = loaderSpy();
-    await takeTierPuzzles({
-      shards: SHARDS,
-      cursor: START_CURSOR,
-      count: 3,
-      isExcluded: none,
-      load,
-    });
-    // Three puzzles all live in the first shard — the other two must not be
-    // fetched. This is what keeps a tab from pulling megabytes it won't show.
-    expect(calls).toEqual(['0-0']);
-  });
-
-  it('resumes from the returned cursor without repeating', async () => {
-    const { load } = loaderSpy();
-    const first = await takeTierPuzzles({
-      shards: SHARDS,
-      cursor: START_CURSOR,
-      count: 3,
-      isExcluded: none,
-      load,
-    });
-    const second = await takeTierPuzzles({
-      shards: SHARDS,
-      cursor: first.cursor,
-      count: 3,
-      isExcluded: none,
-      load,
-    });
-    expect(first.puzzles.map((p) => p.id)).toEqual(['a1', 'a2', 'a3']);
-    expect(second.puzzles.map((p) => p.id)).toEqual(['a4', 'b1', 'b2']);
+  it('honours the theme filter', async () => {
+    const got = await train({ theme: 'fork' }).got;
+    expect(got.map((p) => p.id).sort()).toEqual(['a1', 'a3', 'b1', 'b3', 'c1', 'c4']);
   });
 
   it('skips excluded puzzles', async () => {
-    const { load } = loaderSpy();
-    const solved = new Set(['a1', 'a3', 'b1']);
-    const res = await takeTierPuzzles({
-      shards: SHARDS,
-      cursor: START_CURSOR,
-      count: 4,
-      isExcluded: (id) => solved.has(id),
-      load,
-    });
-    expect(res.puzzles.map((p) => p.id)).toEqual(['a2', 'a4', 'b2', 'b3']);
+    const got = await train({ isExcluded: (id) => id.startsWith('b') }).got;
+    expect(got).toHaveLength(8);
+    for (const p of got) expect(p.id.startsWith('b')).toBe(false);
   });
 
-  it('reports exhausted when the shards run dry', async () => {
-    const { load } = loaderSpy();
-    const res = await takeTierPuzzles({
-      shards: SHARDS,
-      cursor: START_CURSOR,
-      count: 99,
-      isExcluded: none,
-      load,
-    });
-    expect(res.puzzles).toHaveLength(12);
-    expect(res.exhausted).toBe(true);
+  it('never returns more than count', async () => {
+    for (const count of [0, 1, 3, 5]) {
+      expect(await train({ count }).got).toHaveLength(count);
+    }
   });
 
-  it('reports exhausted when everything is already solved', async () => {
-    const { load } = loaderSpy();
-    const res = await takeTierPuzzles({
-      shards: SHARDS,
-      cursor: START_CURSOR,
-      count: 5,
-      isExcluded: () => true,
-      load,
-    });
-    expect(res.puzzles).toEqual([]);
-    expect(res.exhausted).toBe(true);
+  it('is reproducible for a given seed', async () => {
+    const ids = async (seed: number) => (await train({ seed, count: 5 }).got).map((p) => p.id);
+    expect(await ids(42)).toEqual(await ids(42));
   });
 
-  it('handles an empty shard list', async () => {
-    const { load } = loaderSpy();
-    const res = await takeTierPuzzles({
-      shards: [],
-      cursor: START_CURSOR,
-      count: 5,
-      isExcluded: none,
-      load,
+  it('stops loading shards once the pool is filled', async () => {
+    // Any one shard holds 4 in-window puzzles, so 3 needs exactly one fetch
+    // — the common case, and what keeps a run from pulling ~400 KB per shard
+    // it won't show.
+    const { got, calls } = train({ count: 3 });
+    expect(await got).toHaveLength(3);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('never loads a shard outside the window', async () => {
+    const { got, calls } = train({ lo: 500, hi: 530 });
+    expect((await got).map((p) => p.id).sort()).toEqual(['b1', 'b2', 'b3', 'b4']);
+    expect(calls).toEqual(['1-0']);
+  });
+});
+
+describe('windowForTheme', () => {
+  it('keeps mixed puzzles at the narrowest window', () => {
+    const w = windowForTheme({ center: 1500, theme: null, want: 200 });
+    expect(w).toEqual({
+      lo: 1500 - TRAIN_HALF_WINDOWS[0],
+      hi: 1500 + TRAIN_HALF_WINDOWS[0],
+      widened: false,
     });
-    expect(res.puzzles).toEqual([]);
-    expect(res.exhausted).toBe(true);
+  });
+
+  it('widens for a rare theme until the window holds enough', () => {
+    const want = 50;
+    // Precondition, so the test can't pass vacuously if the corpus changes.
+    expect(themeCountInWindow('smotheredMate', 1740, 1860)).toBeLessThan(want);
+    const w = windowForTheme({ center: 1800, theme: 'smotheredMate', want });
+    expect(w.widened).toBe(true);
+    expect(w.hi - w.lo).toBeGreaterThan(2 * TRAIN_HALF_WINDOWS[0]);
+    expect(themeCountInWindow('smotheredMate', w.lo, w.hi)).toBeGreaterThanOrEqual(want);
+  });
+
+  it('clamps the centre into the corpus range', () => {
+    const low = windowForTheme({ center: 0, theme: null, want: 1 });
+    expect(low.lo).toBe(RATING_MIN);
+    expect(low.hi).toBe(RATING_MIN + TRAIN_HALF_WINDOWS[0]);
+    const high = windowForTheme({ center: 9999, theme: null, want: 1 });
+    expect(high.hi).toBe(RATING_MAX);
+    expect(high.lo).toBe(RATING_MAX - TRAIN_HALF_WINDOWS[0]);
+  });
+
+  it('reports widened when even the widest window falls short', () => {
+    const w = windowForTheme({ center: 1500, theme: 'notATheme', want: 1 });
+    expect(w.widened).toBe(true);
   });
 });
 

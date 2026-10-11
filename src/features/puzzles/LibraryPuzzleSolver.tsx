@@ -8,6 +8,7 @@ import { SolutionControls } from '@/components/SolutionControls';
 import { useLiveEval } from '@/features/review/LiveEval';
 import { PUZZLE_REPLY_DELAY_MS, sampleDelay } from '@/lib/humanTiming';
 import { applyPuzzleMove } from './solve';
+import type { PuzzleOutcome } from '@/db/schema';
 import type { LibraryPuzzle } from './corpus';
 import { formatThemeName } from './themeLabels';
 
@@ -35,13 +36,21 @@ import { formatThemeName } from './themeLabels';
  */
 
 export interface SolveOutcome {
-  puzzleId: string;
-  rating: number;
-  /** First try, no hint, no reveal. */
-  clean: boolean;
-  hintUsed: boolean;
-  revealed: boolean;
+  puzzle: LibraryPuzzle;
+  /** `clean` = no wrong move, no hint, no reveal. */
+  outcome: PuzzleOutcome;
+  /** Correct / wrong solver moves over the whole attempt, restarts included. */
+  good: number;
+  bad: number;
   msTaken: number;
+}
+
+/** What the rail shows about the run in progress. */
+export interface SessionInfo {
+  /** Outcomes so far this session, oldest first. */
+  results: PuzzleOutcome[];
+  /** Position label when the run has a fixed length ("3 / 8" in Review). */
+  position?: string;
 }
 
 /**
@@ -50,10 +59,9 @@ export interface SolveOutcome {
  *
  * The board is sized off `100vh - clamp`, so this has to cover everything
  * above and below it or the board runs off the bottom of the screen and takes
- * the status row with it. Measured at 1440x900:
- *
- *   above:  header 48 + page title 50 + tab bar 52 + gaps ~24   = ~174
- *   below:  status row 28 + session note 20 + page padding 48    = ~96
+ * the status row with it. Re-measured at 1440x900 for the 2026-10 layout
+ * (view tabs + Train bar in place of the old tab bar): board top at 261 px,
+ * status row ending at ~875 — inside the fold with 280.
  *
  * The old solver passed 220, which was right for a page with no tab bar; with
  * one, the board overflowed by ~70 px and pushed the whole action row under
@@ -61,25 +69,30 @@ export interface SolveOutcome {
  */
 export const BOARD_CLAMP_PX = 280;
 
-/** Extra reserve when the Recommended summary card sits above the board. */
-export const BOARD_CLAMP_WITH_SUMMARY_PX = 390;
+/** Extra reserve when the one-line "From your games" summary sits between the
+ *  Train bar and the board. */
+export const BOARD_CLAMP_WITH_SUMMARY_PX = 310;
 
 export function LibraryPuzzleSolver({
   puzzle,
-  index,
-  total,
-  streak,
+  session,
+  ratingChange,
+  unratedNote,
   sessionNote,
   boardClampPx = BOARD_CLAMP_PX,
   onDone,
   onNext,
   hasNext,
+  nextLabel,
 }: {
   puzzle: LibraryPuzzle;
-  /** 1-based position in the current run, for the progress strip. */
-  index: number;
-  total: number;
-  streak: number;
+  session: SessionInfo;
+  /** The user's puzzle rating before → after this puzzle, once recorded.
+   *  Absent while solving, and for attempts that don't count (retries). */
+  ratingChange?: { from: number; to: number };
+  /** Shown after finishing when the attempt didn't count toward the rating
+   *  — a retry from Review or the history grid. */
+  unratedNote?: string;
   /** Session-level context line, e.g. what Recommended matched on. Shown
    *  once under the board — never per-puzzle theme info. */
   sessionNote?: string;
@@ -88,6 +101,8 @@ export function LibraryPuzzleSolver({
   onDone: (outcome: SolveOutcome) => void;
   onNext: () => void;
   hasNext: boolean;
+  /** Overrides the "Next puzzle" label, e.g. "Finish review". */
+  nextLabel?: string;
 }) {
   const { t } = useTranslation();
   const [fen, setFen] = useState(puzzle.fen);
@@ -103,6 +118,13 @@ export function LibraryPuzzleSolver({
   const replyTimerRef = useRef<number | null>(null);
   const [awaitingReply, setAwaitingReply] = useState(false);
   const startedAtRef = useRef<number>(Date.now());
+  /** Move tallies for the whole attempt. Refs, not state, because the
+   *  reply timer reads them from a stale closure — and deliberately NOT
+   *  reset by `restart()`: restarting after a wrong move must not launder
+   *  the attempt into a clean solve. (It used to: `clean` was computed
+   *  from the per-try counter `restart()` zeroes.) */
+  const goodRef = useRef(0);
+  const badRef = useRef(0);
   /** Guards against double-reporting the same puzzle — the two-phase
    *  reply timer means `solved` can be reached from a callback, and a
    *  reveal after a solve must not re-report. */
@@ -134,6 +156,8 @@ export function LibraryPuzzleSolver({
     setMistakeMade(false);
     setPlaybackIdx(0);
     startedAtRef.current = Date.now();
+    goodRef.current = 0;
+    badRef.current = 0;
     reportedRef.current = false;
   }, [puzzle.id]);
 
@@ -155,22 +179,24 @@ export function LibraryPuzzleSolver({
 
   const liveEval = useLiveEval(boardFen, 12);
 
-  /** Report the outcome exactly once per puzzle. `wrongAttempts` and
-   *  `usedHint` are passed explicitly because callers may fire from inside
-   *  a `setTimeout` closure where the state values are stale. */
-  function report(opts: {
-    clean: boolean;
-    hintUsed: boolean;
-    revealed: boolean;
-  }) {
+  /** Report the outcome exactly once per puzzle. `usedHint` is passed
+   *  explicitly because callers may fire from inside a `setTimeout`
+   *  closure where the state value is stale; the move tallies are refs. */
+  function report(opts: { usedHint: boolean; revealed: boolean }) {
     if (reportedRef.current) return;
     reportedRef.current = true;
+    const outcome: PuzzleOutcome = opts.revealed
+      ? 'revealed'
+      : opts.usedHint
+        ? 'hint'
+        : badRef.current > 0
+          ? 'mistake'
+          : 'clean';
     onDone({
-      puzzleId: puzzle.id,
-      rating: puzzle.rating,
-      clean: opts.clean,
-      hintUsed: opts.hintUsed,
-      revealed: opts.revealed,
+      puzzle,
+      outcome,
+      good: goodRef.current,
+      bad: badRef.current,
       msTaken: Date.now() - startedAtRef.current,
     });
   }
@@ -187,11 +213,13 @@ export function LibraryPuzzleSolver({
     });
     if (result.kind === 'rejected') {
       if (result.reason === 'no-expected') return false;
+      badRef.current++;
       setAttempts((n) => n + 1);
       setMistakeMade(true);
       return false;
     }
 
+    goodRef.current++;
     if (result.userOnly) {
       setFen(result.userOnly.fen);
       setLastUci(result.userOnly.lastUci);
@@ -202,9 +230,8 @@ export function LibraryPuzzleSolver({
       const finalUci = result.lastUci;
       const finalIdx = result.nextSolvedIdx;
       const finalSolved = result.solved;
-      // Snapshot the cleanliness inputs now — by the time the timer fires,
-      // reading `attempts`/`hintUsed` would close over stale values.
-      const cleanAtCommit = attempts === 0 && !hintUsed;
+      // Snapshot now — by the time the timer fires, reading `hintUsed`
+      // would close over a stale value.
       const hintAtCommit = hintUsed;
       replyTimerRef.current = window.setTimeout(() => {
         replyTimerRef.current = null;
@@ -214,7 +241,7 @@ export function LibraryPuzzleSolver({
         setAwaitingReply(false);
         if (finalSolved) {
           setStatus('solved');
-          report({ clean: cleanAtCommit, hintUsed: hintAtCommit, revealed: false });
+          report({ usedHint: hintAtCommit, revealed: false });
         }
       }, delay);
       return true;
@@ -225,7 +252,7 @@ export function LibraryPuzzleSolver({
     setSolvedIdx(result.nextSolvedIdx);
     if (result.solved) {
       setStatus('solved');
-      report({ clean: attempts === 0 && !hintUsed, hintUsed, revealed: false });
+      report({ usedHint: hintUsed, revealed: false });
     }
     return true;
   }
@@ -251,7 +278,7 @@ export function LibraryPuzzleSolver({
     setStatus('revealed');
     setHintShown(false);
     setPlaybackIdx(0);
-    report({ clean: false, hintUsed, revealed: true });
+    report({ usedHint: hintUsed, revealed: true });
   }
 
   const nextExpected = puzzle.solution[solvedIdx];
@@ -371,11 +398,11 @@ export function LibraryPuzzleSolver({
 
       <Rail
         puzzle={puzzle}
-        index={index}
-        total={total}
-        streak={streak}
+        session={session}
+        ratingChange={ratingChange}
+        unratedNote={unratedNote}
         status={status}
-        hintUsed={hintUsed}
+        missed={status === 'revealed' || hintUsed || mistakeMade}
         solutionSan={solutionSteps.slice(1).map((s) => s.san)}
         onReplay={() => {
           setShowSolution(true);
@@ -383,6 +410,7 @@ export function LibraryPuzzleSolver({
         }}
         onNext={onNext}
         hasNext={hasNext}
+        nextLabel={nextLabel}
       />
     </div>
   );
@@ -403,26 +431,29 @@ export function LibraryPuzzleSolver({
  */
 function Rail({
   puzzle,
-  index,
-  total,
-  streak,
+  session,
+  ratingChange,
+  unratedNote,
   status,
-  hintUsed,
+  missed,
   solutionSan,
   onReplay,
   onNext,
   hasNext,
+  nextLabel,
 }: {
   puzzle: LibraryPuzzle;
-  index: number;
-  total: number;
-  streak: number;
+  session: SessionInfo;
+  ratingChange?: { from: number; to: number };
+  unratedNote?: string;
   status: 'solving' | 'revealed' | 'solved';
-  hintUsed: boolean;
+  /** Not clean — so the puzzle is headed for Review. */
+  missed: boolean;
   solutionSan: string[];
   onReplay: () => void;
   onNext: () => void;
   hasNext: boolean;
+  nextLabel?: string;
 }) {
   const { t } = useTranslation();
   const finished = status === 'solved' || status === 'revealed';
@@ -444,11 +475,15 @@ function Rail({
           </div>
         </div>
 
-        <ProgressStrip index={index} total={total} streak={streak} />
+        <SessionStrip session={session} />
       </div>
 
       {finished && (
         <div className="card p-3 space-y-3 text-sm">
+          {ratingChange && <RatingChange {...ratingChange} />}
+          {!ratingChange && unratedNote && (
+            <p className="text-[11px] text-text-muted">{unratedNote}</p>
+          )}
           <div>
             <div className="text-xs uppercase tracking-wide text-text-muted mb-1.5">
               {t('puzzles.themesRevealed')}
@@ -493,13 +528,8 @@ function Rail({
             </a>
           </div>
 
-          {status === 'solved' && hintUsed && (
-            <p className="text-[11px] text-text-muted">
-              {t('puzzles.notRetiredHint')}
-            </p>
-          )}
-          {status === 'revealed' && (
-            <p className="text-[11px] text-text-muted">{t('puzzles.notRetiredRevealed')}</p>
+          {missed && (
+            <p className="text-[11px] text-text-muted">{t('puzzles.goesToReview')}</p>
           )}
 
           <button
@@ -509,7 +539,7 @@ function Rail({
             disabled={!hasNext}
             autoFocus
           >
-            {hasNext ? t('puzzles.next') : t('puzzles.runComplete')}
+            {nextLabel ?? (hasNext ? t('puzzles.next') : t('puzzles.runComplete'))}
           </button>
         </div>
       )}
@@ -517,45 +547,63 @@ function Rail({
   );
 }
 
-/** Dots for the current run plus the clean-solve streak. Caps the rendered
- *  dots so a long run doesn't wrap into a wall of circles. */
-function ProgressStrip({
-  index,
-  total,
-  streak,
-}: {
-  index: number;
-  total: number;
-  streak: number;
-}) {
+function RatingChange({ from, to }: { from: number; to: number }) {
   const { t } = useTranslation();
-  const MAX_DOTS = 12;
-  const shown = Math.min(total, MAX_DOTS);
-  // When the run is longer than the strip, slide the window so the current
-  // puzzle stays visible rather than pinning to the first 12.
-  const offset = Math.max(0, Math.min(index - Math.ceil(shown / 2), total - shown));
+  const delta = Math.round(to) - Math.round(from);
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="text-xs text-text-muted">{t('puzzles.yourRating')}</span>
+      <span className="tabular-nums">
+        <span className="font-medium">{Math.round(to)}</span>
+        <span
+          className={`ml-1.5 text-xs ${
+            delta > 0 ? 'text-good' : delta < 0 ? 'text-blunder' : 'text-text-muted'
+          }`}
+        >
+          {delta > 0 ? `+${delta}` : delta}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/** Dot colour per outcome. Shared with the history grid's badges. */
+export const OUTCOME_DOT: Record<PuzzleOutcome, string> = {
+  clean: 'bg-good',
+  mistake: 'bg-mistake',
+  hint: 'bg-inaccuracy',
+  revealed: 'bg-blunder',
+};
+
+/**
+ * This session's results as dots, plus a clean-solve count. Replaces a strip
+ * of "puzzle 3 of 20" dots: the run length was an implementation detail of
+ * how many puzzles one fetch returned, whereas how the session is going is
+ * the thing you actually glance at. Caps the dots so a long session doesn't
+ * wrap into a wall of circles.
+ */
+function SessionStrip({ session }: { session: SessionInfo }) {
+  const { t } = useTranslation();
+  const MAX_DOTS = 14;
+  const { results } = session;
+  const shown = results.slice(-MAX_DOTS);
+  const clean = results.filter((r) => r === 'clean').length;
+  let streak = 0;
+  for (let i = results.length - 1; i >= 0 && results[i] === 'clean'; i--) streak++;
 
   return (
     <div className="flex items-center justify-between gap-2">
-      <div className="flex items-center gap-1" aria-hidden>
-        {Array.from({ length: shown }, (_, i) => {
-          const pos = offset + i + 1;
-          return (
-            <span
-              key={pos}
-              className={`h-1.5 w-1.5 rounded-full ${
-                pos < index
-                  ? 'bg-good'
-                  : pos === index
-                    ? 'bg-accent ring-2 ring-accent/30'
-                    : 'bg-border'
-              }`}
-            />
-          );
-        })}
+      <div className="flex items-center gap-1 min-h-[6px]" aria-hidden>
+        {shown.map((r, i) => (
+          <span key={i} className={`h-1.5 w-1.5 rounded-full ${OUTCOME_DOT[r]}`} />
+        ))}
+        <span className="h-1.5 w-1.5 rounded-full bg-accent ring-2 ring-accent/30" />
       </div>
       <div className="text-xs text-text-muted tabular-nums whitespace-nowrap">
-        <span>{t('puzzles.progressOf', { index, total })}</span>
+        {session.position && <span className="mr-2">{session.position}</span>}
+        {results.length > 0 && (
+          <span>{t('puzzles.sessionScore', { clean, total: results.length })}</span>
+        )}
         {streak > 1 && <span className="ml-2 text-good">{t('puzzles.streak', { streak })}</span>}
       </div>
     </div>

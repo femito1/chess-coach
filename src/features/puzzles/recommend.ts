@@ -119,7 +119,7 @@ export function scoreMotifs(rows: readonly MistakeRow[], now: number): MotifScor
 
 export interface RecommendationPlan {
   /** Motifs to draw from, strongest first. Empty when there's not enough
-   *  history — the caller should fall back to a difficulty tier. */
+   *  history — the caller should fall back to mixed puzzles. */
   motifs: MotifScore[];
   /** Lichess themes to match, unioned across `motifs`. */
   themes: string[];
@@ -142,22 +142,26 @@ export interface RecommendationPlan {
  * it lands most users somewhere reasonable, and the width of the window
  * (±`RATING_WINDOW`) is doing more work than the centre.
  *
- * This is why the tier tabs exist alongside Recommended — a user who finds
- * the recommendations consistently too easy or too hard has a one-click
- * manual override, which is a better answer than us pretending to a
- * precision we don't have.
+ * So this centring is only the fallback. Once the user has an established
+ * *puzzle* rating (`rating.ts`), the page centres on that instead — same
+ * scale as the corpus — and passes a narrower `halfWindow`, because the
+ * centre is no longer a guess. Either way the difficulty control applies
+ * its offset on top.
  */
 export const RATING_WINDOW = 250;
 export const DEFAULT_CENTER_RATING = 1400;
 
-export function ratingWindowFor(userRating: number | undefined): {
+export function ratingWindowFor(
+  userRating: number | undefined,
+  halfWindow: number = RATING_WINDOW,
+): {
   lo: number;
   hi: number;
 } {
   const center = userRating && Number.isFinite(userRating)
     ? userRating
     : DEFAULT_CENTER_RATING;
-  return { lo: center - RATING_WINDOW, hi: center + RATING_WINDOW };
+  return { lo: center - halfWindow, hi: center + halfWindow };
 }
 
 /**
@@ -201,9 +205,11 @@ export function recommendationPlan(args: {
   now: number;
   userRating: number | undefined;
   queueLength: number;
+  /** Defaults to `RATING_WINDOW`. */
+  halfWindow?: number;
 }): RecommendationPlan {
   const { rows, now, userRating, queueLength } = args;
-  const { lo, hi } = ratingWindowFor(userRating);
+  const { lo, hi } = ratingWindowFor(userRating, args.halfWindow);
 
   const all = scoreMotifs(rows, now);
   const motifs = all.filter((m) => m.share >= MIN_SHARE).slice(0, MAX_MOTIFS);
