@@ -13,6 +13,14 @@
 //
 // Deterministic, unlike the CI flake: N writers are started together, each
 // patching a different field, so a lost update is not a timing accident here.
+//
+// The second scenario pins the same race in `getSettings` itself. On a fresh
+// database its default-row creation was a bare read-then-put, so the app's
+// first read at boot — still pending when writers ran — put the defaults back
+// over all of them (0 of 12 survived). Every browser test starts on a fresh
+// database, which made this test and `auto-analyze` fail on CI's slower
+// runners while passing locally. Here the boot read is staged on purpose:
+// delete the row, start a `getSettings()` without awaiting it, then write.
 
 import { runBrowserTest, expect, DEFAULT_URL, appendBypass } from '../harness.mjs';
 
@@ -25,7 +33,7 @@ await runBrowserTest({
     await page.waitForSelector('a[href="/puzzles"]', { timeout: 15_000 });
 
     const result = await page.evaluate(async () => {
-      const { updateSettings, getSettings } = await import('/src/db/schema.ts');
+      const { db, updateSettings, getSettings } = await import('/src/db/schema.ts');
       const N = 12;
       // Distinct fields per writer so every patch is independently checkable.
       // Unknown keys are fine — the row is schemaless to Dexie.
@@ -36,12 +44,32 @@ await runBrowserTest({
       );
       const s = await getSettings();
       const survived = Array.from({ length: N }, (_, i) => s[`__concurrent_probe_${i}`] === i);
-      return { n: N, survived: survived.filter(Boolean).length };
+
+      // --- a fresh-DB read in flight while writers run ---------------------
+      await db.settings.delete('main');
+      const bootRead = getSettings();
+      await Promise.all(
+        Array.from({ length: N }, (_, i) => updateSettings({ [`__fresh_probe_${i}`]: i })),
+      );
+      await bootRead;
+      const f = await getSettings();
+      const freshSurvived = Array.from({ length: N }, (_, i) => f[`__fresh_probe_${i}`] === i);
+
+      return {
+        n: N,
+        survived: survived.filter(Boolean).length,
+        freshSurvived: freshSurvived.filter(Boolean).length,
+      };
     });
 
     expect(
       result.survived,
       `all ${result.n} concurrent updateSettings patches survive (a lost update drops some)`,
+    ).toBe(result.n);
+    expect(
+      result.freshSurvived,
+      `on a fresh DB, a getSettings() in flight must not put defaults over ` +
+        `${result.n} concurrent patches`,
     ).toBe(result.n);
   },
 });

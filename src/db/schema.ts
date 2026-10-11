@@ -1020,33 +1020,49 @@ export interface RepertoireSyncBaseRow {
 export const db = new CoachDB();
 
 export async function getSettings(): Promise<Settings> {
+  // Fast path: the row exists in its current shape — a plain read.
   const existing = await db.settings.get('main');
-  if (existing) {
+  if (existing && Array.isArray(existing.timeClassFilter as unknown)) return existing;
+
+  // Creating or migrating the row is a read-then-write, so — exactly like
+  // `updateSettings` — it must be one rw transaction that re-reads inside.
+  // It used to be a bare `put` after the read above, and on a FRESH database
+  // that lost every write landing in between: the app's first `getSettings()`
+  // at boot read "no row", any `updateSettings` calls ran (each creating the
+  // row with its patch), and then the boot read's deferred `put(defaults)`
+  // landed last and wiped them all. Measured 0 of 12 concurrent patches
+  // surviving, every time. Every browser test starts on a fresh database, so
+  // this is what made `settings-concurrent-update` and `auto-analyze`
+  // (`autoAnalyze: false` reverted to the default `true`) fail on CI's slower
+  // runners; for a user it would revert a setting changed during first boot.
+  // Pinned by `settings-concurrent-update.mjs`. Nested inside
+  // `updateSettings`' transaction, Dexie reuses the parent.
+  return db.transaction('rw', db.settings, async () => {
+    const row = await db.settings.get('main');
+    if (!row) {
+      const defaults: Settings = {
+        key: 'main',
+        username: '',
+        engineDepth: 16,
+        autoAnalyze: true,
+        puzzleGenDepth: 18,
+        puzzleMinSwingCp: 200,
+        timeClassFilter: ['rapid'],
+      };
+      await db.settings.put(defaults);
+      return defaults;
+    }
     // Legacy single-value shape (`'rapid'` / `'all'` / `undefined`)
     // gets normalized to a `TimeClassSelection` here so call sites
     // can assume the array shape without a Dexie migration. The
     // Settings table isn't indexed by this field so re-writing
     // legacy rows in-place is safe.
-    const raw = existing.timeClassFilter as unknown;
-    const normalized = normalizeTimeClassSelection(raw);
-    if (!Array.isArray(raw)) {
-      const migrated: Settings = { ...existing, timeClassFilter: normalized };
-      await db.settings.put(migrated);
-      return migrated;
-    }
-    return existing;
-  }
-  const defaults: Settings = {
-    key: 'main',
-    username: '',
-    engineDepth: 16,
-    autoAnalyze: true,
-    puzzleGenDepth: 18,
-    puzzleMinSwingCp: 200,
-    timeClassFilter: ['rapid'],
-  };
-  await db.settings.put(defaults);
-  return defaults;
+    const raw = row.timeClassFilter as unknown;
+    if (Array.isArray(raw)) return row;
+    const migrated: Settings = { ...row, timeClassFilter: normalizeTimeClassSelection(raw) };
+    await db.settings.put(migrated);
+    return migrated;
+  });
 }
 
 /**
