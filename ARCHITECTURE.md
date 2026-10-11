@@ -1168,7 +1168,7 @@ NNUE analysis.
 with native Stockfish 16, writes `cloud_analyses` and stamps a summary back onto
 `cloud_games`; the laptop collects both through cloud sync. It runs as a
 **scheduled Cloud Run job** (`npm run worker:deploy`). **Full docs:
-`scripts/worker/README.md`** — read the six load-bearing deployment decisions
+`scripts/worker/README.md`** — read the seven load-bearing deployment decisions
 there before changing any of its flags. Five things that must not be missed:
 
 - **Import inserts only rows that are absent — never upserts over them.** A row

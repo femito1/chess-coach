@@ -344,12 +344,15 @@ exactly like the original, and each fails quietly:
 | `USER_ID` from `worker.env`, else the allowlist | an empty value in a dry run shows `USER_ID=` | `USER_ID=<id>` in the env |
 | timezone detected from the host | the schedule silently shifts | `--time-zone=<tz>` |
 
-`--no-schedule` leaves the live trigger untouched (an existing trigger is updated
-in place either way, but a dry run cannot show that branch). So:
+An existing trigger is updated in place from the script's `--schedule` default
+and keeps its enabled or paused state — so the script's defaults are production's,
+and a redeploy re-asserts them. (A dry run cannot show that branch; it prints a
+create-then-pause.) Each deploy also adds a Secret Manager version of the key; see
+§ Cost. So:
 
 ```bash
 USER_ID=user_… npm run worker:deploy -- \
-  --project=<id> --time-zone=<tz> --no-schedule --dry-run   # compare against:
+  --project=<id> --time-zone=<tz> --dry-run   # compare against:
 gcloud run jobs describe chess-coach-analysis --region=europe-west1 --project=<id>
 # then the same command without --dry-run, then the verify → dry run → LIMIT=20 order above
 ```
@@ -375,9 +378,21 @@ almost all of it container start-up. A full-library re-analysis (~2 000 games ×
 from execution durations (`gcloud run jobs executions list`), not from this
 paragraph.
 
-Set a budget alert anyway (`console.cloud.google.com/billing`) so a surprise is an
-email rather than an invoice. Note that Cloud Run needs a billing account attached
-even to use the free tier.
+Two things the free tier does not make obvious:
+
+- **It is per billing account, not per project.** Every project on the same
+  billing account draws from one allowance, so another project's Cloud Run use
+  counts against this one.
+- **Every deploy stores another version of the service_role secret.** Six active
+  versions are free; past that each costs ~$0.06/month. Old versions can be
+  destroyed (`gcloud secrets versions destroy <n> --secret=…`) — the job reads
+  `:latest`.
+
+Set a budget alert (`console.cloud.google.com/billing` → Budgets & alerts) so a
+surprise is an email rather than an invoice. Cloud Run needs a billing account
+attached even to use the free tier. Billing APIs called from `gcloud` are charged
+to the *default* project's quota; pass `--billing-project=<id>` if that default is
+not this project.
 
 ## After it finishes
 

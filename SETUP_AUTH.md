@@ -214,6 +214,10 @@ It is deliberately opt-in **per account**, enforced in the database:
    `cloud_repertoires` table (2026-10-07). Until it exists the app skips
    repertoire backup with a console warning rather than failing the rest of
    sync — so repertoires are **not** backed up until you re-run this file.
+   To check a table from a script, use a plain `select(…).limit(1)` and look
+   for `error.code === 'PGRST205'`. Not a head-only count: on a missing table
+   `select('*', { count: 'exact', head: true })` returns `error: null,
+   count: null`, which reads as "exists".
 3. The last statement prints the allowlist. You should see exactly one row, for
    the account you want to sync. If it prints none, the lookup found no matching
    profile; the file's closing comment explains how to insert the id by hand.
