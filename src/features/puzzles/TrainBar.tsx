@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PuzzleAttempt } from '@/db/schema';
 import { RATING_MAX, RATING_MIN } from '@/data/puzzles.meta.generated';
@@ -35,6 +35,18 @@ export function isThemeChoice(v: unknown): v is ThemeChoice {
 
 export function isDifficulty(v: unknown): v is Difficulty {
   return typeof v === 'string' && /^(rel|fix):-?\d+$/.test(v);
+}
+
+/** Exact ratings snap to multiples of this. Finer than the ±60 window a run
+ *  is drawn from would be precision the run can't deliver. */
+export const RATING_ANCHOR = 50;
+
+/** Nearest anchor to a typed rating, clamped to what the corpus holds. */
+export function snapRating(n: number): number {
+  const snapped = Math.round(n / RATING_ANCHOR) * RATING_ANCHOR;
+  const lo = Math.ceil(RATING_MIN / RATING_ANCHOR) * RATING_ANCHOR;
+  const hi = Math.floor(RATING_MAX / RATING_ANCHOR) * RATING_ANCHOR;
+  return Math.max(lo, Math.min(hi, snapped));
 }
 
 /** Target rating for a difficulty, given the user's current rating. */
@@ -145,6 +157,23 @@ function DifficultyControl({
   const { t } = useTranslation();
   const fixed = difficulty.startsWith('fix:');
   const value = Number(difficulty.slice(4));
+  // The field edits a draft and commits on Enter or blur. Committing per
+  // keystroke can't work: "1" on the way to "1500" is below the corpus
+  // floor, so it was rejected and the controlled field snapped back — you
+  // could not type a number at all — and every accepted keystroke would
+  // have restarted the run.
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const commit = () => {
+    const n = Number(draft);
+    if (draft.trim() === '' || !Number.isFinite(n)) {
+      setDraft(String(value));
+      return;
+    }
+    const snapped = snapRating(n);
+    setDraft(String(snapped));
+    if (snapped !== value) onChange(`fix:${snapped}`);
+  };
 
   return (
     <div className="flex items-center gap-1 flex-wrap" role="group" aria-label={t('puzzles.train.difficulty')}>
@@ -172,7 +201,7 @@ function DifficultyControl({
           type="button"
           aria-pressed={fixed}
           onClick={() =>
-            onChange(`fix:${Math.round(centerFor(difficulty, rating) / 50) * 50}`)
+            onChange(`fix:${snapRating(centerFor(difficulty, rating))}`)
           }
           className={`px-2 py-1 text-xs border-l border-border transition-colors ${
             fixed ? 'bg-accent/15 text-accent' : 'text-text-muted hover:text-text'
@@ -187,22 +216,26 @@ function DifficultyControl({
             type="button"
             className="btn text-xs px-2"
             aria-label={t('puzzles.train.lower')}
-            onClick={() => onChange(`fix:${Math.max(RATING_MIN, value - 50)}`)}
+            onClick={() => onChange(`fix:${snapRating(value - RATING_ANCHOR)}`)}
           >
             −
           </button>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             className="input w-20 text-xs py-1 tabular-nums"
-            min={RATING_MIN}
-            max={RATING_MAX}
-            step={50}
-            value={value}
+            value={draft}
             aria-label={t('puzzles.train.exactRating')}
-            onChange={(e) => {
-              const n = Math.round(Number(e.target.value));
-              if (Number.isFinite(n) && n >= RATING_MIN && n <= RATING_MAX) {
-                onChange(`fix:${n}`);
+            title={t('puzzles.train.exactTitle', { step: RATING_ANCHOR })}
+            onChange={(e) => setDraft(e.target.value.replace(/[^\d]/g, ''))}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                commit();
+                e.currentTarget.blur();
+              } else if (e.key === 'Escape') {
+                setDraft(String(value));
+                e.currentTarget.blur();
               }
             }}
           />
@@ -210,7 +243,7 @@ function DifficultyControl({
             type="button"
             className="btn text-xs px-2"
             aria-label={t('puzzles.train.higher')}
-            onClick={() => onChange(`fix:${Math.min(RATING_MAX, value + 50)}`)}
+            onClick={() => onChange(`fix:${snapRating(value + RATING_ANCHOR)}`)}
           >
             +
           </button>

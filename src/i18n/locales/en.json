@@ -389,6 +389,7 @@
       "offsetTitle": "Puzzles around {{rating}}",
       "exact": "Exact",
       "exactRating": "Target rating",
+      "exactTitle": "Type a rating — it snaps to the nearest {{step}}. Enter to apply.",
       "lower": "Lower",
       "higher": "Higher",
       "window": "Rated {{lo}}–{{hi}}",

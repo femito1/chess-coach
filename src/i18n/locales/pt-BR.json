@@ -389,6 +389,7 @@
       "offsetTitle": "Problemas em torno de {{rating}}",
       "exact": "Exato",
       "exactRating": "Rating alvo",
+      "exactTitle": "Digite um rating: ele é arredondado para o múltiplo de {{step}} mais próximo. Enter para aplicar.",
       "lower": "Mais baixo",
       "higher": "Mais alto",
       "window": "Rating {{lo}}–{{hi}}",
