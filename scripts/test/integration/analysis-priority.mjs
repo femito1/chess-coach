@@ -53,9 +53,21 @@ await runBrowserTest({
     await page.waitForSelector('a[href="/puzzles"]', { timeout: 15_000 });
 
     const result = await page.evaluate(async (pgn) => {
-      const { db } = await import('/src/db/schema.ts');
+      const { db, updateSettings } = await import('/src/db/schema.ts');
       const { nextPendingGame } = await import('/src/db/queries.ts');
       const { requestAnalysisNow, _priorityIds } = await import('/src/engine/queue.ts');
+
+      // Keep the live pump off the seeded rows. It polls every 2-4 s and takes
+      // any pending game, and `prio-oldest` is seeded first — so on CI's slower
+      // runners the pump could start analyzing it before the request below,
+      // which then (correctly) no-ops on the in-flight game: priority read `[]`
+      // and the chooser fell through to `prio-newest`. With background analysis
+      // off the pump starts nothing on its own, while the priority list still
+      // works — `nextGameToAnalyze` consults it BEFORE the toggle, so this
+      // doesn't weaken the assertion: if priority were ignored, the chooser
+      // would return nothing rather than `prio-oldest`. TESTING.md § Tests race
+      // the live app.
+      await updateSettings({ autoAnalyze: false });
 
       await db.games.clear();
       await db.analyses.clear();
