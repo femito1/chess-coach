@@ -7,7 +7,7 @@ import {
 } from '@/features/openings/library';
 import { uciFromPgn } from '@/features/openings/identifyFromGame';
 import { findNodeByFen } from '@/features/repertoire/store';
-import type { GameForCharts } from './progress';
+import { stripOpeningMoves, type GameForCharts } from './progress';
 
 /**
  * Prep-gap detection: openings you lose in and have not prepped.
@@ -116,12 +116,12 @@ export const SAMPLES_PER_CANDIDATE = 3;
  */
 export function openingGroupKey(name: string | undefined): string {
   if (!name) return '';
-  return name
-    .trim()
-    // A trailing move sequence, whichever punctuation introduced it. The
-    // ECO-URL parser emits ": 4.Nf3"; a PGN `Opening` header can carry
-    // ", 6.Be2".
-    .replace(/\s*[:,]\s*\d.*$/, '')
+  // The trailing move sequence, wherever it sits. Not only after a colon
+  // or comma (": 4.Nf3", ", 6.Be2"): the parser puts no colon before moves
+  // once it has already placed one, so they also arrive after a space
+  // ("Scotch Game 3...d6") or fused ("Pirc Defense...4.c3"). Each distinct
+  // tail was its own group, too small to ever reach `MIN_GAMES_FOR_GAP`.
+  return stripOpeningMoves(name.trim())
     .replace(/[:,]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
