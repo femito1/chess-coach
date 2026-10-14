@@ -3,7 +3,9 @@ import {
   candidateGameIdsForUrl,
   candidateMonths,
   extractChessComGameId,
+  isDailyGameUrl,
   monthArchiveUrl,
+  widenedSearchMonths,
 } from './urlShape';
 
 describe('extractChessComGameId', () => {
@@ -102,6 +104,17 @@ describe('candidateGameIdsForUrl', () => {
       'H(https://www.chess.com/live/game/12345)',
     ]);
   });
+  // Daily games keep `/game/daily/<id>` in the archive API, and their ids
+  // are a separate space — a live variant could name some other game.
+  it('keeps a daily URL in the daily shape only', () => {
+    const ids = candidateGameIdsForUrl(
+      'https://www.chess.com/game/daily/18221087',
+      fakeHash,
+    );
+    expect(ids).toEqual(['H(https://www.chess.com/game/daily/18221087)']);
+    expect(isDailyGameUrl('https://www.chess.com/game/daily/18221087')).toBe(true);
+    expect(isDailyGameUrl('https://www.chess.com/game/live/18221087')).toBe(false);
+  });
   it('dedupes when the input URL has no recognised shape', () => {
     const ids = candidateGameIdsForUrl('https://www.chess.com/home', fakeHash);
     expect(ids).toEqual(['H(https://www.chess.com/home)']);
@@ -185,5 +198,33 @@ describe('monthArchiveUrl', () => {
     expect(monthArchiveUrl('user with space', 2026, 1)).toContain(
       'user%20with%20space',
     );
+  });
+});
+
+describe('widenedSearchMonths', () => {
+  const archive = (year: number, month: number) => ({
+    url: monthArchiveUrl('nandoravioli', year, month),
+    year,
+    month,
+  });
+
+  // The extension's hint is the click time, so an old game opened from the
+  // archive misses the three-month window and must still be found.
+  it('walks the untried months newest first', () => {
+    const archives = [archive(2026, 1), archive(2026, 3), archive(2026, 2), archive(2025, 12)];
+    expect(
+      widenedSearchMonths(archives, [
+        { year: 2026, month: 3 },
+        { year: 2026, month: 2 },
+      ]),
+    ).toEqual([archive(2026, 1).url, archive(2025, 12).url]);
+  });
+
+  it('stops at the limit', () => {
+    const archives = [archive(2025, 10), archive(2025, 11), archive(2025, 12)];
+    expect(widenedSearchMonths(archives, [], 2)).toEqual([
+      archive(2025, 12).url,
+      archive(2025, 11).url,
+    ]);
   });
 });

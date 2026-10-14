@@ -17,8 +17,8 @@
  * Behaviour contract:
  *   - Every navigation to a finished-game URL prompts (modulo a
  *     same-page-visit dismissal, see below).
- *   - If the user dismisses the prompt for game A, we don't re-show
- *     it for A on this page visit. But if they navigate away and
+ *   - If the user dismisses the prompt for game A — or clicks Review —
+ *     we don't re-show it for A on this page visit. But if they navigate away and
  *     back, or to game B, the prompt fires again.
  *   - The moment the URL transitions away from a finished-game URL
  *     (typically the user starting a new game → `/play/online`), we
@@ -98,6 +98,12 @@ function currentGameId() {
   return m?.[1];
 }
 
+/** True on a correspondence game. Daily ids are their own number space,
+ *  so the kind has to survive into the deep link — see `canonicalGameUrl`. */
+function isDailyGamePage() {
+  return /chess\.com\/game\/daily\/\d+/.test(location.href);
+}
+
 const COMPLETION_SELECTORS = [
   '.game-over-modal-content',
   '[class*="game-over" i]',
@@ -162,9 +168,15 @@ function hasCompletedGameSignal() {
  * If chess.com flips the API to also use the bare `/game/<id>`
  * shape, this constant flips with it; the importer's numeric-id
  * fallback covers the transition window without any code change.
+ *
+ * Daily games are the exception: the API lists them as
+ * `/game/daily/<id>`, so rewriting one to `/game/live/<id>` missed the
+ * exact match and named a live game that may not exist.
  */
-function canonicalGameUrl(id) {
-  return `https://www.chess.com/game/live/${id}`;
+function canonicalGameUrl(id, daily = false) {
+  return daily
+    ? `https://www.chess.com/game/daily/${id}`
+    : `https://www.chess.com/game/live/${id}`;
 }
 
 /**
@@ -250,8 +262,15 @@ async function showPanel(gameUrl) {
   if (closeBtn) closeBtn.onclick = onDismiss;
   if (secondary) secondary.onclick = onDismiss;
   if (primary) primary.onclick = () => {
-    // Capture the lookup hint at the user's click, not when the panel first
-    // appeared. This is especially important for long-open archive tabs.
+    // Once per game, same as a dismissal: the game-over modal is still on
+    // screen, so without this the panel's own removal wakes the observer
+    // and the prompt re-appears ~100 ms after the user acted on it.
+    STATE.dismissedUrl = gameUrl;
+    // The page exposes no reliable end time, so the click time is the
+    // best hint: right for a game just finished, and the app widens its
+    // search on its own when it misses (an old game opened from the
+    // archive). Captured at the click, not when the panel appeared, so a
+    // long-open tab still sends today.
     const link = buildDeepLink(coachOrigin, username, gameUrl, Date.now());
     log('opening review for', gameUrl, '→', link);
     // Service worker opens the tab — slightly more reliable than
@@ -276,7 +295,7 @@ function maybePrompt({ force = false } = {}) {
     if (force) warn('manual trigger ignored: not on a recognized game URL');
     return;
   }
-  const url = canonicalGameUrl(id);
+  const url = canonicalGameUrl(id, isDailyGamePage());
 
   // Manual force trigger from the toolbar action — bypass every gate.
   if (force) {

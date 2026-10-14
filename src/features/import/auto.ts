@@ -20,6 +20,7 @@ import {
   candidateMonths,
   extractChessComGameId,
   monthArchiveUrl,
+  widenedSearchMonths,
 } from './urlShape';
 
 export interface AutoImportProgress {
@@ -138,8 +139,9 @@ export async function importLastNMonths(
  * URL. To avoid scanning every month back to 2007, we accept an
  * optional `endTime` hint (epoch ms, as the extension can read from
  * the chess.com page) and start at that month, then fall back to the
- * current month + the previous one. In the worst case we scan two
- * months — bounded, predictable, fast.
+ * current month + the previous one — which covers any game just
+ * finished. Only when all of those miss do we walk the player's older
+ * archives, bounded by `MAX_WIDENED_MONTHS`.
  *
  * If the game is already in IndexedDB (deterministic id = hash(url)),
  * we short-circuit and just return its id without re-fetching the
@@ -185,14 +187,13 @@ export async function importGameByUrl(
   // previous month. Each fallback is a single Chess.com archive fetch.
   const monthsToTry = candidateMonths(opts.endTime);
 
-  for (const { year, month } of monthsToTry) {
-    const archiveUrl = monthArchiveUrl(u, year, month);
+  const findIn = async (archiveUrl: string): Promise<string | null> => {
     let games: ChessComGame[];
     try {
       games = await fetchMonth(archiveUrl);
     } catch {
       // 404s on never-played months are normal — keep walking.
-      continue;
+      return null;
     }
     // Match by exact URL first (the common case), then by extracted
     // numeric id (covers the `/game/live/` ↔ `/live/game/` shape
@@ -203,17 +204,42 @@ export async function importGameByUrl(
       (targetGameId
         ? games.find((g) => extractChessComGameId(g.url) === targetGameId)
         : undefined);
-    if (hit) {
-      // A deep link represents one explicit review choice. Importing the
-      // entire month here silently queues unrelated games and makes the
-      // banner claim the user is caught up. Keep bulk checkpoints reserved
-      // for the bulk import paths.
-      await upsertGames([chessComGameToGame(hit, u)]);
-      // The id we return is the one derived from chess.com's *own*
-      // URL for the game, so /review/:id matches what the rest of
-      // the app stored.
-      return { gameId: gameIdFromUrl(hit.url), alreadyImported: false };
-    }
+    if (!hit) return null;
+    // A deep link represents one explicit review choice. Importing the
+    // entire month here silently queues unrelated games and makes the
+    // banner claim the user is caught up. Keep bulk checkpoints reserved
+    // for the bulk import paths.
+    await upsertGames([chessComGameToGame(hit, u)]);
+    // The id we return is the one derived from chess.com's *own*
+    // URL for the game, so /review/:id matches what the rest of
+    // the app stored.
+    return gameIdFromUrl(hit.url);
+  };
+
+  for (const { year, month } of monthsToTry) {
+    const gameId = await findIn(monthArchiveUrl(u, year, month));
+    if (gameId) return { gameId, alreadyImported: false };
+  }
+
+  // The hint missed — typically an old game opened from the archive, since
+  // the extension can only send the click time. Walk the player's older
+  // months rather than failing; see `widenedSearchMonths`.
+  let archives: string[] = [];
+  try {
+    archives = await fetchArchives(u);
+  } catch {
+    // No archive index (network, unknown user): fall through to the error.
+  }
+  const older = widenedSearchMonths(
+    archives.flatMap((url) => {
+      const p = parseArchiveUrl(url);
+      return p ? [{ url, ...p }] : [];
+    }),
+    monthsToTry,
+  );
+  for (const archiveUrl of older) {
+    const gameId = await findIn(archiveUrl);
+    if (gameId) return { gameId, alreadyImported: false };
   }
 
   throw new Error(
