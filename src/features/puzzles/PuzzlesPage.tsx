@@ -121,12 +121,14 @@ export function PuzzlesPage() {
   // established — captured when the run starts, not tracked live: the plan
   // feeds the run, so a plan that moved with every puzzle would rebuild the
   // run under the user mid-session.
+  // A memo rather than an effect + state: an effect lands one render late, so
+  // the run's first batch could read a plan centred for the previous run.
   const rowsLoaded = rows !== undefined;
-  const [planCenter, setPlanCenter] = useState<number | null>(null);
-  useEffect(() => {
-    setPlanCenter(rating.provisional ? null : centerFor(difficulty, rating.rating));
+  const planCenter = useMemo(
+    () => (rating.provisional ? null : centerFor(difficulty, rating.rating)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runKey, rowsLoaded]);
+    [runKey, rowsLoaded],
+  );
   const recommendation = useRecommendation(
     view === 'train' && theme === 'foryou',
     planCenter,
@@ -171,9 +173,15 @@ export function PuzzlesPage() {
   /* ------------------------------------------------------ batch loading */
   // Read at batch-build time through refs, NOT listed as run deps: the
   // rating moves after every puzzle, and a dep on it would rebuild the run
-  // under the user mid-session.
+  // under the user mid-session. The "From your games" plan is the same: it
+  // is recomputed on every refire of the games table — which the analysis
+  // queue writes constantly — and as a dep it swapped the puzzle on screen
+  // mid-solve. A new plan therefore shapes only the next batch; the first
+  // batch waits for a settled one through `runReady` instead.
   const ratingRef = useRef(rating);
   ratingRef.current = rating;
+  const planRef = useRef(recommendation.plan);
+  planRef.current = recommendation.plan;
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   /** Ids served in this page session, excluded on top of recorded attempts
@@ -186,7 +194,12 @@ export function PuzzlesPage() {
   } | null>(null);
 
   const solving = spec.kind !== 'train' || view === 'train';
-  const runReady = spec.kind !== 'train' || theme !== 'foryou' || recommendation.loaded;
+  // A Train batch is centred on the rating (and, "From your games", built
+  // from the plan) as they stand when it loads, and nothing reloads it once
+  // they settle — so wait for both. Before `rows` lands the rating reads
+  // as the 1500 default.
+  const runReady =
+    spec.kind !== 'train' || (rowsLoaded && (theme !== 'foryou' || recommendation.loaded));
 
   const loadBatch = useCallback(
     async (generation: number): Promise<LibraryPuzzle[]> => {
@@ -209,7 +222,7 @@ export function PuzzlesPage() {
       const seed = generation * 7919 + Math.floor(Date.now() / 60_000);
 
       if (theme === 'foryou') {
-        const plan = recommendation.plan;
+        const plan = planRef.current;
         if (!plan || plan.allocation.length === 0) return [];
         setTrainWindow({ lo: plan.ratingLo, hi: plan.ratingHi, widened: false });
         return buildRecommendedQueue({
@@ -236,9 +249,10 @@ export function PuzzlesPage() {
         seed,
       });
     },
-    // `runKey` covers spec/theme/difficulty; the plan is read when it lands.
+    // `runKey` covers spec/theme/difficulty; rating and plan are read
+    // through refs (see above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [runKey, recommendation.plan],
+    [runKey],
   );
 
   const run = useRun({ runKey, ready: solving && runReady, loadBatch });
@@ -694,8 +708,13 @@ function useRecommendation(
   loaded: boolean;
   hasAnalyzedGames: boolean;
 } {
-  const games = useThrottledLiveQuery(
-    () => (active ? listAllGamesLight() : Promise.resolve([] as GameLight[])),
+  // Every input below is `undefined` (not empty) until it is known, so that
+  // `loaded` means "the plan is real". The run builds its first batch the
+  // moment `loaded` turns true and never rebuilds it when the plan later
+  // changes; an inactive query that answered `[]` made `loaded` true, the
+  // instant the theme was picked, with an empty plan.
+  const games = useThrottledLiveQuery<GameLight[] | undefined>(
+    () => (active ? listAllGamesLight() : Promise.resolve(undefined)),
     [active],
     1000,
   );
@@ -708,7 +727,7 @@ function useRecommendation(
    * not because of a pattern gap — so letting them into the motif scoring
    * would drown out the mistakes that actually indicate a weakness.
    */
-  const [timeClasses, setTimeClasses] = useState<TimeClassSelection>(['rapid']);
+  const [timeClasses, setTimeClasses] = useState<TimeClassSelection | null>(null);
   useEffect(() => {
     void getSettings().then((s) =>
       setTimeClasses(normalizeTimeClassSelection(s.timeClassFilter)),
@@ -717,15 +736,18 @@ function useRecommendation(
 
   const analyzed = useMemo(
     () =>
-      (games ?? []).filter(
-        (g) => g.analysisStatus === 'done' && gameMatchesSelection(g, timeClasses),
-      ),
+      games && timeClasses
+        ? games.filter(
+            (g) => g.analysisStatus === 'done' && gameMatchesSelection(g, timeClasses),
+          )
+        : [],
     [games, timeClasses],
   );
 
-  const mistakes = useThrottledLiveQuery(
+  const mistakes = useThrottledLiveQuery<MistakeRow[] | undefined>(
     async () => {
-      if (!active || analyzed.length === 0) return [] as MistakeRow[];
+      if (!active || !games || !timeClasses) return undefined;
+      if (analyzed.length === 0) return [];
       // The join is on game metadata the light rows already carry, so the game
       // side costs nothing extra; only the analysis is streamed.
       const byId = new Map(analyzed.map((g) => [g.id, g]));
@@ -841,8 +863,9 @@ function useRun(args: {
     return () => {
       cancelled = true;
     };
-    // `loadBatch` is keyed on `runKey` (and the plan landing), so it is a
-    // fair dep; listing it means a plan arriving re-fires the first batch.
+    // `loadBatch` is keyed on `runKey` alone, so it is a fair dep. It must
+    // stay that way: a new identity reloads the batch and swaps the puzzle
+    // under the user.
   }, [runKey, ready, generation, loadBatch]);
 
   const next = useCallback(() => {
