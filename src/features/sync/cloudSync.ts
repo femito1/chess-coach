@@ -3,6 +3,7 @@ import { db, type Analysis, type Game, type PuzzleAttempt } from '@/db/schema';
 import { listAllGamesLight, listAnalysesLight } from '@/db/queries';
 import { computeAccuracy, countUserBrilliancies } from '@/engine/analyzer';
 import { syncRepertoires } from './repertoireSync';
+import { assertLocalDataBelongsTo } from './bindingGuard';
 import {
   BATCH_ANALYSES,
   BATCH_ATTEMPTS,
@@ -11,6 +12,7 @@ import {
   diffAnalyses,
   diffAttempts,
   diffGames,
+  rebaseAttemptWrite,
   toCloudAnalysis,
   toCloudAttempt,
   toCloudGame,
@@ -146,15 +148,26 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
   const counts = emptyCounts();
   let bytesPushed = 0;
 
+  // Before anything reads or writes: a library bound to another account must
+  // never reach this one's cloud rows. See `bindingGuard.ts`.
+  await assertLocalDataBelongsTo(userId);
+
   onProgress?.({ phase: 'manifest', done: 0, total: 0 });
 
   // ---- manifests (metadata only — no `data` blobs) ----------------------
   const [remoteGames, remoteAnalyses] = await Promise.all([
-    fetchAll<RemoteGameMeta>(supabase, 'cloud_games', 'game_id, analysis_status', userId),
+    fetchAll<RemoteGameMeta>(
+      supabase,
+      'cloud_games',
+      'game_id, analysis_status',
+      'game_id',
+      userId,
+    ),
     fetchAll<RemoteAnalysisMeta>(
       supabase,
       'cloud_analyses',
       'game_id, depth, analyzed_at, engine, recompute_version',
+      'game_id',
       userId,
     ),
   ]);
@@ -341,6 +354,7 @@ export async function syncPuzzleAttempts(args: {
   onProgress?: (p: SyncProgress) => void;
 }): Promise<{ pulled: number; pushed: number }> {
   const { supabase, userId, signal, onProgress } = args;
+  await assertLocalDataBelongsTo(userId);
 
   // `data` (the whole PuzzleAttempt), not the metadata columns.
   //
@@ -355,6 +369,7 @@ export async function syncPuzzleAttempts(args: {
     supabase,
     'cloud_puzzle_attempts',
     'puzzle_id, data',
+    'puzzle_id',
     userId,
   );
   checkAbort(signal);
@@ -371,7 +386,19 @@ export async function syncPuzzleAttempts(args: {
     onProgress?.({ phase: 'attempts', done: ++attemptDone, total: attemptTotal });
 
   if (attemptPlan.writeLocal.length > 0) {
-    await db.puzzleAttempts.bulkPut(attemptPlan.writeLocal);
+    // Re-read and re-merge inside the write transaction: the plan was made from
+    // a read taken a network round trip ago, and a puzzle solved since then has
+    // committed a newer row that writing the plan verbatim would overwrite.
+    // `recordAttempt` writes in its own rw transaction on this table, so the two
+    // serialize and the merge sees its result. See `rebaseAttemptWrite`.
+    await db.transaction('rw', db.puzzleAttempts, async () => {
+      const current = await db.puzzleAttempts.bulkGet(
+        attemptPlan.writeLocal.map((p) => p.puzzleId),
+      );
+      await db.puzzleAttempts.bulkPut(
+        attemptPlan.writeLocal.map((p, i) => rebaseAttemptWrite(current[i], p)),
+      );
+    });
     for (const _ of attemptPlan.writeLocal) tickAttempts();
   }
 
@@ -395,6 +422,13 @@ export async function syncPuzzleAttempts(args: {
  * a library past that size would silently sync only its first thousand — the
  * kind of bug that looks like "some games didn't sync" and is miserable to
  * track down. Explicit ranges instead.
+ *
+ * Ordered by the row key, because offset paging over an unordered scan has no
+ * stable page boundaries: Postgres may return rows in a different order on each
+ * request — an upsert between two pages (another device, the worker) writes a
+ * new row version elsewhere in the heap, and the plan may switch scans — so a
+ * row can land on two pages or on none. `user_id` is fixed by the filter, so the key column alone is the primary
+ * key's order, and its index serves it.
  */
 const PAGE = 1000;
 
@@ -402,6 +436,7 @@ async function fetchAll<T>(
   supabase: SupabaseClient,
   table: string,
   columns: string,
+  key: string,
   userId: string,
 ): Promise<T[]> {
   const out: T[] = [];
@@ -410,6 +445,7 @@ async function fetchAll<T>(
       .from(table)
       .select(columns)
       .eq('user_id', userId)
+      .order(key, { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) throw new Error(`${table} manifest: ${describe(error)}`);
     const rows = (data ?? []) as T[];

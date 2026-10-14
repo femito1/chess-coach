@@ -13,6 +13,7 @@ import {
   diffAttempts,
   diffGames,
   mergeAttempt,
+  rebaseAttemptWrite,
   toCloudAnalysis,
   type LocalAnalysisMeta,
   type LocalGameMeta,
@@ -631,6 +632,48 @@ describe('diffAttempts', () => {
 
   it('handles both sides empty', () => {
     expect(diffAttempts([], [])).toEqual({ writeLocal: [], push: [] });
+  });
+});
+
+describe('rebaseAttemptWrite', () => {
+  // The read the plan came from, the cloud's row, and the planned local write.
+  const read = attempt({
+    attempts: 1,
+    lastAttemptedAt: 2_000,
+    history: [{ at: 2_000, outcome: 'mistake' }],
+  });
+  const remote = attempt({
+    hintUsed: true,
+    attempts: 2,
+    lastAttemptedAt: 3_000,
+    history: [{ at: 3_000, outcome: 'hint' }, { at: 1_500, outcome: 'mistake' }],
+  });
+  const [planned] = diffAttempts([read], [remote]).writeLocal;
+
+  it('is the planned row when nothing raced', () => {
+    expect(rebaseAttemptWrite(read, planned)).toEqual(planned);
+    expect(rebaseAttemptWrite(undefined, planned)).toEqual(planned);
+  });
+
+  it('keeps an attempt recorded between the read and the write', () => {
+    // A clean solve committed while the manifest was in flight.
+    const current: PuzzleAttempt = {
+      ...read,
+      attempts: 2,
+      solvedClean: true,
+      lastAttemptedAt: 4_000,
+      rating: 1510,
+      history: [...read.history!, { at: 4_000, outcome: 'clean' }],
+    };
+    const written = rebaseAttemptWrite(current, planned);
+    expect(planned.solvedClean, 'the stale plan would have erased it').toBe(false);
+    expect(written.solvedClean).toBe(true);
+    expect(written.lastAttemptedAt).toBe(4_000);
+    expect(written.rating).toBe(1510);
+    expect(written.history?.map((e) => e.at)).toEqual([1_500, 2_000, 3_000, 4_000]);
+    // …and the remote's contribution is still there.
+    expect(written.hintUsed).toBe(true);
+    expect(written.attempts).toBe(4);
   });
 });
 

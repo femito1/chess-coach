@@ -77,6 +77,23 @@ export type BindAction =
 const norm = (s: string | null | undefined): string => (s ?? '').trim();
 
 /**
+ * Does this browser's local data belong to a different Clerk user?
+ *
+ * The `refuseMismatch` rule, on its own so cloud sync can apply the very same
+ * decision (`features/sync/bindingGuard.ts`): the handshake refusing to merge
+ * is only half the promise if sync then mirrors one account's library into the
+ * other's cloud rows — which, with no DELETE policy, could never be undone.
+ * An unbound device is NOT a mismatch: the handshake binds it to whoever signs
+ * in first, so syncing it to that user agrees with what the handshake does.
+ */
+export function isBoundToOtherUser(
+  boundClerkUserId: string | undefined,
+  clerkUserId: string,
+): boundClerkUserId is string {
+  return Boolean(boundClerkUserId) && boundClerkUserId !== clerkUserId;
+}
+
+/**
  * Decide what to do given the current sign-in state.
  *
  * @param clerk      Currently-signed-in Clerk identity.
@@ -90,7 +107,7 @@ export function decideBindAction(
   cloud: CloudProfile | null,
   local: LocalSettingsSnapshot,
 ): BindAction {
-  if (local.boundClerkUserId && local.boundClerkUserId !== clerk.userId) {
+  if (isBoundToOtherUser(local.boundClerkUserId, clerk.userId)) {
     return {
       kind: 'refuseMismatch',
       boundClerkUserId: local.boundClerkUserId,

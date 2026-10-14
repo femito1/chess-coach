@@ -21,8 +21,10 @@ import {
   type CloudProgressSummary,
 } from './cloudProgress';
 import { createCoalescingRunner } from './coalescingRunner';
-import { isApplyingRemoteRepertoires, syncRepertoires } from './repertoireSync';
+import { isRemoteRepertoireWrite, syncRepertoires } from './repertoireSync';
+import type { Transaction } from 'dexie';
 import { db } from '@/db/schema';
+import { assertLocalDataBelongsTo } from './bindingGuard';
 
 /**
  * Cloud-sync state and triggers.
@@ -208,8 +210,8 @@ const repertoireRunner = createCoalescingRunner({
 const HOOKS_KEY = '__chessCoachRepertoireSyncHooks';
 if (!(globalThis as Record<string, unknown>)[HOOKS_KEY]) {
   (globalThis as Record<string, unknown>)[HOOKS_KEY] = true;
-  const onWrite = () => {
-    if (isApplyingRemoteRepertoires() || !attemptTarget) return;
+  const onWrite = (tx: Transaction) => {
+    if (isRemoteRepertoireWrite(tx) || !attemptTarget) return;
     repertoireRunner.request();
   };
   for (const table of [
@@ -220,15 +222,15 @@ if (!(globalThis as Record<string, unknown>)[HOOKS_KEY]) {
   ]) {
     // Dexie hooks run inside the writing transaction; scheduling a timer is all
     // these do, and they must return nothing so the write is left unmodified.
-    table.hook('creating', () => {
-      onWrite();
+    table.hook('creating', (_key, _obj, tx) => {
+      onWrite(tx);
     });
-    table.hook('updating', () => {
-      onWrite();
+    table.hook('updating', (_mods, _key, _obj, tx) => {
+      onWrite(tx);
       return undefined;
     });
-    table.hook('deleting', () => {
-      onWrite();
+    table.hook('deleting', (_key, _obj, tx) => {
+      onWrite(tx);
     });
   }
 }
@@ -308,6 +310,23 @@ export function useCloudSync(): void {
         setPhase({ kind: 'disabled' });
         return;
       }
+      // The engine refuses a library bound to another account on its own; asking
+      // here as well keeps every trigger disarmed (no attempt or repertoire
+      // uploads queued only to fail) and puts the reason on the Settings card.
+      // Stable for this userId: the handshake never rebinds a mismatched device.
+      try {
+        await assertLocalDataBelongsTo(userId);
+      } catch (err) {
+        if (signal.aborted) return;
+        enabledRef.current = false;
+        attemptTarget = null;
+        setPhase({
+          kind: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      if (signal.aborted) return;
       enabledRef.current = true;
       attemptTarget = { supabase, userId };
       setPhase({ kind: 'ready' });

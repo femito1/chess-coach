@@ -304,6 +304,7 @@ function emptyCloudBuilder(): BypassFromBuilder {
     eq: () => selectBuilder,
     in: () => selectBuilder,
     like: () => selectBuilder,
+    order: () => selectBuilder,
     range: async () => empty,
     maybeSingle: async () => ({ data: null, error: null }),
     // Thenable, so `await supabase.from(t).select('*', { count: 'exact', head:

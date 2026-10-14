@@ -33,6 +33,11 @@ await runBrowserTest({
 
     const out = await page.evaluate(async () => {
       const { startSync } = await import('/src/features/sync/useCloudSync.ts');
+      // The bypass session's own id: every pass first checks that local data is
+      // not bound to another account (`bindingGuard.ts`), and the page's
+      // handshake binds it to this one. Any other id is refused before the
+      // manifest this test counts.
+      const USER = 'e2e_bypass_user';
 
       // Counting PASSES, not promise identity: `startSync` is `async`, so it always
       // hands back a fresh wrapper even when it coalesces. How many passes actually
@@ -59,6 +64,7 @@ await runBrowserTest({
           const api = {
             select: () => api,
             eq: () => api,
+            order: () => api,
             in: () => api,
             upsert: async () => ({ error: null }),
             range: async () => {
@@ -78,8 +84,8 @@ await runBrowserTest({
 
       /* --- 1. two concurrent triggers coalesce onto ONE pass --------------- */
       passes = 0;
-      const a = startSync({ supabase, userId: 'u1' });
-      const b = startSync({ supabase, userId: 'u1' });
+      const a = startSync({ supabase, userId: USER });
+      const b = startSync({ supabase, userId: USER });
       await settle();
       results.passesWhileBothPending = passes;
       await releaseAll();
@@ -89,10 +95,10 @@ await runBrowserTest({
       /* --- 2. a request arriving on an ABORTED pass must NOT be dropped ---- */
       passes = 0;
       const signal = { aborted: false };
-      const aborted = startSync({ supabase, userId: 'u1', signal });
+      const aborted = startSync({ supabase, userId: USER, signal });
       await settle();
       signal.aborted = true; // exactly what the hook's effect cleanup does
-      const retry = startSync({ supabase, userId: 'u1' });
+      const retry = startSync({ supabase, userId: USER });
       await releaseAll(); // lets the aborted pass reach checkAbort and throw
       await aborted;
       await releaseAll(); // lets the chained retry through its own manifest
@@ -101,9 +107,9 @@ await runBrowserTest({
 
       /* --- 3. a forced (manual) click always runs -------------------------- */
       passes = 0;
-      const running = startSync({ supabase, userId: 'u1' });
+      const running = startSync({ supabase, userId: USER });
       await settle();
-      const forced = startSync({ supabase, userId: 'u1', force: true });
+      const forced = startSync({ supabase, userId: USER, force: true });
       await releaseAll();
       await running;
       await releaseAll();

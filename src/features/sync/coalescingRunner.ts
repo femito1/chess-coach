@@ -12,7 +12,9 @@
  *    left behind.
  *  - `flush()` runs a pending job now. It is for the tab being hidden, when the
  *    browser may freeze the page before the timer fires; with nothing pending it
- *    does nothing, so hiding an idle tab costs no request.
+ *    does nothing, so hiding an idle tab costs no request. A follow-up owed by a
+ *    mid-run request counts as pending: it runs the moment the current job ends
+ *    instead of waiting out the delay a hidden page may never get.
  *  - A failing job is reported to `onError` and does not wedge the runner; the
  *    next request tries again.
  */
@@ -31,6 +33,8 @@ export function createCoalescingRunner(opts: {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
   let dirty = false;
+  /** `flush()` arrived while a job was running with a follow-up owed. */
+  let flushRequested = false;
 
   const start = () => {
     timer = null;
@@ -45,7 +49,14 @@ export function createCoalescingRunner(opts: {
       .catch((err) => opts.onError?.(err))
       .finally(() => {
         running = false;
-        if (dirty) schedule();
+        if (!dirty) {
+          flushRequested = false;
+        } else if (flushRequested) {
+          flushRequested = false;
+          start();
+        } else {
+          schedule();
+        }
       });
   };
 
@@ -60,9 +71,15 @@ export function createCoalescingRunner(opts: {
       else schedule();
     },
     flush() {
-      if (timer === null) return;
-      clearTimeout(timer);
-      start();
+      if (timer !== null) {
+        clearTimeout(timer);
+        start();
+        return;
+      }
+      // No timer while a job runs: a mid-run request only marks it dirty. That
+      // follow-up is the one that carries the attempt recorded during the
+      // upload, so dropping it here lost exactly the data `flush` exists for.
+      if (running && dirty) flushRequested = true;
     },
     pending() {
       return timer !== null || running;
