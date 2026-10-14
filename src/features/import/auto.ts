@@ -11,7 +11,11 @@
 
 import { fetchArchives, fetchMonth, parseArchiveUrl } from '@/api/chesscom';
 import type { ChessComGame } from '@/api/chesscom';
-import { chessComGameToGame, gameIdFromUrl } from '@/import/importer';
+import {
+  chessComGameToGame,
+  gameIdFromUrl,
+  isStandardChessComGame,
+} from '@/import/importer';
 import { upsertGames } from '@/db/queries';
 import { recordImport } from '@/db/imports';
 import { db } from '@/db/schema';
@@ -85,7 +89,10 @@ export async function importLastNMonths(
 
   for (const archiveUrl of targets) {
     const games = await fetchMonth(archiveUrl);
-    const mapped = games.map((g) => chessComGameToGame(g, u));
+    // Variants are skipped, not imported — see `isStandardChessComGame`.
+    const mapped = games
+      .filter(isStandardChessComGame)
+      .map((g) => chessComGameToGame(g, u));
     const upsertRes = await upsertGames(mapped);
     added += upsertRes.added;
     skipped += upsertRes.skipped;
@@ -204,6 +211,13 @@ export async function importGameByUrl(
         ? games.find((g) => extractChessComGameId(g.url) === targetGameId)
         : undefined);
     if (hit) {
+      // Named rather than skipped: unlike a bulk import, the user asked for
+      // this one game, so "not found" would be a lie and a silent no-op worse.
+      if (!isStandardChessComGame(hit)) {
+        throw new Error(
+          `importGameByUrl: ${gameUrl} is a ${hit.rules} game — only standard chess can be reviewed`,
+        );
+      }
       // A deep link represents one explicit review choice. Importing the
       // entire month here silently queues unrelated games and makes the
       // banner claim the user is caught up. Keep bulk checkpoints reserved

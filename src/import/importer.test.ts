@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   chessComGameToGame,
   gameIdFromUrl,
+  isStandardChessComGame,
   parseOpeningFromEcoUrl,
   reparseOpeningFromPgn,
 } from './importer';
@@ -151,5 +152,18 @@ describe('gameIdFromUrl', () => {
     const a = gameIdFromUrl('https://www.chess.com/game/live/123');
     const b = gameIdFromUrl('https://www.chess.com/live/game/123');
     expect(a).not.toBe(b);
+  });
+});
+
+describe('isStandardChessComGame', () => {
+  it('accepts standard chess, and a game with no `rules` at all', () => {
+    expect(isStandardChessComGame({ rules: 'chess' })).toBe(true);
+    expect(isStandardChessComGame({})).toBe(true);
+  });
+
+  it('rejects every variant Chess.com reports', () => {
+    for (const rules of ['chess960', 'bughouse', 'crazyhouse', 'kingofthehill', 'threecheck']) {
+      expect(isStandardChessComGame({ rules }), rules).toBe(false);
+    }
   });
 });

@@ -66,6 +66,51 @@ async function defaultBackend(): Promise<EngineBackend> {
   };
 }
 
+/**
+ * Why a game cannot be analysed from where it starts, or null if it can.
+ *
+ * A thrown reason lands in `Game.analysisError`, which the review page shows
+ * verbatim — so these are sentences for the user, and deterministic: retrying
+ * cannot change the answer, which is why they must not match any of
+ * `requeueStaleErrors`' transient patterns.
+ *
+ * Two cases are refused rather than analysed wrongly:
+ *
+ *  - **A variant** (`[Variant "Chess960"]`, …). chess.js and the engine both
+ *    play standard rules here — Stockfish is never put in `UCI_Chess960` — so
+ *    castling would be judged by the wrong rules. The importer now skips
+ *    Chess.com's non-standard `rules`; this catches the ones imported before it
+ *    did, and any other source.
+ *  - **Black to move first.** Every consumer of a stored analysis splits moves
+ *    by colour on ply parity — `ply % 2 === 1` is White in
+ *    `computeAccuracyWithModel`, `countUserBrilliancies`, the move list, the
+ *    mistake-puzzle extractor and the per-colour clock stats. A game whose
+ *    first move is Black's would have every one of them swap the colours:
+ *    the user's accuracy reported as the opponent's, their blunders turned into
+ *    the opponent's puzzles. Renumbering plies to keep parity would touch the
+ *    stored `MoveEval.ply` contract everywhere for what is a vanishingly rare
+ *    game, so it is refused with a clear reason instead.
+ *
+ * A standard game set up with WHITE to move is analysed normally: its moves
+ * keep White on odd plies, so all of the above stays correct.
+ */
+function unsupportedStart(
+  headers: Record<string, string | null | undefined>,
+  startFen: string,
+): string | null {
+  const variant = headers.Variant;
+  if (variant && !/^(standard|chess)$/i.test(variant.trim())) {
+    return `Can't analyze ${variant} games — only standard chess is supported.`;
+  }
+  if (startFen.split(' ')[1] === 'b') {
+    return (
+      "Can't analyze this game: it starts from a set-up position with Black to " +
+      'move, which analysis does not support yet.'
+    );
+  }
+  return null;
+}
+
 export interface AnalyzeProgress {
   ply: number;
   totalPlies: number;
@@ -88,8 +133,18 @@ export async function analyzeGamePgn(
   chess.loadPgn(pgn);
   const history = chess.history({ verbose: true });
 
-  // Re-play to get the list of FENs before each move.
-  const replay = new Chess();
+  // Re-play to get the list of FENs before each move — from the game's OWN
+  // starting position. `loadPgn` honours a `[SetUp "1"] [FEN …]` header, but
+  // this replay used to start from `new Chess()`, so every game that began
+  // from a set-up position failed on its first move ("Invalid move: Rh8+") and
+  // was recorded as an analysis error. `history[0].before` is that start, as
+  // chess.js itself loaded it. The replay is kept (rather than reading
+  // `before`/`after` off `history`) so the FEN strings, which key `evalCache`,
+  // stay exactly what they always were for standard games.
+  const startFen = history[0]?.before ?? chess.fen();
+  const unsupported = unsupportedStart(chess.getHeaders(), startFen);
+  if (unsupported) throw new Error(unsupported);
+  const replay = new Chess(startFen);
   const fensBefore: string[] = [];
   for (let i = 0; i < history.length; i++) {
     fensBefore.push(replay.fen());

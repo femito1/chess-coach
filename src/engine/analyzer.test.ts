@@ -310,3 +310,56 @@ describe('repairTerminalMoveEval', () => {
     expect(repairTerminalMoveEval(once)).toBe(once);
   });
 });
+
+/**
+ * Games that start from a set-up position. `loadPgn` honours the `[FEN]`
+ * header, but the analyzer's replay used to start from `new Chess()`, so every
+ * such game failed on its first move ("Invalid move: Rh8+") — which the queue
+ * then retried in a tight loop for a game the user had open.
+ */
+describe('analyzeGamePgn on a game set up from a position', () => {
+  const KRK_START = '8/8/8/8/8/2k5/8/K6R w - - 0 1';
+  const WHITE_FIRST = `[SetUp "1"]\n[FEN "${KRK_START}"]\n\n1. Rh8 Kb3 2. Rh3+ *`;
+  const BLACK_FIRST =
+    '[SetUp "1"]\n[FEN "8/8/8/8/8/2k5/8/K6R b - - 0 1"]\n\n1... Kb3 2. Rh3+ *';
+
+  it('replays from the [FEN] start, not the standard position', async () => {
+    const { backend, asked } = stubBackend();
+    const a = await analyzeGamePgn('fen-w', WHITE_FIRST, 16, undefined, undefined, {
+      backend,
+    });
+    expect(a.moves.map((m) => m.san)).toEqual(['Rh8', 'Kb3', 'Rh3+']);
+    expect(a.moves[0].fenBefore).toBe(KRK_START);
+    expect(asked).toContain(KRK_START);
+    // White still moves on odd plies, which every per-colour consumer assumes.
+    expect(a.moves[0].ply).toBe(1);
+  });
+
+  /**
+   * Refused rather than analysed: every consumer splits colours on
+   * `ply % 2 === 1`, so a Black-first game would have its colours swapped
+   * everywhere. The error must be readable, since the review page shows it.
+   */
+  it('refuses a Black-to-move start with a clear reason, before any engine work', async () => {
+    const { backend, asked } = stubBackend();
+    await expect(
+      analyzeGamePgn('fen-b', BLACK_FIRST, 16, undefined, undefined, { backend }),
+    ).rejects.toThrow(/Black to\s+move/);
+    expect(asked).toEqual([]);
+  });
+
+  it('refuses a variant game by name', async () => {
+    const { backend } = stubBackend();
+    const pgn = `[Variant "Chess960"]\n[SetUp "1"]\n[FEN "${KRK_START}"]\n\n1. Rh8 *`;
+    await expect(
+      analyzeGamePgn('960', pgn, 16, undefined, undefined, { backend }),
+    ).rejects.toThrow(/Chess960/);
+  });
+
+  it('still analyses an explicitly standard game', async () => {
+    const { backend } = stubBackend();
+    const pgn = `[Variant "Standard"]\n\n${SCHOLARS_MATE}`;
+    const a = await analyzeGamePgn('std', pgn, 16, undefined, undefined, { backend });
+    expect(a.moves).toHaveLength(7);
+  });
+});
