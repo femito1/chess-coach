@@ -247,6 +247,51 @@ describe('analyzeGamePgn on a game that ends in checkmate', () => {
   });
 });
 
+describe('analyzeGamePgn on a blunder into mate', () => {
+  /**
+   * 1.e3 f6 2.a3 g5?? 3.Qh5#. The stub answers the way Stockfish does: for
+   * the position after ...g5 it reports `mate 1` — positive, because White is
+   * the side to move there and White mates. The bug this pins: `detectMotifs`
+   * read that number as the mover's (Black's) view and wanted it negative, so
+   * the textbook blunder into mate was never tagged `allowedMate`.
+   */
+  const PGN = '1. e3 f6 2. a3 g5 3. Qh5#';
+  const AFTER_G5 = 'rnbqkbnr/ppppp2p/5p2/6p1/8/P3P3/1PPP1PPP/RNBQKBNR w KQkq - 0 3';
+
+  function mateBackend(): EngineBackend {
+    return {
+      id: () => 'stub',
+      newGame: async () => {},
+      analyze: async (fen) => {
+        if (fen === AFTER_G5) {
+          return { depth: 16, bestMoveUci: 'd1h5', scoreCp: null, scoreMate: 1, pv: ['d1h5'] };
+        }
+        const legal = new Chess(fen).moves({ verbose: true });
+        if (legal.length === 0) return UNSCOREABLE;
+        return {
+          depth: 16,
+          bestMoveUci: legal[0].from + legal[0].to,
+          scoreCp: 0,
+          scoreMate: null,
+          pv: [],
+        };
+      },
+    };
+  }
+
+  it('tags the move that allowed mate as allowedMate', async () => {
+    const a = await analyzeGamePgn('fm', PGN, 16, undefined, undefined, {
+      backend: mateBackend(),
+    });
+    const g5 = a.moves[3];
+    expect(g5.san).toBe('g5');
+    expect(g5.fenAfter).toBe(AFTER_G5);
+    // Stored in the engine's convention: the side to move in `fenAfter`.
+    expect(g5.mateInAfter).toBe(1);
+    expect(g5.motifs).toContain('allowedMate');
+  });
+});
+
 describe('repairTerminalMoveEval', () => {
   /** A stored move whose `fenAfter` is the mated position, recorded the old
    *  way: 0 cp, and a mover winrate that collapsed to parity. */

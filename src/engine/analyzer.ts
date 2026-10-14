@@ -291,6 +291,15 @@ export async function analyzeGamePgn(
           playedUci,
           bestUci: beforeRes.bestMoveUci ?? undefined,
           bestPvUci: beforeRes.pv,
+          // The refutation is the engine's best in `fenAfter`. Passed only
+          // where the next stored ply carries that same move as its
+          // `bestMoveUci`, because that is all the boot recompute pass can
+          // read back — tagging differently here would make a game's motifs
+          // depend on whether it was ever recomputed.
+          replyUci:
+            i + 1 < history.length && !bookMoveIdx[i + 1]
+              ? (afterRes?.bestMoveUci ?? undefined)
+              : undefined,
           winrateBefore: moverBeforeWinrate,
           winrateAfter: moverAfterWinrate,
           mateInBefore: beforeRes.scoreMate ?? undefined,

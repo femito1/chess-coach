@@ -19,26 +19,32 @@ function loadSafe(fen: string): Chess | null {
 }
 
 /**
+ * Load `fen` with `color` to move. Used to ask chess.js about the side that
+ * is *not* to move. The en-passant square is cleared because it is only valid
+ * for the side it was set for: chess.js rejects a flipped FEN that keeps it,
+ * which used to make every probe after a double pawn push silently find
+ * nothing.
+ */
+function withTurn(fen: string, color: 'w' | 'b'): Chess | null {
+  const parts = fen.split(' ');
+  parts[1] = color;
+  parts[3] = '-';
+  return loadSafe(parts.join(' '));
+}
+
+/**
  * Enumerate (attackerSquare, attackerPieceType) pairs for a given color
  * attacking `square` in the current position.
  */
 function attackersOf(c: Chess, square: Square, color: 'w' | 'b'): { from: Square; type: string }[] {
   const out: { from: Square; type: string }[] = [];
-  const origTurn = c.turn();
-  const fenParts = c.fen().split(' ');
-  fenParts[1] = color;
-  try {
-    const scratch = new Chess();
-    scratch.load(fenParts.join(' '));
-    for (const m of scratch.moves({ verbose: true }) as Move[]) {
-      if (m.to === square && (m.flags.includes('c') || m.flags.includes('e') || m.piece)) {
-        out.push({ from: m.from as Square, type: m.piece });
-      }
+  const scratch = withTurn(c.fen(), color);
+  if (!scratch) return out;
+  for (const m of scratch.moves({ verbose: true }) as Move[]) {
+    if (m.to === square && (m.flags.includes('c') || m.flags.includes('e') || m.piece)) {
+      out.push({ from: m.from as Square, type: m.piece });
     }
-  } catch {
-    // ignore
   }
-  void origTurn;
   return out;
 }
 
@@ -136,9 +142,11 @@ function attackedFromSquare(
       out.push({ square: m.to as Square, type: 'k', undefended: true });
       continue;
     }
-    // Undefended = no friendly attackers of m.to for `target.color`.
-    const defenders = attackersOf(c, m.to as Square, target.color);
-    const undefended = defenders.length <= 1; // only the piece itself "defends" by occupying
+    // Undefended = no piece of `target.color` covers m.to. This has to be
+    // `attackers()`, not a move list: no legal move lands on a square its own
+    // side occupies, so counting moves found every target undefended and
+    // tagged a knight hitting two protected minors as a fork.
+    const undefended = c.attackers(m.to as Square, target.color).length === 0;
     out.push({ square: m.to as Square, type: target.type, undefended });
   }
   // Also include squares the attacker X-rays into: not needed for forks.
@@ -146,13 +154,9 @@ function attackedFromSquare(
 }
 
 function isForkAt(fenAfter: string, toSquare: Square): boolean {
-  const c = loadSafe(fenAfter);
-  if (!c) return false;
   // After our move, opponent is to move. The attacker is OUR piece that just landed on toSquare.
   // For chess.js to enumerate its attacks we temporarily swap the side to move.
-  const parts = fenAfter.split(' ');
-  parts[1] = parts[1] === 'w' ? 'b' : 'w';
-  const scratch = loadSafe(parts.join(' '));
+  const scratch = withTurn(fenAfter, fenAfter.split(' ')[1] === 'w' ? 'b' : 'w');
   if (!scratch) return false;
   const attacks = attackedFromSquare(scratch, toSquare);
   if (attacks.length < 2) return false;
@@ -169,27 +173,32 @@ function isForkAt(fenAfter: string, toSquare: Square): boolean {
 }
 
 /**
- * Very light pin/skewer detector: checks if removing a piece along the
- * line from `toSquare` to the enemy king/queen reveals an X-ray attack.
+ * Very light pin/skewer detector: walks every line of `attacker`'s sliders
+ * (B/R/Q) in `fen`. A line whose first enemy piece is not the king and whose
+ * second IS the king is a pin; one whose second is worth less than the first
+ * is a skewer.
  *
- * We keep it simple: if any of our sliders (B/R/Q) on/after the move has
- * a line where the first enemy piece is not the king/queen and the second
- * IS the king (pin) or the second is a lower-value piece than the first
- * (skewer), count it.
+ * Returns each line as a `slider>front>back` key rather than a yes/no, so the
+ * caller can subtract the lines that already existed before the move — a pin
+ * that has stood since move 6 is not something the move under review walked
+ * into or missed, and counting it tagged every later mistake in that game.
  */
-function detectPinOrSkewer(fenAfter: string): { pin: boolean; skewer: boolean } {
-  const c = loadSafe(fenAfter);
-  if (!c) return { pin: false, skewer: false };
-  // Attacker side = the side that just moved = !turn.
-  const me = c.turn() === 'w' ? 'b' : 'w';
+function pinSkewerLines(
+  fen: string,
+  attacker: 'w' | 'b',
+): { pins: Set<string>; skewers: Set<string> } {
+  const pins = new Set<string>();
+  const skewers = new Set<string>();
+  const c = loadSafe(fen);
+  if (!c) return { pins, skewers };
+  const me = attacker;
   const board = c.board();
+  const sqName = (r: number, f: number) => String.fromCharCode(97 + f) + (8 - r);
   const directions: Record<string, [number, number][]> = {
     b: [[1, 1], [1, -1], [-1, 1], [-1, -1]],
     r: [[1, 0], [-1, 0], [0, 1], [0, -1]],
     q: [[1, 1], [1, -1], [-1, 1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]],
   };
-  let pin = false;
-  let skewer = false;
   for (let r = 0; r < 8; r++) {
     for (let f = 0; f < 8; f++) {
       const piece = board[r][f];
@@ -199,19 +208,20 @@ function detectPinOrSkewer(fenAfter: string): { pin: boolean; skewer: boolean } 
       for (const [dr, df] of dirs) {
         let rr = r + dr;
         let ff = f + df;
-        let first: { type: string; value: number } | null = null;
+        let first: { type: string; value: number; sq: string } | null = null;
         while (rr >= 0 && rr < 8 && ff >= 0 && ff < 8) {
           const sq = board[rr][ff];
           if (sq) {
             if (sq.color === me) break;
             if (!first) {
-              first = { type: sq.type, value: sq.type === 'k' ? 100 : val(sq.type) };
+              first = { type: sq.type, value: sq.type === 'k' ? 100 : val(sq.type), sq: sqName(rr, ff) };
             } else {
               const secondVal = sq.type === 'k' ? 100 : val(sq.type);
+              const key = `${sqName(r, f)}>${first.sq}>${sqName(rr, ff)}`;
               if (sq.type === 'k' && first.type !== 'k') {
-                pin = true;
+                pins.add(key);
               } else if (secondVal < first.value && first.type !== 'k') {
-                skewer = true;
+                skewers.add(key);
               }
               break;
             }
@@ -222,50 +232,80 @@ function detectPinOrSkewer(fenAfter: string): { pin: boolean; skewer: boolean } 
       }
     }
   }
-  return { pin, skewer };
+  return { pins, skewers };
+}
+
+/** Pin/skewer lines `attacker` has in `fen` that it did not have in `baseline`. */
+function newPinOrSkewer(
+  baseline: string,
+  fen: string,
+  attacker: 'w' | 'b',
+): { pin: boolean; skewer: boolean } {
+  const before = pinSkewerLines(baseline, attacker);
+  const after = pinSkewerLines(fen, attacker);
+  const anyNew = (now: Set<string>, then: Set<string>) => [...now].some((k) => !then.has(k));
+  return { pin: anyNew(after.pins, before.pins), skewer: anyNew(after.skewers, before.skewers) };
 }
 
 /**
- * Detect back-rank pattern: the defender's king is on the back rank,
- * trapped behind its own pawns, with no escape square, and an enemy
- * heavy piece (R/Q) is (or will be) on or near that rank.
+ * Back-rank pattern, judged for the side to move in `fen` (the defender):
+ * its king sits on its own back rank with every square in front of it
+ * occupied by its own pieces, and the other side has a rook or queen move
+ * onto that rank that mates — or has just played one.
+ *
+ * Demanding the actual mate is what keeps this honest. The old test was
+ * "king on the back rank behind pawns", checked for *both* kings, with no
+ * heavy piece required — true of nearly every castled position, so
+ * `missedBackRank` / `backRank` landed on almost every mistake.
  */
-function isBackRankWeak(fen: string): boolean {
+function isBackRankThreat(fen: string): boolean {
   const c = loadSafe(fen);
   if (!c) return false;
-  // Check both sides.
-  for (const color of ['w', 'b'] as const) {
-    const rank = color === 'w' ? '1' : '8';
-    const pawnRank = color === 'w' ? '2' : '7';
-    // Find king.
-    const board = c.board();
-    let kingFile = -1;
-    let kingRank = -1;
-    for (let r = 0; r < 8; r++) {
-      for (let f = 0; f < 8; f++) {
-        const p = board[r][f];
-        if (p && p.type === 'k' && p.color === color) {
-          kingFile = f;
-          kingRank = 8 - r;
-        }
+  const defender = c.turn();
+  const attacker = defender === 'w' ? 'b' : 'w';
+  const backRank = defender === 'w' ? 1 : 8;
+  const board = c.board();
+  let kr = -1;
+  let kf = -1;
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      const p = board[r][f];
+      if (p && p.type === 'k' && p.color === defender) {
+        kr = r;
+        kf = f;
       }
     }
-    if (String(kingRank) !== rank) continue;
-    // King must be blocked: squares above it (for white) all have own pawns.
-    const up = color === 'w' ? 1 : -1;
-    let blocked = true;
-    for (const df of [-1, 0, 1]) {
-      const nf = kingFile + df;
-      if (nf < 0 || nf > 7) continue;
-      const nrBoardIdx = 8 - (Number(rank) + up);
-      if (nrBoardIdx < 0 || nrBoardIdx > 7) { blocked = false; break; }
-      const above = board[nrBoardIdx][nf];
-      if (df === 0) continue;
-      if (!above || above.color !== color || above.type !== 'p') { blocked = false; break; }
-    }
-    if (!blocked) continue;
-    void pawnRank;
-    return true;
+  }
+  if (kr < 0 || 8 - kr !== backRank) return false;
+  // Boxed in by its own pieces: no luft on the rank in front.
+  const aheadR = defender === 'w' ? kr - 1 : kr + 1;
+  for (const df of [-1, 0, 1]) {
+    const nf = kf + df;
+    if (nf < 0 || nf > 7) continue;
+    const p = board[aheadR][nf];
+    if (!p || p.color !== defender) return false;
+  }
+  const onBackRank = (sq: string) => Number(sq[1]) === backRank;
+  const isHeavy = (t: string | undefined) => t === 'r' || t === 'q';
+
+  if (c.isCheckmate()) {
+    const kingSq = (String.fromCharCode(97 + kf) + backRank) as Square;
+    return c
+      .attackers(kingSq, attacker)
+      .some((sq) => onBackRank(sq) && isHeavy(c.get(sq)?.type));
+  }
+  // A check that isn't mate can't be probed by handing the move to the
+  // checker (that position is illegal), and isn't a back-rank threat anyway.
+  if (c.inCheck()) return false;
+
+  const scratch = withTurn(fen, attacker);
+  if (!scratch) return false;
+  for (const m of scratch.moves({ verbose: true }) as Move[]) {
+    if (!isHeavy(m.piece) || !onBackRank(m.to)) continue;
+    scratch.move({ from: m.from, to: m.to, promotion: m.promotion });
+    const mate = scratch.isCheckmate();
+    scratch.undo();
+    if (mate) return true;
   }
   return false;
 }
@@ -274,15 +314,23 @@ export interface DetectMotifsInput {
   fenBefore: string;
   fenAfter: string;
   playedUci: string;
+  /** The mover's best move in `fenBefore` — what they should have played. */
   bestUci?: string;
   bestPvUci?: string[];
+  /** The opponent's best reply in `fenAfter` — the refutation of the played
+   *  move. Not `bestUci`: that is the mover's move from the position before,
+   *  and playing it on `fenAfter` moves the wrong side's piece. */
+  replyUci?: string;
   /** Mover's winrate before the move (0-1). */
   winrateBefore: number;
   /** Mover's winrate after the move (0-1). */
   winrateAfter: number;
-  /** Engine-reported mate from mover POV before the played move (positive = mover mating). */
+  /** Stored `MoveEval.mateInBefore`: mate for the side to move in
+   *  `fenBefore`, i.e. the mover (positive = mover mating). */
   mateInBefore?: number;
-  /** Engine-reported mate AFTER the played move (mover POV). */
+  /** Stored `MoveEval.mateInAfter`: mate for the side to move in `fenAfter`,
+   *  i.e. the *opponent* (positive = opponent mating, 0 = the mover just
+   *  delivered mate). */
   mateInAfter?: number;
 }
 
@@ -304,6 +352,7 @@ export function detectMotifs(input: DetectMotifsInput): Motif[] {
     playedUci,
     bestUci,
     bestPvUci,
+    replyUci,
     winrateBefore,
     winrateAfter,
     mateInBefore,
@@ -312,8 +361,9 @@ export function detectMotifs(input: DetectMotifsInput): Motif[] {
 
   // --- Played-move motifs -------------------------------------------------
 
-  // Allowed mate: evaluation collapses to a mate on the opponent after the move.
-  if (mateInAfter != null && mateInAfter < 0) motifs.add('allowedMate');
+  // Allowed mate: the opponent, to move in `fenAfter`, now has a forced mate.
+  // `mateInAfter` is from *their* side, so that is a positive reading.
+  if (mateInAfter != null && mateInAfter > 0) motifs.add('allowedMate');
 
   // Hanging own piece after the move (player blundered material).
   if (leavesOwnPieceHanging(fenBefore, playedUci)) {
@@ -326,21 +376,21 @@ export function detectMotifs(input: DetectMotifsInput): Motif[] {
   if (hung && hung.value >= 3) motifs.add('hangingPiece');
 
   // Opponent now has a fork on our king/queen via their best reply?
-  if (bestUci && bestUci.length >= 4) {
-    const refutationTo = bestUci.slice(2, 4) as Square;
+  if (replyUci && replyUci.length >= 4) {
+    const refutationTo = replyUci.slice(2, 4) as Square;
     // Simulate opponent playing their best move.
     const c = loadSafe(fenAfter);
     if (c) {
-      const from = bestUci.slice(0, 2) as Square;
+      const from = replyUci.slice(0, 2) as Square;
       try {
-        const mv = c.move({ from, to: refutationTo, promotion: bestUci.slice(4, 5) || undefined });
+        const mv = c.move({ from, to: refutationTo, promotion: replyUci.slice(4, 5) || undefined });
         if (mv) {
           const afterRefutation = c.fen();
           if (isForkAt(afterRefutation, refutationTo)) motifs.add('fork');
-          const ps = detectPinOrSkewer(afterRefutation);
+          const ps = newPinOrSkewer(fenBefore, afterRefutation, c.turn() === 'w' ? 'b' : 'w');
           if (ps.pin) motifs.add('pin');
           if (ps.skewer) motifs.add('skewer');
-          if (isBackRankWeak(afterRefutation)) motifs.add('backRank');
+          if (isBackRankThreat(afterRefutation)) motifs.add('backRank');
           c.undo();
         }
       } catch {
@@ -372,10 +422,10 @@ export function detectMotifs(input: DetectMotifsInput): Motif[] {
           if (mv) {
             const afterBest = c.fen();
             if (isForkAt(afterBest, to)) motifs.add('missedFork');
-            const ps = detectPinOrSkewer(afterBest);
+            const ps = newPinOrSkewer(fenBefore, afterBest, mv.color);
             if (ps.pin) motifs.add('missedPin');
             if (ps.skewer) motifs.add('missedSkewer');
-            if (isBackRankWeak(afterBest)) motifs.add('missedBackRank');
+            if (isBackRankThreat(afterBest)) motifs.add('missedBackRank');
             // Deeper PV walk: play up to 3 more plies and re-check for hanging
             // gains, so we catch combinations.
             for (let i = 1; i < Math.min(pv.length, 4); i++) {

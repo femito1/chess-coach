@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import type { MoveEval } from '@/db/schema';
 import { tClassification, tMotifLabel } from '@/i18n/chess';
+import { mateForWhite } from '@/components/EvalBar';
 
 export function MoveInsight({
   move,
@@ -73,12 +74,17 @@ function formatClock(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function formatEvalAfter(m: MoveEval): string {
+export function formatEvalAfter(m: MoveEval): string {
   // `mateInAfter === 0` is mate *delivered* — the side to move in `fenAfter`
   // is mated now. "M0" reads as a countdown that never happens, so show the
   // notation for it instead.
   if (m.mateInAfter === 0) return '#';
-  if (m.mateInAfter != null) return `M${m.mateInAfter}`;
+  // The stored mate is for the side to move in `fenAfter`; the centipawn
+  // branch below is White's view. Printed raw, a White mate-in-3 read "M3"
+  // after Black's move but "M-3" after White's, beside a White-POV number.
+  // Convert to the same White-POV label the eval bar shows.
+  const mate = mateForWhite(m.mateInAfter, m.fenAfter);
+  if (mate != null) return mate > 0 ? `M${mate}` : `-M${-mate}`;
   const v = m.evalCpAfter / 100;
   return `${v > 0 ? '+' : ''}${v.toFixed(2)}`;
 }

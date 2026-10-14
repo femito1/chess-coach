@@ -133,7 +133,14 @@ export interface MoveEval {
   /** Principal variation (UCI) for the position BEFORE the move. Used to
    *  reconstruct "what the engine wanted" for puzzle generation. */
   bestPvUci?: string[];
+  /** Forced mate for the side to move in `fenBefore` — the mover. Stockfish's
+   *  own convention: positive = that side mates, negative = it is mated. */
   mateInBefore?: number;
+  /** Forced mate for the side to move in `fenAfter` — the *opponent*, not the
+   *  mover, and not White. Positive = the opponent mates (the move allowed
+   *  it); 0 = the mover just delivered mate. Kept in the engine's convention
+   *  because stored rows already are; convert at the reader (`mateForWhite`
+   *  for display, `allowedMate`'s positive test in `detectMotifs`). */
   mateInAfter?: number;
   classification: Classification;
   depth: number;
