@@ -50,7 +50,7 @@ import { looksLikePhone } from '@/engine/device';
  *                         output for existing PGNs (e.g. updated openings
  *                         dataset).
  */
-export const RECOMPUTE_VERSION = 3;
+export const RECOMPUTE_VERSION = 4;
 export const OPENING_REFRESH_VERSION = 1;
 /** Version stamp for the boot-time `backfillUserTimeStats` pass. Bump
  *  this any time `computeUserTimeStats` would produce different output
@@ -670,12 +670,18 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
         const shouldTag =
           cls === 'blunder' || cls === 'mistake' || cls === 'miss' || cls === 'inaccuracy';
         if (shouldTag) {
+          // The opponent's best reply in `fenAfter` is the next ply's best
+          // move — the same reading `analyzeGamePgn` passes as `replyUci`.
+          const nextPly = a.moves[idx + 1];
+          const replyUci =
+            nextPly && nextPly.fenBefore === m.fenAfter ? nextPly.bestMoveUci : undefined;
           motifs = detectMotifs({
             fenBefore: m.fenBefore,
             fenAfter: m.fenAfter,
             playedUci: m.uci ?? '',
             bestUci: m.bestMoveUci,
             bestPvUci: m.bestPvUci,
+            replyUci,
             winrateBefore: m.winrateBefore,
             winrateAfter: m.winrateAfter,
             mateInBefore: m.mateInBefore,
