@@ -78,8 +78,13 @@ function rowEvaluator(e: EvalCacheEntry): string {
 }
 
 /** In-flight dedup: if two callers ask for the same (fen, depth) at once,
- *  only one engine job runs. Cleared per-entry once the promise settles. */
-const inflight = new Map<string, Promise<AnalysisResult>>();
+ *  only one engine job runs. Cleared per-entry once the promise settles.
+ *  Each entry remembers the abort flag of the game that started it — see
+ *  `cachedAnalyze` for why a joiner must not inherit an abandoned game's fate. */
+const inflight = new Map<
+  string,
+  { promise: Promise<AnalysisResult>; signal?: { aborted: boolean } }
+>();
 
 /** Hit/miss counters for the *current* page session. Read by the test
  *  script and could be surfaced in a debug panel later.
@@ -272,16 +277,38 @@ async function maybeEvict(): Promise<void> {
  *
  * Always returns a fresh promise — multiple concurrent callers will
  * await the same shared promise but each get their own resolution.
+ *
+ * `signal` is the requesting game's abort flag, handed on to the pool so a
+ * preempted game's not-yet-started positions are dropped rather than run ahead
+ * of the game the user asked for (see `EnginePool.analyze`).
+ *
+ * That makes coalescing subtle, and the case is not rare: the game that
+ * preempts is usually the same opening as the one abandoned, so it asks for
+ * positions the abandoned game still has queued. Joining such an entry blindly
+ * would hand the NEW game the old game's `aborted` rejection — and since the
+ * new game's own signal is clear, the queue would record it as a genuine
+ * analysis failure. So a joiner of an abandoned entry still gets its result if
+ * a worker had already started it, and re-issues under its own signal if it
+ * was dropped.
  */
 export function cachedAnalyze(
   fen: string,
   depth: number,
+  signal?: { aborted: boolean },
 ): Promise<AnalysisResult> {
   const key = cacheKey(fen, depth);
   const existing = inflight.get(key);
   if (existing) {
     cacheStats.inflightCoalesced++;
-    return existing;
+    if (!existing.signal?.aborted) return existing.promise;
+    return existing.promise.catch((err: unknown) => {
+      // Ours to propagate only if WE were abandoned too.
+      if (signal?.aborted) throw err;
+      // The entry's own `finally` has normally removed it by now; clearing it
+      // here too means the re-issue can never find it again and loop.
+      if (inflight.get(key) === existing) inflight.delete(key);
+      return cachedAnalyze(fen, depth, signal);
+    });
   }
 
   const p = (async () => {
@@ -295,16 +322,18 @@ export function cachedAnalyze(
       return cached;
     }
     cacheStats.misses++;
-    const result = await analysisPool().analyze(fen, depth);
+    const result = await analysisPool().analyze(fen, depth, signal);
     await writeBack(fen, depth, evaluator, result);
     return result;
   })();
 
-  inflight.set(key, p);
+  const entry = { promise: p, signal };
+  inflight.set(key, entry);
   // Always clear inflight when settled so a transient failure isn't
-  // remembered forever.
+  // remembered forever. Identity-guarded: a joiner that re-issued after this
+  // entry was dropped (above) may already have replaced it.
   p.finally(() => {
-    inflight.delete(key);
+    if (inflight.get(key) === entry) inflight.delete(key);
   }).catch(() => {});
   return p;
 }

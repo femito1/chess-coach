@@ -25,6 +25,11 @@
 //      and restart forever and never finish. This is the assertion that stops a
 //      livelock.
 //
+//   4. **The chooser asks about the analysis row, not just the status.** An
+//      `error` game is dropped (re-choosing it was a tight retry loop), and a
+//      `done` game with no analysis row — which the review page requests on
+//      purpose — is analyzed rather than discarded.
+//
 // Run: node scripts/run-tests.mjs --only=analysis-priority
 
 import { runBrowserTest, expect, appendBypass } from '../harness.mjs';
@@ -158,5 +163,73 @@ await runBrowserTest({
       inflight.otherGameAborted,
       'requesting a different game preempts the one in flight',
     ).toBe(true);
+
+    /* ---------------------------------------------------------------- */
+    /*  Status vs. analysis row                                         */
+    /* ---------------------------------------------------------------- */
+    // The chooser used to keep any priority game not yet `done`, and drop every
+    // `done` one. Both halves were wrong (`priorityGameWantsAnalysis`):
+    //   - an `error` game was re-chosen at once, forever — a tight loop that
+    //     also starved the rest of the library;
+    //   - a `done` game with no analysis row, which the review page requests
+    //     on purpose, was discarded and the page said "queued" forever.
+    // `autoAnalyze` is still off from above, so "dropped" reads as null here.
+    // The live pump is paused for this block: it honours the priority list
+    // whatever `autoAnalyze` says, so it would otherwise start analyzing the
+    // `done`-without-row game between the request and our pick.
+    const status = await page.evaluate(async () => {
+      const { db } = await import('/src/db/schema.ts');
+      const q = await import('/src/engine/queue.ts');
+      q.useQueueStore.getState().setPaused(true);
+      const pick = async () => (await q._nextGameToAnalyzeForTest())?.id ?? null;
+
+      await db.games.update('prio-oldest', {
+        analysisStatus: 'error',
+        analysisError: 'Invalid move: Rh8+',
+      });
+      q.requestAnalysisNow('prio-oldest');
+      const pickedErrored = await pick();
+      const erroredLeftInPriority = q._priorityIds().includes('prio-oldest');
+
+      await db.games.update('prio-middle', { analysisStatus: 'done' });
+      await db.analyses.delete('prio-middle');
+      q.requestAnalysisNow('prio-middle');
+      const pickedDoneWithoutRow = await pick();
+
+      await db.analyses.put({
+        gameId: 'prio-middle',
+        depth: 1,
+        analyzedAt: Date.now(),
+        engine: 'test',
+        moves: [],
+      });
+      const pickedDoneWithRow = await pick();
+      q.useQueueStore.getState().setPaused(false);
+
+      return {
+        pickedErrored,
+        erroredLeftInPriority,
+        pickedDoneWithoutRow,
+        pickedDoneWithRow,
+      };
+    });
+
+    console.log('status:', JSON.stringify(status));
+    expect(
+      status.pickedErrored,
+      'an errored priority game is not re-chosen (that was a tight retry loop)',
+    ).toBe(null);
+    expect(
+      status.erroredLeftInPriority,
+      'an errored priority game is dropped from the list',
+    ).toBe(false);
+    expect(
+      status.pickedDoneWithoutRow,
+      'a `done` game with no analysis row that the review page asked for is analyzed',
+    ).toBe('prio-middle');
+    expect(
+      status.pickedDoneWithRow,
+      'a `done` game whose analysis row exists is dropped',
+    ).toBe(null);
   },
 });

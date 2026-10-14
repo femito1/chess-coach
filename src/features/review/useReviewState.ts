@@ -36,24 +36,10 @@ export function useReviewState(game: Game | undefined) {
     { san: string; uci: string; fen: string }[]
   >([]);
 
-  const { mainlineFens, mainlineHistory } = useMemo(() => {
-    if (!game) return { mainlineFens: [], mainlineHistory: [] as Move[] };
-    const c = new Chess();
-    try {
-      c.loadPgn(game.pgn);
-    } catch {
-      return { mainlineFens: [], mainlineHistory: [] as Move[] };
-    }
-    const history = c.history({ verbose: true }) as Move[];
-    const fens: string[] = [];
-    const replay = new Chess();
-    fens.push(replay.fen());
-    for (const m of history) {
-      replay.move(m.san);
-      fens.push(replay.fen());
-    }
-    return { mainlineFens: fens, mainlineHistory: history };
-  }, [game]);
+  const { mainlineFens, mainlineHistory } = useMemo(
+    () => (game ? replayMainline(game.pgn) : { mainlineFens: [], mainlineHistory: [] }),
+    [game],
+  );
 
   const isExploring = explorationMoves.length > 0;
   const currentFen = isExploring
@@ -136,6 +122,41 @@ export function useReviewState(game: Game | undefined) {
     tryPlay: (move: { from: string; to: string; promotion?: string }) => boolean;
     resetExploration: () => void;
   };
+}
+
+/**
+ * A game's mainline as the review board steps through it: `mainlineFens[0]` is
+ * the starting position and `mainlineFens[p]` the position after ply `p`.
+ * Empty when the PGN won't parse.
+ *
+ * Everything is inside the try, replay included: this runs during render (from
+ * `useReviewState`'s memo), so a throw here is not a failed review but a
+ * crashed page.
+ *
+ * The replay starts from the game's OWN first position (`history[0].before` —
+ * chess.js honours a `[SetUp "1"] [FEN …]` header on load), not from
+ * `new Chess()`. It used to start from the standard position, so a game set up
+ * from a position threw "Invalid move" on its first SAN, outside the try, and
+ * took the whole review page down.
+ */
+export function replayMainline(pgn: string): {
+  mainlineFens: string[];
+  mainlineHistory: Move[];
+} {
+  try {
+    const c = new Chess();
+    c.loadPgn(pgn);
+    const history = c.history({ verbose: true }) as Move[];
+    const replay = new Chess(history[0]?.before ?? c.fen());
+    const fens: string[] = [replay.fen()];
+    for (const m of history) {
+      replay.move(m.san);
+      fens.push(replay.fen());
+    }
+    return { mainlineFens: fens, mainlineHistory: history };
+  } catch {
+    return { mainlineFens: [], mainlineHistory: [] };
+  }
 }
 
 function uciOf(m: Move | undefined): string | undefined {

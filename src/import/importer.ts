@@ -91,6 +91,34 @@ export function reparseOpeningFromPgn(pgn: string): { opening?: string; eco?: st
   return { eco, opening };
 }
 
+/**
+ * Whether a Chess.com game is standard chess, and so something this app can
+ * import at all.
+ *
+ * Chess.com's archives mix variants in with standard games — `rules` is
+ * `chess960`, `bughouse`, `crazyhouse`, `kingofthehill`, `threecheck`, … — and
+ * nothing downstream speaks any of them: the analyzer replays SAN under standard
+ * rules and Stockfish is never put in `UCI_Chess960`. A Chess960 game
+ * therefore either failed analysis on its first move (it starts from a `[FEN]`
+ * the replay ignored) or, once that replay was fixed, would be judged with
+ * standard castling; and its moves would still pollute the openings features,
+ * which read every game as a line from the standard start. So variants are
+ * skipped at the door rather than imported and mishandled everywhere.
+ *
+ * Standard games carry `rules: 'chess'`. A missing `rules` counts as standard
+ * too: treating absence as a variant would silently drop games from any
+ * response (or fixture) that omits the field.
+ *
+ * Every importer filters with this BEFORE mapping — the bulk imports, the
+ * single-game deep link, the off-laptop worker, and the new-games banner's
+ * count. The banner matters as much as the imports: it counts archive ids
+ * missing locally, so if it counted variants the imports skip, it would offer
+ * the same "N new games" forever.
+ */
+export function isStandardChessComGame(g: Pick<ChessComGame, 'rules'>): boolean {
+  return g.rules === undefined || g.rules === 'chess';
+}
+
 export function chessComGameToGame(g: ChessComGame, username: string): Game {
   const lowered = username.toLowerCase();
   const userIsWhite = g.white.username.toLowerCase() === lowered;

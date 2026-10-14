@@ -181,6 +181,8 @@ export class EnginePool {
   private queue: Array<{
     fen: string;
     depth: number;
+    /** The requesting game's abort flag — see `analyze`. */
+    signal?: { aborted: boolean };
     resolve: (r: AnalysisResult) => void;
     reject: (e: unknown) => void;
   }> = [];
@@ -336,11 +338,36 @@ export class EnginePool {
     await Promise.all(this.workers.map((w) => w.newGame()));
   }
 
-  /** Analyze a single position by claiming the next free worker. Resolves
-   *  with the analysis result; never throws unless the worker errored. */
-  analyze(fen: string, depth: number): Promise<AnalysisResult> {
+  /**
+   * Analyze a single position by claiming the next free worker. Resolves with
+   * the analysis result; throws if the worker errored, or with `aborted` if
+   * `signal` tripped before a worker picked the task up.
+   *
+   * ── Why a queued task can be abandoned ──────────────────────────────────
+   *
+   * `analyzeGamePgn` enqueues EVERY position of a game up front, so the pool's
+   * FIFO holds the whole game while a few workers chew through it. Preempting a
+   * game (`requestAnalysisNow`) used to stop only the analyzer's per-ply loop:
+   * the game's remaining positions stayed queued here, ahead of the game the
+   * user had just asked for, and ran to completion first — for a 60-ply game on
+   * four workers that is most of the abandoned game's analysis, which is exactly
+   * the wait preemption exists to remove.
+   *
+   * So a task carries its game's abort flag and `pump` drops a tripped one
+   * instead of dispatching it. Only tasks still WAITING are dropped: one that a
+   * worker already started runs to the end (cancelling it mid-search is the
+   * worker's business, and its finished result is still worth caching). The
+   * flag is the plain `{ aborted }` object the queue already uses, so it is read
+   * at dispatch time rather than observed — no listener to leak, and the
+   * Node worker's backend, which never aborts, needs nothing.
+   */
+  analyze(
+    fen: string,
+    depth: number,
+    signal?: { aborted: boolean },
+  ): Promise<AnalysisResult> {
     return new Promise<AnalysisResult>((resolve, reject) => {
-      this.queue.push({ fen, depth, resolve, reject });
+      this.queue.push({ fen, depth, signal, resolve, reject });
       this.pump();
     });
   }
@@ -387,6 +414,13 @@ export class EnginePool {
    *  rehydrate transparently on the next analyze() call. */
   private pump(): void {
     while (this.queue.length > 0) {
+      // Drop abandoned tasks before claiming (or spawning) a worker for them —
+      // see `analyze`. Done eagerly at the head so a preempted game's backlog
+      // drains in one pass and never holds a slot.
+      if (this.queue[0].signal?.aborted) {
+        this.queue.shift()!.reject(new Error('aborted'));
+        continue;
+      }
       let idx = this.busy.indexOf(false);
       if (idx === -1) {
         // No free worker — try to spin up a new one if we're under cap.

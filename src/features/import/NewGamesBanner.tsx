@@ -5,7 +5,11 @@ import { useLocation } from 'react-router-dom';
 import { db, getSettings, type Settings } from '@/db/schema';
 import { listImportRecordsFor, recordImport } from '@/db/imports';
 import { fetchArchives, fetchMonth, parseArchiveUrl } from '@/api/chesscom';
-import { chessComGameToGame, gameIdFromUrl } from '@/import/importer';
+import {
+  chessComGameToGame,
+  gameIdFromUrl,
+  isStandardChessComGame,
+} from '@/import/importer';
 import { upsertGames } from '@/db/queries';
 import {
   planNewGameFetches,
@@ -436,7 +440,11 @@ async function runCheck(
           const games = await fetchMonth(p.archiveUrl);
           archiveGameIds.set(
             p.archiveUrl,
-            games.map((game) => gameIdFromUrl(game.url)),
+            // Count only what an import would actually add: a variant the
+            // import skips would otherwise read as "new" forever.
+            games
+              .filter(isStandardChessComGame)
+              .map((game) => gameIdFromUrl(game.url)),
           );
         } catch {
           archiveGameIds.set(p.archiveUrl, []);
@@ -536,7 +544,9 @@ async function doImport(
     let done = 0;
     for (const url of archiveUrls) {
       const games = await fetchMonth(url);
-      const mapped = games.map((g) => chessComGameToGame(g, username));
+      const mapped = games
+        .filter(isStandardChessComGame)
+        .map((g) => chessComGameToGame(g, username));
       const upsertRes = await upsertGames(mapped);
       added += upsertRes.added;
       const parsed = parseArchiveUrl(url);

@@ -7,6 +7,7 @@ import {
 import {
   getSettings,
   db,
+  type Game,
 } from '@/db/schema';
 import {
   backfillBrilliantCounts,
@@ -489,8 +490,9 @@ export function _setInFlightForTest(
 /**
  * Next game to analyze: anything the user is looking at, else newest-first.
  *
- * A priority id is dropped once it is no longer analyzable (done, or deleted), so
- * the list drains itself rather than needing separate cleanup.
+ * A priority id is dropped once it is no longer analyzable (deleted, errored, or
+ * done with its analysis row present — `priorityGameWantsAnalysis`), so the list
+ * drains itself rather than needing separate cleanup.
  *
  * ── `Settings.autoAnalyze` gates the second half only ─────────────────────
  *
@@ -525,12 +527,43 @@ async function nextGameToAnalyze() {
   while (qstate.priority.length > 0) {
     const id = qstate.priority[0];
     const game = await db.games.get(id);
-    if (game && game.analysisStatus !== 'done') return game;
+    if (game && (await priorityGameWantsAnalysis(game))) return game;
     qstate.priority.shift();
   }
   const { autoAnalyze } = await getSettings();
   if (!autoAnalyze) return undefined;
   return nextPendingGame();
+}
+
+/**
+ * Whether a game on the priority list should be analyzed now, or dropped from it.
+ *
+ * The list is the review page saying "I am showing this game and it has no
+ * analysis row" (see `needsAnalysis` in `ReviewPage`). So the question is that
+ * row, not the status alone — and the two disagree in both directions, each of
+ * which used to be a bug:
+ *
+ *  - **`error` → drop.** A priority id used to be dropped only when its game
+ *    reached `done`. A game whose analysis threw (an unparseable or unsupported
+ *    PGN — deterministic, so retrying cannot help) was set to `error` and then
+ *    chosen again on the very next iteration, with no sleep in between: a tight
+ *    loop, measured at ~380 status writes in 300 ms, that also starved every
+ *    other game in the library. The review page already stops requesting a game
+ *    in `error` and offers Retry, which `requeueGame`s it to `pending` and so
+ *    re-requests it — so dropping here loses nothing the user asked for.
+ *  - **`done` with no analysis row → analyze.** The page deliberately requests
+ *    this case too (a partial sync or a deleted row: the game says `done` but
+ *    there is nothing to show). Dropping every `done` id discarded exactly that
+ *    request, and the page said "queued" forever. Reading the row costs one
+ *    keyed get, and only for a `done` game at the head of the list.
+ *
+ * `pending` stays analyzable, and so does `running`, which the chooser only sees
+ * on a row left over from a session that died mid-analysis.
+ */
+async function priorityGameWantsAnalysis(game: Game): Promise<boolean> {
+  if (game.analysisStatus === 'error') return false;
+  if (game.analysisStatus !== 'done') return true;
+  return !(await db.analyses.get(game.id));
 }
 
 /**

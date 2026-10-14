@@ -52,7 +52,7 @@ import { selectCandidates, selectUnsettled } from '@/features/sync/selectCandida
 import { selectImportArchives } from '@/features/sync/selectImportArchives';
 import { toCloudAnalysis, toCloudGame } from '@/features/sync/diff';
 import { fetchArchives, fetchMonth } from '@/api/chesscom';
-import { chessComGameToGame } from '@/import/importer';
+import { chessComGameToGame, isStandardChessComGame } from '@/import/importer';
 import { WorkerPool, evaluatorId, type Evaluator } from './engine';
 import { cpus } from 'node:os';
 
@@ -187,6 +187,7 @@ async function importNewGames(
     const added: string[] = [];
     for (const url of archives) {
       const fresh = (await fetchMonth(url))
+        .filter(isStandardChessComGame)
         .map((g) => chessComGameToGame(g, username))
         .filter((g) => !known.has(g.id) && !added.includes(g.id));
       if (fresh.length === 0) continue;
