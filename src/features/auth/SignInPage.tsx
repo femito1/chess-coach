@@ -7,10 +7,12 @@ import { useTranslation } from 'react-i18next';
  * Google / GitHub / email-magic-link UI internally based on the providers
  * enabled in the Clerk dashboard (see SETUP_AUTH.md §1).
  *
- * Post-sign-in, Clerk redirects to `signInForceRedirectUrl` (the dashboard
- * by default; if the user was bounced here from a deep link, the auth gate
- * in `AppLayout` will route them to the right place after sign-in
- * because Clerk supports `redirect_url` query param out of the box).
+ * Post-sign-in, Clerk honours the `redirect_url` query param that
+ * `AuthGate` / `OnboardingGate` attach when they bounce a deep link here,
+ * and only falls back to the dashboard when there is none. That is why
+ * this is `fallbackRedirectUrl`, not `forceRedirectUrl`: Clerk ranks a
+ * force URL above the search param, so a signed-out extension link
+ * (`/review-by-url?…`) used to land on the dashboard instead.
  *
  * We use `routing="path"` (the default). Clerk's `<SignIn>` mounts at
  * `/sign-in` and owns its sub-paths (`/sign-in/factor-one`,
@@ -33,7 +35,7 @@ export function SignInPage() {
         path="/sign-in"
         routing="path"
         signUpUrl="/sign-in"
-        forceRedirectUrl="/dashboard"
+        fallbackRedirectUrl="/dashboard"
       />
     </div>
   );
