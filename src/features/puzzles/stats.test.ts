@@ -12,6 +12,7 @@ import {
   summarize,
   themeStats,
 } from './stats';
+import { MAX_ATTEMPT_HISTORY, capHistory, withEvent } from './events';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -94,6 +95,43 @@ describe('eventsOf — legacy rows', () => {
     expect(eventsOf(row({ history: [], solvedClean: true }))).toEqual([
       { at: T0, outcome: 'clean' },
     ]);
+  });
+});
+
+describe('withEvent — appending an attempt', () => {
+  it('keeps a legacy row’s first attempt when it is retried', () => {
+    // Missed before `history` existed, then retried cleanly from Review. If
+    // the retry became the only event, the puzzle would read as a clean first
+    // try: a rating jump and gone from Review.
+    const legacy = row({ attempts: 1, solvedClean: false });
+    const retry = ev(T0 + DAY, 'clean', { good: 2, bad: 0 });
+    const after = row({
+      attempts: 2,
+      solvedClean: true,
+      lastAttemptedAt: T0 + DAY,
+      history: withEvent(legacy, retry),
+    });
+    expect(after.history).toEqual([ev(T0, 'mistake'), retry]);
+    expect(summarize(after, T0 + DAY).first).toBe('mistake');
+    expect(reviewState(after, T0 + DAY).status).toBe('later');
+    expect(overallStats([after], T0 + DAY).firstTryRate).toBe(0);
+  });
+
+  it('starts a new row’s history with the attempt alone', () => {
+    expect(withEvent(undefined, ev(T0, 'hint'))).toEqual([ev(T0, 'hint')]);
+  });
+
+  it('caps at MAX_ATTEMPT_HISTORY but never drops the first attempt', () => {
+    let history: PuzzleAttemptEvent[] = [];
+    for (let i = 0; i <= MAX_ATTEMPT_HISTORY; i++) {
+      const prior = i === 0 ? undefined : withHistory(history);
+      history = withEvent(prior, ev(T0 + i * HOUR, i === 0 ? 'mistake' : 'clean'));
+    }
+    expect(history).toHaveLength(MAX_ATTEMPT_HISTORY);
+    expect(history[0]).toEqual(ev(T0, 'mistake'));
+    expect(history[1].at).toBe(T0 + 2 * HOUR);
+    expect(history[history.length - 1].at).toBe(T0 + MAX_ATTEMPT_HISTORY * HOUR);
+    expect(capHistory(history.slice(0, 3))).toEqual(history.slice(0, 3));
   });
 });
 

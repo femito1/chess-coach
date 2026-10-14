@@ -177,7 +177,14 @@ export function LibraryPuzzleSolver({
     ? solutionSteps[playbackIdx]?.uci || undefined
     : lastUci;
 
-  const liveEval = useLiveEval(boardFen, 12);
+  const finished = status === 'solved' || status === 'revealed';
+
+  // No engine until the puzzle is over. Its read of the position being
+  // solved is the answer in another form — "M2" on the bar says "mate in 2"
+  // as plainly as the hidden `mateIn2` theme would (see `Rail`), and even a
+  // bar slammed to one side says "there is a mate". The bar stays in place,
+  // neutral, so the board doesn't resize when it comes alive.
+  const liveEval = useLiveEval(finished ? boardFen : '', 12);
 
   /** Report the outcome exactly once per puzzle. `usedHint` is passed
    *  explicitly because callers may fire from inside a `setTimeout`
@@ -239,6 +246,8 @@ export function LibraryPuzzleSolver({
         setLastUci(finalUci);
         setSolvedIdx(finalIdx);
         setAwaitingReply(false);
+        // A hint is for the move it was asked on; the reply moves on.
+        setHintShown(false);
         if (finalSolved) {
           setStatus('solved');
           report({ usedHint: hintAtCommit, revealed: false });
@@ -268,6 +277,10 @@ export function LibraryPuzzleSolver({
   }
 
   function showHint() {
+    // While the reply is pending, `solvedIdx` already points at the
+    // opponent's move: a hint now would ring *their* piece, and still mark
+    // the attempt as hinted.
+    if (awaitingReply) return;
     setHintShown(true);
     setHintUsed(true);
   }
@@ -283,11 +296,9 @@ export function LibraryPuzzleSolver({
 
   const nextExpected = puzzle.solution[solvedIdx];
   const hintSquares =
-    hintShown && status === 'solving' && nextExpected
+    hintShown && status === 'solving' && !awaitingReply && nextExpected
       ? [{ square: nextExpected.slice(0, 2), color: 'hint' as const }]
       : [];
-
-  const finished = status === 'solved' || status === 'revealed';
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
@@ -309,6 +320,9 @@ export function LibraryPuzzleSolver({
               lastMoveUci={boardLastUci}
               viewOnly={showSolution || finished || awaitingReply}
               onMove={(m) => onMove(m)}
+              // Some lines hinge on an underpromotion; an auto-queen would
+              // make them unsolvable (see `applyPuzzleMove`).
+              choosePromotion
               highlightSquares={showSolution ? [] : hintSquares}
             />
           }
@@ -366,7 +380,14 @@ export function LibraryPuzzleSolver({
           </div>
           <div className="flex gap-1">
             {status === 'solving' && !hintShown && (
-              <button type="button" className="btn text-xs" onClick={showHint}>
+              <button
+                type="button"
+                className="btn text-xs"
+                onClick={showHint}
+                // Disabled rather than hidden, so the row doesn't jump on
+                // every move.
+                disabled={awaitingReply}
+              >
                 {t('puzzles.solver.hint_btn')}
               </button>
             )}

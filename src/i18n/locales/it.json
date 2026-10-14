@@ -1,5 +1,12 @@
 {
   "common": {
+    "promotion": {
+      "choose": "Scegli il pezzo di promozione",
+      "q": "Donna",
+      "n": "Cavallo",
+      "r": "Torre",
+      "b": "Alfiere"
+    },
     "all": "Tutti",
     "save": "Salva",
     "saved": "Salvato.",

@@ -477,31 +477,62 @@ describe('mergeAttempt', () => {
       expect(merged.attempts).toBe(3);
     });
 
-    it('caps history to the newest MAX_ATTEMPT_HISTORY', () => {
+    it('caps history to the first attempt plus the newest MAX_ATTEMPT_HISTORY - 1', () => {
+      // The first attempt is what the rating and first-try stats read; a
+      // plain newest-N cap re-keyed them to attempt #2.
       const a = attempt({
         attempts: MAX_ATTEMPT_HISTORY,
-        history: Array.from({ length: MAX_ATTEMPT_HISTORY }, (_, i) => ev(i * 2)),
+        history: Array.from({ length: MAX_ATTEMPT_HISTORY }, (_, i) => ev(i * 2, i === 0 ? 'mistake' : 'clean')),
       });
       const b = attempt({
         attempts: MAX_ATTEMPT_HISTORY,
         history: Array.from({ length: MAX_ATTEMPT_HISTORY }, (_, i) => ev(i * 2 + 1)),
       });
       const merged = mergeAttempt(a, b);
+      expect(merged).toEqual(mergeAttempt(b, a));
       expect(merged.history).toHaveLength(MAX_ATTEMPT_HISTORY);
       const total = 2 * MAX_ATTEMPT_HISTORY;
-      expect(merged.history!.map((e) => e.at)).toEqual(
-        Array.from({ length: MAX_ATTEMPT_HISTORY }, (_, i) => total - MAX_ATTEMPT_HISTORY + i),
-      );
+      expect(merged.history!.map((e) => e.at)).toEqual([
+        0,
+        ...Array.from({ length: MAX_ATTEMPT_HISTORY - 1 }, (_, i) => total - MAX_ATTEMPT_HISTORY + 1 + i),
+      ]);
+      expect(merged.history![0].outcome).toBe('mistake');
       expect(merged.attempts).toBeGreaterThanOrEqual(merged.history!.length);
+      expect(mergeAttempt(merged, a)).toEqual(merged);
+      expect(mergeAttempt(merged, b)).toEqual(merged);
     });
 
-    it('keeps history from a side when the other is a legacy row', () => {
-      const legacy = attempt({ attempts: 4 });
-      const recorded = attempt({ attempts: 1, history: [ev(100)] });
+    it('keeps a legacy side’s first attempt when the other side has a history', () => {
+      // Missed on the phone before `history` existed; retried cleanly on a
+      // device that recorded only the retry. Dropping the legacy side's
+      // synthesized first attempt would make the retry a clean first try.
+      const legacy = attempt({ firstSeenAt: 100, lastAttemptedAt: 100, attempts: 1 });
+      const recorded = attempt({
+        firstSeenAt: 500,
+        lastAttemptedAt: 500,
+        attempts: 1,
+        history: [ev(500)],
+      });
       const merged = mergeAttempt(legacy, recorded);
-      expect(merged.history).toEqual([ev(100)]);
-      expect(merged.attempts).toBe(4);
+      expect(merged.history).toEqual([ev(100, 'mistake'), ev(500)]);
+      expect(merged.attempts).toBe(2);
+      expect(mergeAttempt(recorded, legacy)).toEqual(merged);
+      expect(mergeAttempt(merged, legacy)).toEqual(merged);
       expect(mergeAttempt(attempt(), attempt()).history).toBeUndefined();
+    });
+
+    it('does not duplicate a legacy first attempt the other side already seeded', () => {
+      // `recordAttempt` seeds a legacy row's history from the same synthesis,
+      // so the retry's row and the untouched legacy copy share that event.
+      const legacy = attempt({ firstSeenAt: 100, lastAttemptedAt: 100, attempts: 1 });
+      const retried = attempt({
+        firstSeenAt: 100,
+        lastAttemptedAt: 500,
+        attempts: 2,
+        history: [ev(100, 'mistake'), ev(500)],
+      });
+      expect(mergeAttempt(legacy, retried).history).toEqual(retried.history);
+      expect(attemptDiffers(retried, mergeAttempt(legacy, retried))).toBe(false);
     });
 
     it('keeps puzzle content that only one side has', () => {

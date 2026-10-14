@@ -63,8 +63,12 @@ export function applyPuzzleMove(args: {
   const { fen, solutionUci, solvedIdx, move } = args;
   const expected = solutionUci[solvedIdx];
   if (!expected) return { kind: 'rejected', reason: 'no-expected' };
-  const uci = move.from + move.to + (move.promotion ?? '');
-  if (uci.slice(0, 4) !== expected.slice(0, 4)) {
+  const uci = (move.from + move.to + (move.promotion ?? '')).toLowerCase();
+  // The whole UCI, promotion piece included. Comparing only from/to
+  // credited a queen promotion as the line's knight underpromotion, and the
+  // scripted reply that followed was then often illegal on the board, so
+  // the line stalled. The solver's board asks which piece (`choosePromotion`).
+  if (uci !== expected.toLowerCase()) {
     return { kind: 'rejected', reason: 'wrong-move' };
   }
   const c = new Chess();
