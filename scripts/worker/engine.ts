@@ -53,6 +53,9 @@ export class NativeEngine {
   private readyPromise: Promise<void>;
   name = 'unknown';
   nnueActive = false;
+  /** Set when a timed-out search could not be stopped. The pool replaces a
+   *  broken engine instead of handing it out again. */
+  broken = false;
 
   constructor(
     private binPath: string,
@@ -170,11 +173,39 @@ export class NativeEngine {
       );
       const uci = (lines.find((l) => l.startsWith('bestmove')) ?? '').split(/\s+/)[1];
       bestMoveUci = uci && uci !== '(none)' ? uci : null;
+    } catch (err) {
+      // Detach before draining, so the abandoned search's last `info` lines
+      // can't reach this caller's result after it has already failed.
+      this.listeners.delete(collect);
+      await this.abandonSearch();
+      throw err;
     } finally {
       this.listeners.delete(collect);
     }
 
     return { depth: lastDepth ?? depth, bestMoveUci, scoreCp, scoreMate, pv };
+  }
+
+  /**
+   * End a search whose caller gave up on it.
+   *
+   * A timeout only stops *waiting*: Stockfish is still searching, and the pool
+   * returns the engine to idle. Left alone, the next `analyze()` on it sent its
+   * own `position`/`go` behind the old search and took the old search's
+   * `bestmove` — and the `info` lines before it — as its own answer, a wrong
+   * evaluation for a different position, silently. So stop the search and
+   * consume its `bestmove` here. If even that does not arrive the process is
+   * wedged, and it is killed and marked broken rather than reused.
+   */
+  private async abandonSearch(): Promise<void> {
+    const drained = this.until((l) => l.startsWith('bestmove'), 10_000, 'bestmove after stop');
+    this.send('stop');
+    try {
+      await drained;
+    } catch {
+      this.broken = true;
+      this.terminate();
+    }
   }
 
   terminate(): void {
@@ -206,7 +237,7 @@ export class WorkerPool implements EngineBackend {
   engineName = 'unknown';
 
   constructor(
-    binPath: string,
+    private binPath: string,
     readonly size: number,
     private evaluator: Evaluator,
     private cacheLimit = 400_000,
@@ -235,6 +266,18 @@ export class WorkerPool implements EngineBackend {
   }
 
   private release(e: NativeEngine): void {
+    if (e.broken) {
+      // A wedged process (see `abandonSearch`) is swapped for a fresh one so the
+      // pool keeps its size. The replacement handshakes lazily: `analyze` awaits
+      // its readiness, so it can be handed out at once.
+      const fresh = new NativeEngine(this.binPath, this.evaluator);
+      // Observed here so a failed handshake on an engine nobody has asked for
+      // yet is not an unhandled rejection (fatal in Node); `analyze` still
+      // awaits the same promise and reports it.
+      fresh.ready().catch(() => {});
+      this.engines[this.engines.indexOf(e)] = fresh;
+      e = fresh;
+    }
     const next = this.waiting.shift();
     if (next) next(e);
     else this.idle.push(e);
