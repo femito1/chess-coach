@@ -4,6 +4,7 @@ import {
   extractClocks,
   deriveTimeSpent,
 } from '@/engine/phase';
+import { resolveOpeningFamily } from '@/features/openings/library';
 
 /**
  * Game shape consumed by `ratingTrend` / `accuracyTrend` /
@@ -24,6 +25,56 @@ export function openingFamily(name: string | undefined): string {
   if (!name) return 'Unknown';
   const idx = name.indexOf(':');
   return (idx < 0 ? name : name.slice(0, idx)).trim() || 'Unknown';
+}
+
+/** A move sequence and everything after it: "3...d6", "...4.c3 Bg7",
+ *  ": 2.Nf3 d5". The number must start a word so a digit inside a name
+ *  can't trigger it. */
+const OPENING_MOVE_TEXT = /(?:\.{2,}|(?:^|[\s:,])\d+\.).*$/;
+
+/**
+ * Drop a trailing move sequence from an opening name, wherever it sits.
+ *
+ * Chess.com slugs append moves to the name, and `parseOpeningFromEcoUrl`
+ * only puts a colon before them when no marker word came first — so the
+ * moves arrive after a colon ("Caro Kann Defense: 2.Nf3 d5"), after a
+ * space ("Scotch Game 3...d6") or fused to the name ("Pirc
+ * Defense...4.c3 Bg7"). Left in, every distinct move tail is its own
+ * group of one or two games.
+ */
+export function stripOpeningMoves(name: string): string {
+  return name.replace(OPENING_MOVE_TEXT, '').replace(/[\s:,]+$/, '').trim();
+}
+
+/** First word that ends an opening's own name in Chess.com's vocabulary;
+ *  whatever follows is a variation ("Queens Pawn Opening Zukertort
+ *  Variation", "Indian Game East Indian London System"). */
+const FAMILY_END_WORD = /\b(?:Opening|Defense|Game|Attack|Gambit|System)\b/;
+
+/**
+ * The family a game is counted under on the win-rate chart.
+ *
+ * Not `openingFamily()` alone: the colon it splits on lands wherever the
+ * importer met its first marker word, and that depends on the slug's tail,
+ * so one opening arrived as up to a dozen rows ("Caro Kann Defense",
+ * "Caro Kann Defense Exchange Variation", "Caro Kann Defense...3.d3 …").
+ * The library's resolver collapses every such spelling onto its canonical
+ * family, which is also the name the row's deep link needs.
+ *
+ * Names the library doesn't know (Chess.com's "Queens Pawn Opening",
+ * "Nimzowitsch Larsen Attack" — different words from Lichess's, not
+ * different punctuation) fall back to the name cut after its first
+ * family-ending word, so their variations still fold into one row. That
+ * row keeps Chess.com's spelling; the chart resolves its link from moves.
+ */
+export function chartOpeningFamily(name: string | undefined): string {
+  const head = openingFamily(name);
+  const stripped = stripOpeningMoves(head) || head;
+  const resolved = resolveOpeningFamily(stripped);
+  if (resolved) return resolved;
+  const end = FAMILY_END_WORD.exec(stripped);
+  const cut = end ? stripped.slice(0, end.index + end[0].length) : stripped;
+  return resolveOpeningFamily(cut) ?? cut;
 }
 
 export interface RatingPoint {
@@ -295,12 +346,19 @@ export function winRateByOpening(
         : new Set([timeClassFilter])
       : new Set(timeClassFilter);
   const map = new Map<string, OpeningBar>();
+  // Resolution scans the library's families; a user has far fewer
+  // distinct names than games, so resolve each name once.
+  const familyByName = new Map<string | undefined, string>();
   for (const g of games) {
     if (allowedSet != null) {
       const cls = g.timeClass ?? 'other';
       if (!allowedSet.has(cls)) continue;
     }
-    const f = openingFamily(g.opening);
+    let f = familyByName.get(g.opening);
+    if (f === undefined) {
+      f = chartOpeningFamily(g.opening);
+      familyByName.set(g.opening, f);
+    }
     const agg = map.get(f) ?? {
       family: f,
       games: 0,
