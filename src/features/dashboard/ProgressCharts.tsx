@@ -16,6 +16,7 @@ import {
   accuracyTrend,
   ratingTrend,
   winRateByOpening,
+  effectiveModeSelection,
   type GameForCharts,
 } from './progress';
 import { usePersistedState } from '@/lib/usePersistedState';
@@ -232,20 +233,21 @@ export function ProgressCharts({ games }: { games: ReadonlyArray<GameForCharts> 
   }, [games]);
 
   // Drop any explicitly-selected modes the user no longer has data for
-  // (e.g. they renamed an account; chips for the old data hung around).
-  // `null` means "all available" — always valid.
-  const effectiveRatingMode: ModeSelection =
-    ratingMode == null
-      ? null
-      : ratingMode.filter((m) => availableModes.includes(m));
-  const effectiveAccuracyMode: ModeSelection =
-    accuracyMode == null
-      ? null
-      : accuracyMode.filter((m) => availableAccuracyModes.includes(m));
-  const effectiveOpeningMode: ModeSelection =
-    openingMode == null
-      ? null
-      : openingMode.filter((m) => availableOpeningModes.includes(m));
+  // (e.g. they renamed an account; chips for the old data hung around),
+  // and never leave a chart empty with no chip to fix it — see
+  // `effectiveModeSelection`. `null` means "all available".
+  const effectiveRatingMode: ModeSelection = effectiveModeSelection(
+    ratingMode,
+    availableModes,
+  );
+  const effectiveAccuracyMode: ModeSelection = effectiveModeSelection(
+    accuracyMode,
+    availableAccuracyModes,
+  );
+  const effectiveOpeningMode: ModeSelection = effectiveModeSelection(
+    openingMode,
+    availableOpeningModes,
+  );
 
   const ratingAllSelected = isAllSelected(effectiveRatingMode, availableModes);
   const accuracyAllSelected = isAllSelected(

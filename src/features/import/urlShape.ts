@@ -31,6 +31,12 @@ export function extractChessComGameId(url: string): string | undefined {
   return m?.[1];
 }
 
+/** True for a correspondence-game URL (`/game/daily/<id>`), the one
+ *  shape the archive API also uses for those games. */
+export function isDailyGameUrl(url: string): boolean {
+  return /chess\.com\/game\/daily\/\d+/.test(url);
+}
+
 /**
  * Generate the candidate `Game.id`s a given input URL could correspond
  * to. Returns the id derived from the input verbatim, plus the ids
@@ -60,11 +66,17 @@ export function candidateGameIdsForUrl(
     // (3 string-builds + 3 hash calls) and stable across chess.com
     // refactors — adding the next shape only requires extending this
     // list, not changing the deep-link or matching logic.
-    const SHAPES = [
-      `https://www.chess.com/game/live/${numericId}`,
-      `https://www.chess.com/live/game/${numericId}`,
-      `https://www.chess.com/game/${numericId}`,
-    ];
+    //
+    // Daily games have one shape of their own and a separate id space
+    // (a daily id can equal some live game's id), so a daily URL only
+    // varies into the daily shape and a live one only into live shapes.
+    const SHAPES = isDailyGameUrl(url)
+      ? [`https://www.chess.com/game/daily/${numericId}`]
+      : [
+          `https://www.chess.com/game/live/${numericId}`,
+          `https://www.chess.com/live/game/${numericId}`,
+          `https://www.chess.com/game/${numericId}`,
+        ];
     for (const shape of SHAPES) {
       if (shape !== url) ids.add(hashFn(shape));
     }
@@ -107,6 +119,38 @@ export function candidateMonths(
   const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   push(prev);
   return out;
+}
+
+/**
+ * Older months scanned once `candidateMonths` misses. Bounds a deep link
+ * with a wrong username (which can never hit) to a couple of years of
+ * fetches instead of the player's whole history.
+ */
+export const MAX_WIDENED_MONTHS = 24;
+
+/**
+ * The months to scan, newest first, after the `candidateMonths` window
+ * missed: every archive the player has that was not already tried, up to
+ * `limit`.
+ *
+ * Needed because the extension's `endTime` hint is the time of the
+ * click, not of the game — the page exposes no reliable end time. For a
+ * game just finished that is the right month, but for one opened from
+ * the archive months later it is not, and the game sat outside the
+ * three-month window. Archives are listed from Chess.com's own index, so
+ * months the player never played cost nothing.
+ */
+export function widenedSearchMonths(
+  archives: ReadonlyArray<{ url: string; year: number; month: number }>,
+  tried: ReadonlyArray<{ year: number; month: number }>,
+  limit: number = MAX_WIDENED_MONTHS,
+): string[] {
+  const triedKeys = new Set(tried.map((m) => m.year * 12 + m.month));
+  return archives
+    .filter((a) => !triedKeys.has(a.year * 12 + a.month))
+    .sort((a, b) => b.year * 12 + b.month - (a.year * 12 + a.month))
+    .slice(0, Math.max(0, limit))
+    .map((a) => a.url);
 }
 
 /**

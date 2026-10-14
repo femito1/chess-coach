@@ -5,7 +5,7 @@ import { fetchArchives, fetchMonth, formatMonth, parseArchiveUrl } from '@/api/c
 import { chessComGameToGame } from '@/import/importer';
 import { upsertGames } from '@/db/queries';
 import { getSettings, updateSettings, type ImportRecord } from '@/db/schema';
-import { listImportRecordsFor, recordImport } from '@/db/imports';
+import { isImportComplete, listImportRecordsFor, recordImport } from '@/db/imports';
 
 interface ArchiveEntry {
   url: string;
@@ -18,6 +18,10 @@ export function ImportPage() {
   const { t } = useTranslation();
   const [username, setUsername] = useState('');
   const [archives, setArchives] = useState<ArchiveEntry[]>([]);
+  // The name `archives` and `records` were loaded for. The import must use
+  // this, not the live input: editing the box after loading would otherwise
+  // map another player's months with your name, inverting colour and result.
+  const [loadedUser, setLoadedUser] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -37,9 +41,10 @@ export function ImportPage() {
     [archives],
   );
 
-  /** Months we have NOT yet imported for the current username, newest first. */
+  /** Months still needing an import for the current username, newest
+   *  first: never imported, or imported before the month was over. */
   const unsynced = useMemo(
-    () => sortedArchives.filter((a) => !records.has(a.url)),
+    () => sortedArchives.filter((a) => !isImportComplete(records.get(a.url))),
     [sortedArchives, records],
   );
 
@@ -54,6 +59,7 @@ export function ImportPage() {
     setError(null);
     setLoading(true);
     setArchives([]);
+    setLoadedUser('');
     setSelected(new Set());
     try {
       const u = username.trim();
@@ -65,15 +71,18 @@ export function ImportPage() {
         })
         .filter((x): x is ArchiveEntry => x !== null);
       setArchives(parsed);
+      setLoadedUser(u);
       await updateSettings({ username: u });
       await refreshRecords(u);
       // Pre-select the latest month that hasn't been imported yet so the
       // common path ("pull what's new") is one click.
       if (parsed.length > 0) {
         const recs = await listImportRecordsFor('chesscom', u);
-        const known = new Set(recs.map((r) => r.archiveUrl));
+        const complete = new Set(
+          recs.filter((r) => isImportComplete(r)).map((r) => r.archiveUrl),
+        );
         const sorted = [...parsed].sort((a, b) => (b.year - a.year) * 12 + (b.month - a.month));
-        const firstNew = sorted.find((a) => !known.has(a.url));
+        const firstNew = sorted.find((a) => !complete.has(a.url));
         setSelected(new Set([(firstNew ?? sorted[0]).url]));
       }
     } catch (e) {
@@ -102,14 +111,14 @@ export function ImportPage() {
   }
 
   async function doImport() {
-    if (selected.size === 0) return;
+    if (selected.size === 0 || !loadedUser) return;
     setImporting(true);
     setSummary(null);
     setError(null);
     setProgress({ done: 0, total: selected.size });
     let added = 0;
     let skipped = 0;
-    const u = username.trim();
+    const u = loadedUser;
     try {
       let done = 0;
       for (const url of selected) {
@@ -183,7 +192,10 @@ export function ImportPage() {
               {t('import.availableMonths', { count: sortedArchives.length })}
               {records.size > 0 && (
                 <span className="ml-2 text-xs text-text-muted font-normal">
-                  {t('import.previouslySynced', { synced: records.size, newCount: unsynced.length })}
+                  {t('import.previouslySynced', {
+                    synced: sortedArchives.length - unsynced.length,
+                    newCount: unsynced.length,
+                  })}
                 </span>
               )}
             </h2>

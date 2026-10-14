@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   accuracyTrend,
+  chartOpeningFamily,
   computeUserTimeStats,
+  effectiveModeSelection,
+  stripOpeningMoves,
   totalSecondsPlayed,
   winRateByOpening,
   type GameForCharts,
@@ -333,5 +336,99 @@ describe('winRateByOpening filtering', () => {
     expect(out).toHaveLength(1);
     expect(out[0].family).toBe('Italian Game');
     expect(out[0].losses).toBe(1);
+  });
+
+  /**
+   * The colon `openingFamily()` splits on lands wherever the importer met
+   * its first marker word, so one opening used to arrive as many rows —
+   * on real data the Caro-Kann was split across eight. Every spelling
+   * below is one `parseOpeningFromEcoUrl` actually produced.
+   */
+  it('files every spelling of one opening under one canonical row', () => {
+    const caro = [
+      'Caro Kann Defense: 2.Nf3 d5',
+      'Caro Kann Defense Exchange Variation: 3...cxd5',
+      'Caro Kann Defense: Advance Variation',
+      'Caro Kann Defense Advance Short Variation',
+      'Caro Kann Defense...3.d3 dxe4 4.dxe4 Qxd1 5.Kxd1',
+      'Caro Kann Defense',
+    ].map((name, i) => chartGame('rapid', name, 'win', 100 + i));
+    const out = winRateByOpening(caro);
+    expect(out.map((o) => o.family)).toEqual(['Caro-Kann Defense']);
+    expect(out[0].games).toBe(6);
+  });
+});
+
+describe('chartOpeningFamily', () => {
+  it('resolves to the library spelling, which the deep link needs', () => {
+    expect(chartOpeningFamily('Reti Opening: Kings Indian Attack')).toBe(
+      'Réti Opening',
+    );
+    expect(chartOpeningFamily('Scotch Game 3...d6')).toBe('Scotch Game');
+    expect(chartOpeningFamily('Pirc Defense...4.c3 Bg7')).toBe('Pirc Defense');
+  });
+
+  // Names the library doesn't know still fold their variations together,
+  // and keep Chess.com's spelling so the move-based link fallback (and
+  // `chart-opening-links.mjs`, which finds the row by this text) work.
+  it('falls back to the name cut after its family-ending word', () => {
+    expect(chartOpeningFamily('Kings Fianchetto Opening')).toBe(
+      'Kings Fianchetto Opening',
+    );
+    expect(chartOpeningFamily('Queens Pawn Opening Zukertort Variation')).toBe(
+      'Queens Pawn Opening',
+    );
+    expect(chartOpeningFamily('Queens Pawn Opening: 1...d5 2.Nf3')).toBe(
+      'Queens Pawn Opening',
+    );
+    expect(
+      chartOpeningFamily('Indian Game East Indian London System...4.e3 O O'),
+    ).toBe('Indian Game');
+    expect(chartOpeningFamily(undefined)).toBe('Unknown');
+  });
+});
+
+describe('stripOpeningMoves', () => {
+  it('drops a move tail however it was introduced', () => {
+    expect(stripOpeningMoves('Caro Kann Defense: 2.Nf3 d5')).toBe(
+      'Caro Kann Defense',
+    );
+    expect(stripOpeningMoves('Sicilian Defense: Najdorf Variation, 6.Be2')).toBe(
+      'Sicilian Defense: Najdorf Variation',
+    );
+    expect(stripOpeningMoves('Scotch Game 3...d6')).toBe('Scotch Game');
+    expect(stripOpeningMoves('Pirc Defense...4.c3 Bg7')).toBe('Pirc Defense');
+    expect(
+      stripOpeningMoves('French Defense Advance Variation 3...dxe4 4.Nxe4'),
+    ).toBe('French Defense Advance Variation');
+  });
+
+  it('leaves names without moves alone', () => {
+    expect(stripOpeningMoves('Caro Kann Defense: Advance Variation')).toBe(
+      'Caro Kann Defense: Advance Variation',
+    );
+    expect(stripOpeningMoves("Van't Kruijs Opening")).toBe("Van't Kruijs Opening");
+  });
+});
+
+describe('effectiveModeSelection', () => {
+  it('passes "all" through and drops classes with no data', () => {
+    expect(effectiveModeSelection(null, ['rapid'])).toBeNull();
+    expect(effectiveModeSelection(['rapid', 'blitz'], ['rapid', 'bullet'])).toEqual([
+      'rapid',
+    ]);
+  });
+
+  // The bug: a stored ['blitz'] once only rapid games remained left every
+  // chart on "no mode selected", with the chips hidden (one class) so
+  // nothing could undo it.
+  it('falls back to all when the stored pick matches nothing available', () => {
+    expect(effectiveModeSelection(['blitz'], ['rapid'])).toBeNull();
+    expect(effectiveModeSelection(['blitz'], ['rapid', 'bullet'])).toBeNull();
+  });
+
+  it('keeps a deliberate empty pick only while chips can change it', () => {
+    expect(effectiveModeSelection([], ['rapid', 'blitz'])).toEqual([]);
+    expect(effectiveModeSelection([], ['rapid'])).toBeNull();
   });
 });

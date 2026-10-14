@@ -59,6 +59,20 @@ describe('openingGroupKey', () => {
     );
   });
 
+  // Once the parser has placed its colon it puts none before the moves,
+  // so they follow a space or are fused to the name. Each tail used to be
+  // a group of its own (90 of 424 games on real data).
+  it('strips a move tail that no colon or comma introduces', () => {
+    expect(openingGroupKey('Scotch Game 3...d6')).toBe('Scotch Game');
+    expect(openingGroupKey('Pirc Defense...4.c3 Bg7')).toBe('Pirc Defense');
+    expect(
+      openingGroupKey('Caro Kann Defense Two Knights Attack 3...dxe4 4.Nxe4'),
+    ).toBe('Caro Kann Defense Two Knights Attack');
+    expect(
+      openingGroupKey('Caro Kann Defense Two Knights Attack...4.Nxe4 Bg4'),
+    ).toBe('Caro Kann Defense Two Knights Attack');
+  });
+
   it('leaves a name with no punctuation alone', () => {
     // The marker scan finds nothing when the marker word ends the slug.
     expect(openingGroupKey('Italian Game Two Knights Defense')).toBe(
