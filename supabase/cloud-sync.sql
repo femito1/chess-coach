@@ -237,22 +237,24 @@ end $$;
 -- 5. Enrol the one account that should sync
 -- ---------------------------------------------------------------------------
 --
--- Looks the Clerk user id up from the profile row rather than making you paste
--- it. Requires that you have signed in at least once (so `profiles` has your
--- row) and that onboarding recorded your Chess.com username.
+-- By Clerk user id, literally. This used to look the id up from `profiles` by
+-- `chesscom_username ilike 'nandoravioli'` — but every user writes their own
+-- profile row, username included, so re-running this "safe to re-run" file
+-- enrolled anyone who had typed that username into onboarding. A Clerk id is
+-- issued by Clerk and cannot be claimed. `on conflict do nothing` keeps it
+-- idempotent. To enrol a different account, replace the id; find it with
+--     select id, display_name, chesscom_username from public.profiles;
+-- and confirm it against the Clerk dashboard (Users), not against what the
+-- profile row says about itself.
 
 insert into public.cloud_sync_allowlist (user_id, note)
-select id, 'nandoravioli / fernandorimoli1001@gmail.com'
-from public.profiles
-where chesscom_username ilike 'nandoravioli'
+values ('user_3DMKPYmIJbBLFpeNj3wOupt3GHL', 'nandoravioli / fernandorimoli1001@gmail.com')
 on conflict (user_id) do nothing;
 
--- Verify: this should return exactly one row. If it returns none, the lookup
--- above found no matching profile — run
---     select id, display_name, chesscom_username from public.profiles;
--- to find your Clerk id, then insert it directly:
---     insert into public.cloud_sync_allowlist (user_id, note)
---     values ('user_2abc…', 'nandoravioli') on conflict do nothing;
+-- Verify: this should return exactly one row. Any other row is an account
+-- enrolled by hand or by the old username lookup above — check it and, if it
+-- is not meant to sync, delete it:
+--     delete from public.cloud_sync_allowlist where user_id = '<id>';
 select a.user_id, a.note, p.chesscom_username, a.created_at
 from public.cloud_sync_allowlist a
 left join public.profiles p on p.id = a.user_id;
