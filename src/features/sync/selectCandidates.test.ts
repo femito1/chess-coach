@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { selectCandidates } from './selectCandidates';
+import { selectCandidates, selectUnsettled } from './selectCandidates';
 
 const NNUE = 'stockfish-16-nnue';
 const CLASSICAL = 'stockfish-16-classical';
@@ -84,5 +84,41 @@ describe('selectCandidates', () => {
 
   it('returns nothing for an empty library', () => {
     expect(selectCandidates(args({ gameIds: [] }))).toEqual([]);
+  });
+});
+
+describe('selectUnsettled', () => {
+  const NNUE18 = { depth: 18, engine: NNUE };
+
+  it('settles a game whose analysis landed but whose row is still pending', () => {
+    // The kill-between-two-writes case: without this the game is skipped
+    // forever, because an adequate analysis exists.
+    const games = [{ game_id: 'a', analysis_status: 'pending' }];
+    const existing = new Map([['a', NNUE18]]);
+    expect(selectUnsettled({ games, existing, candidates: [] })).toEqual(['a']);
+  });
+
+  it('leaves done games, and games about to be re-analyzed, alone', () => {
+    const games = [
+      { game_id: 'done', analysis_status: 'done' },
+      { game_id: 'none', analysis_status: 'pending' },
+      { game_id: 'queued', analysis_status: 'pending' },
+      { game_id: 'err', analysis_status: 'error' },
+    ];
+    const existing = new Map([
+      ['done', NNUE18],
+      ['queued', { depth: 12, engine: NNUE }],
+      ['err', NNUE18],
+    ]);
+    const candidates = selectCandidates({
+      gameIds: games.map((g) => g.game_id),
+      existing,
+      depth: 18,
+      wantNnue: true,
+      force: false,
+    });
+    // `none` is a candidate (missing) and `queued` one (shallower): the
+    // re-analysis settles both. Only `err` needs settling on its own.
+    expect(selectUnsettled({ games, existing, candidates })).toEqual(['err']);
   });
 });

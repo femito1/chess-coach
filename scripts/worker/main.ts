@@ -48,9 +48,9 @@ import {
   countUserBrilliancies,
 } from '@/engine/analyzer';
 import type { Analysis, Game } from '@/db/schema';
-import { selectCandidates } from '@/features/sync/selectCandidates';
+import { selectCandidates, selectUnsettled } from '@/features/sync/selectCandidates';
 import { selectImportArchives } from '@/features/sync/selectImportArchives';
-import { toCloudGame } from '@/features/sync/diff';
+import { toCloudAnalysis, toCloudGame } from '@/features/sync/diff';
 import { fetchArchives, fetchMonth } from '@/api/chesscom';
 import { chessComGameToGame } from '@/import/importer';
 import { WorkerPool, evaluatorId, type Evaluator } from './engine';
@@ -215,6 +215,47 @@ async function importNewGames(
   }
 }
 
+/** One row's `data` blob, or null if the row is gone. */
+async function fetchData<T>(
+  db: SupabaseClient,
+  cfg: Config,
+  table: 'cloud_games' | 'cloud_analyses',
+  gameId: string,
+): Promise<T | null> {
+  const { data, error } = await db
+    .from(table)
+    .select('data')
+    .eq('user_id', cfg.userId)
+    .eq('game_id', gameId)
+    .maybeSingle();
+  if (error) throw new Error(`fetch ${table}: ${error.message}`);
+  return (data as { data: T } | null)?.data ?? null;
+}
+
+/**
+ * Mark the game `done` and stamp the derived summary onto its row.
+ *
+ * Mirrors what the browser queue does, so the Games table can render it from
+ * the light projection; without it a pulled game would show no accuracy until
+ * the laptop's boot recompute pass got round to it. Reuses the app's own
+ * helpers rather than re-deriving the ply-parity rule, so the server can't
+ * drift from what the browser counts.
+ */
+async function settleGame(
+  db: SupabaseClient,
+  cfg: Config,
+  game: Game,
+  analysis: Analysis,
+): Promise<void> {
+  const accuracy = computeAccuracy(analysis.moves);
+  const brilliantCount = countUserBrilliancies(analysis.moves, game.userColor);
+  const { error } = await db.from('cloud_games').upsert(
+    toCloudGame(cfg.userId, { ...game, analysisStatus: 'done', accuracy, brilliantCount }),
+    { onConflict: 'user_id,game_id' },
+  );
+  if (error) throw new Error(`upsert game: ${error.message}`);
+}
+
 function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
@@ -240,7 +281,12 @@ async function main(): Promise<void> {
 
   // ---- what needs doing -------------------------------------------------
   const [games, analyses] = await Promise.all([
-    fetchAll<{ game_id: string }>(db, 'cloud_games', 'game_id', cfg.userId),
+    fetchAll<{ game_id: string; analysis_status: string | null }>(
+      db,
+      'cloud_games',
+      'game_id, analysis_status',
+      cfg.userId,
+    ),
     fetchAll<{ game_id: string; depth: number; engine: string | null }>(
       db,
       'cloud_analyses',
@@ -265,7 +311,7 @@ async function main(): Promise<void> {
       cfg,
       new Set(games.map((g) => g.game_id)),
     );
-    for (const id of imported) games.push({ game_id: id });
+    for (const id of imported) games.push({ game_id: id, analysis_status: 'pending' });
   }
 
   const existing = new Map(
@@ -285,17 +331,45 @@ async function main(): Promise<void> {
   }, {});
   console.log(`\n${games.length} games, ${existing.size} with an analysis.`);
   console.log(`${candidates.length} need work: ${JSON.stringify(byReason)}`);
+  // Computed against the full candidate list, before LIMIT trims it: a game cut
+  // by LIMIT is still a candidate for a later run, and settling it now would
+  // only be redone then.
+  const unsettled = selectUnsettled({ games, existing, candidates });
+  if (unsettled.length > 0) {
+    console.log(`${unsettled.length} analyzed but not marked done — settling.`);
+  }
 
   if (cfg.limit !== null && candidates.length > cfg.limit) {
     candidates = candidates.slice(0, cfg.limit);
     console.log(`LIMIT=${cfg.limit} — analyzing the first ${candidates.length}.`);
   }
-  if (candidates.length === 0) {
+  if (candidates.length === 0 && unsettled.length === 0) {
     console.log('Nothing to do.');
     return;
   }
   if (cfg.dryRun) {
     console.log('Dry run: stopping before any engine work.');
+    return;
+  }
+
+  // ---- settle rows a previous run left half-written ---------------------
+  // No engine needed, so before the pool starts. Failures count against the
+  // same budget as analysis failures and are retried by the next run.
+  let failed = 0;
+  for (const id of unsettled) {
+    try {
+      const [game, analysis] = await Promise.all([
+        fetchData<Game>(db, cfg, 'cloud_games', id),
+        fetchData<Analysis>(db, cfg, 'cloud_analyses', id),
+      ]);
+      if (game && analysis) await settleGame(db, cfg, game, analysis);
+    } catch (err) {
+      failed++;
+      console.error(`  ${id}: settle: ${(err as Error).message}`);
+    }
+  }
+  if (candidates.length === 0) {
+    console.log(`Settled ${unsettled.length - failed} games; nothing to analyze.`);
     return;
   }
 
@@ -309,7 +383,6 @@ async function main(): Promise<void> {
   console.log(`  ${pool.engineName} · Use NNUE=${cfg.evaluator === 'nnue'}`);
 
   let done = 0;
-  let failed = 0;
   const started = Date.now();
   let stopping = false;
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {
@@ -327,14 +400,7 @@ async function main(): Promise<void> {
   for (const c of candidates) {
     if (stopping) break;
     try {
-      const { data, error } = await db
-        .from('cloud_games')
-        .select('data')
-        .eq('user_id', cfg.userId)
-        .eq('game_id', c.gameId)
-        .maybeSingle();
-      if (error) throw new Error(`fetch game: ${error.message}`);
-      const game = (data as { data: Game } | null)?.data;
+      const game = await fetchData<Game>(db, cfg, 'cloud_games', c.gameId);
       if (!game) {
         console.warn(`  ${c.gameId}: game row vanished, skipping`);
         continue;
@@ -353,39 +419,19 @@ async function main(): Promise<void> {
         },
       );
 
-      const acc = computeAccuracy(analysis.moves);
-      const { error: upErr } = await db.from('cloud_analyses').upsert(
-        {
-          user_id: cfg.userId,
-          game_id: analysis.gameId,
-          depth: analysis.depth,
-          analyzed_at: analysis.analyzedAt,
-          engine: analysis.engine,
-          move_count: analysis.moves.length,
-          data: analysis,
-        },
-        { onConflict: 'user_id,game_id' },
-      );
+      // The browser's own serializer, so every decision column the diff reads
+      // is written. A hand-built row here once omitted `recompute_version`: every
+      // server analysis read as rules vintage 0, so each restore reclassified
+      // and re-pushed the whole library (~30 KB a row).
+      const { error: upErr } = await db
+        .from('cloud_analyses')
+        .upsert(toCloudAnalysis(cfg.userId, analysis), { onConflict: 'user_id,game_id' });
       if (upErr) throw new Error(`upsert analysis: ${upErr.message}`);
 
-      // Mirror what the browser queue does: stamp the derived summary onto the
-      // game row so the Games table can render it from the light projection.
-      // Without this, a pulled game would show no accuracy until the laptop's
-      // boot recompute pass got round to it.
-      // Reuse the app's own helper rather than re-deriving the ply-parity rule,
-      // so the server can't drift from what the browser counts.
-      const brilliantCount = countUserBrilliancies(analysis.moves, game.userColor);
-      const { error: gErr } = await db.from('cloud_games').upsert(
-        {
-          user_id: cfg.userId,
-          game_id: game.id,
-          analysis_status: 'done',
-          end_time: game.endTime,
-          data: { ...game, analysisStatus: 'done', accuracy: acc, brilliantCount },
-        },
-        { onConflict: 'user_id,game_id' },
-      );
-      if (gErr) throw new Error(`upsert game: ${gErr.message}`);
+      // Second write, not atomic with the first. A kill between them leaves the
+      // game un-`done` beside an adequate analysis; `selectUnsettled` repairs
+      // that on the next run.
+      await settleGame(db, cfg, game, analysis);
 
       done++;
       if (done % 10 === 0 || done === candidates.length) {
@@ -406,6 +452,9 @@ async function main(): Promise<void> {
       // next invocation will retry it.
       if (failed > 50 && failed > done) {
         console.error('Too many consecutive failures — stopping.');
+        // Non-zero, so the Cloud Run execution reads as failed. Exiting 0 here
+        // made a broken setup look like a run that simply finished early.
+        process.exitCode = 1;
         break;
       }
     }

@@ -13,6 +13,7 @@ import {
   repairTerminalMoveEval,
 } from './analyzer';
 import { cpToWinrate, moveAccuracy } from './classify';
+import { RECOMPUTE_VERSION } from '@/db/analysisVintage';
 
 function move(
   ply: number,
@@ -244,6 +245,20 @@ describe('analyzeGamePgn on a game that ends in checkmate', () => {
       backend,
     });
     expect(computeAccuracy(a.moves).white).toBeGreaterThan(90);
+  });
+
+  /**
+   * The off-laptop worker writes this output straight to the cloud and never
+   * calls `saveAnalysis`, so the stamp has to come from the producer. Unstamped,
+   * every server analysis read as rules vintage 0 and each restore reclassified
+   * and re-pushed the whole library.
+   */
+  it('stamps the current rules vintage', async () => {
+    const { backend } = stubBackend();
+    const a = await analyzeGamePgn('g5', SCHOLARS_MATE, 16, undefined, undefined, {
+      backend,
+    });
+    expect(a.recomputeVersion).toBe(RECOMPUTE_VERSION);
   });
 });
 

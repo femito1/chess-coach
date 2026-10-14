@@ -17,6 +17,7 @@ import {
   extractClocks,
 } from './phase';
 import type { Analysis, Color, MoveEval } from '@/db/schema';
+import { RECOMPUTE_VERSION } from '@/db/analysisVintage';
 
 /**
  * The engine surface `analyzeGamePgn` needs, injectable so the analysis logic
@@ -338,6 +339,13 @@ export async function analyzeGamePgn(
     analyzedAt: Date.now(),
     engine: backend.id(),
     moves,
+    // Stamped by the producer, not only by `saveAnalysis`: the derived fields
+    // above came from the current `classifyMove` / `detectMotifs` /
+    // `detectPhase`, so the row is current by construction wherever it is
+    // stored. The Node worker writes straight to `cloud_analyses` and never
+    // calls `saveAnalysis`, and its unstamped rows read as vintage 0 — every
+    // restore then reclassified and re-pushed the whole server-analyzed library.
+    recomputeVersion: RECOMPUTE_VERSION,
   };
 }
 

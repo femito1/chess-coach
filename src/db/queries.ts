@@ -13,6 +13,7 @@ import {
   extractClocks,
 } from '@/engine/phase';
 import { looksLikePhone } from '@/engine/device';
+import { RECOMPUTE_VERSION, isSameSearch } from './analysisVintage';
 
 /**
  * Bump these any time the corresponding boot-time pass would produce
@@ -50,7 +51,9 @@ import { looksLikePhone } from '@/engine/device';
  *                         output for existing PGNs (e.g. updated openings
  *                         dataset).
  */
-export const RECOMPUTE_VERSION = 4;
+// Defined in `analysisVintage.ts` so the Node worker can stamp it without
+// importing Dexie; re-exported so this stays the one place the stamps are read.
+export { RECOMPUTE_VERSION };
 export const OPENING_REFRESH_VERSION = 1;
 /** Version stamp for the boot-time `backfillUserTimeStats` pass. Bump
  *  this any time `computeUserTimeStats` would produce different output
@@ -231,8 +234,9 @@ export async function saveAnalysis(analysis: Analysis): Promise<void> {
   // and `phase` with the very same `classifyMove` / `detectMotifs` /
   // `detectPhase` the recompute pass uses (see `engine/analyzer.ts`), so a row
   // it just produced is by definition current and the pass has nothing to add.
-  // Only this path may stamp: cloud *pulls* write `db.analyses` directly and
-  // must preserve whatever vintage the other device recorded.
+  // (`analyzeGamePgn` stamps too; this keeps any other producer honest.) Cloud
+  // *pulls* write `db.analyses` directly and must never stamp — they preserve
+  // whatever vintage the other device recorded.
   await db.analyses.put({ ...analysis, recomputeVersion: RECOMPUTE_VERSION });
 }
 
@@ -750,19 +754,38 @@ export async function recomputeClassificationsAndAccuracies(opts?: {
       // and — crucially — fires `useLiveQuery` re-renders once per chunk
       // instead of once per game, so the UI doesn't thrash while boot
       // housekeeping runs.
+      //
+      // The rows were read before the loop above, which yields, so anything
+      // could have written them since: a requeue ("Re-analyze all") deletes the
+      // analysis and sets the game pending, a cloud pull replaces the analysis
+      // with a better one, the analyzer writes `analysisStatus`. Putting back
+      // what was read silently reverted all of those. So inside the write
+      // transaction — where nothing can interleave — each analysis is re-read
+      // and only written if it is still the search that was reclassified, and
+      // the game gets field-level patches of the two values derived here.
       await db.transaction('rw', db.analyses, db.games, async () => {
-        await db.analyses.bulkPut(analysisPatches);
-        // Dexie has no `bulkUpdate`; the equivalent is a `bulkPut` of
-        // the merged rows. We have the original `games[i]` rows in
-        // memory so this is a single round trip rather than N updates.
-        const gamesById = new Map<string, Game>();
-        for (const gg of games) if (gg) gamesById.set(gg.id, gg);
-        const merged: Game[] = gamePatches.map((p) => ({
-          ...gamesById.get(p.id)!,
-          accuracy: p.accuracy,
-          brilliantCount: p.brilliantCount,
-        }));
-        await db.games.bulkPut(merged);
+        const current = new Map<string, Pick<Analysis, 'analyzedAt' | 'engine' | 'depth'>>();
+        await db.analyses
+          .where(':id')
+          .anyOf(analysisPatches.map((p) => p.gameId))
+          .each((a) => {
+            current.set(a.gameId, { analyzedAt: a.analyzedAt, engine: a.engine, depth: a.depth });
+          });
+        const keep = new Set(
+          analysisPatches
+            .filter((p) => isSameSearch(p, current.get(p.gameId)))
+            .map((p) => p.gameId),
+        );
+        updated -= analysisPatches.length - keep.size;
+        await db.analyses.bulkPut(analysisPatches.filter((p) => keep.has(p.gameId)));
+        await db.games.bulkUpdate(
+          gamePatches
+            .filter((p) => keep.has(p.id))
+            .map((p) => ({
+              key: p.id,
+              changes: { accuracy: p.accuracy, brilliantCount: p.brilliantCount },
+            })),
+        );
       });
     }
 
@@ -839,15 +862,20 @@ export async function backfillRecomputeVersion(): Promise<number> {
 
   for (let start = 0; start < ids.length; start += RECOMPUTE_CHUNK) {
     const chunkIds = ids.slice(start, start + RECOMPUTE_CHUNK);
-    const rows = await db.analyses.bulkGet(chunkIds);
-    const patches: Analysis[] = [];
-    for (const a of rows) {
-      if (!a) continue;
-      if ((a.recomputeVersion ?? 0) >= claim) continue;
-      patches.push({ ...a, recomputeVersion: claim });
-      updated++;
-    }
-    if (patches.length > 0) await db.analyses.bulkPut(patches);
+    // `modify` reads and writes each row inside one transaction. A `bulkGet`
+    // then `bulkPut` of whole rows put back what was read, so a cloud pull or a
+    // fresh analysis landing between the two was reverted — and the claim was
+    // stamped onto a row this DB never classified. Here the check and the write
+    // see the same row, and only the one field is touched.
+    updated += await db.analyses
+      .where(':id')
+      .anyOf(chunkIds)
+      .modify((a) => {
+        // `false` skips the write, so an already-stamped row is neither
+        // rewritten nor counted.
+        if ((a.recomputeVersion ?? 0) >= claim) return false;
+        a.recomputeVersion = claim;
+      });
     await yieldToBrowser();
   }
 
@@ -888,18 +916,23 @@ export async function refreshOpeningMetadata(opts?: {
     const chunkIds = ids.slice(start, start + RECOMPUTE_CHUNK);
     const games = await db.games.bulkGet(chunkIds);
 
-    const merged: Game[] = [];
+    const updates: Array<{ key: string; changes: { opening?: string; eco?: string } }> = [];
     for (const g of games) {
       if (!g) continue;
       const patch = reparseOpeningFromPgn(g.pgn);
       if (!patch) continue;
       if (patch.opening === g.opening && patch.eco === g.eco) continue;
-      merged.push({ ...g, ...patch });
+      updates.push({ key: g.id, changes: { opening: patch.opening, eco: patch.eco } });
       updated++;
     }
 
-    if (merged.length > 0) {
-      await db.games.bulkPut(merged);
+    // Field-level, not a `bulkPut` of the rows read above: this pass runs at
+    // boot beside the analyzer and cloud sync, and putting back a whole row read
+    // in an earlier transaction reverts any `analysisStatus` / `accuracy` /
+    // requeue written in between. The two fields patched are derived from the immutable PGN, so
+    // they cannot themselves be stale.
+    if (updates.length > 0) {
+      await db.games.bulkUpdate(updates);
     }
 
     await yieldToBrowser();
@@ -1021,7 +1054,10 @@ export async function backfillUserTimeStats(opts?: {
     const chunkIds = ids.slice(start, start + RECOMPUTE_CHUNK);
     const games = await db.games.bulkGet(chunkIds);
 
-    const merged: Game[] = [];
+    const updates: Array<{
+      key: string;
+      changes: { userTimeSec?: number; userPlyCount?: number };
+    }> = [];
     for (const g of games) {
       if (!g) continue;
       // Skip rows that are already at the current version's output.
@@ -1043,16 +1079,18 @@ export async function backfillUserTimeStats(opts?: {
       ) {
         continue;
       }
-      merged.push({
-        ...g,
-        userTimeSec: stats.userTimeSec,
-        userPlyCount: stats.userPlyCount,
+      updates.push({
+        key: g.id,
+        changes: { userTimeSec: stats.userTimeSec, userPlyCount: stats.userPlyCount },
       });
       updated++;
     }
 
-    if (merged.length > 0) {
-      await db.games.bulkPut(merged);
+    // Field-level, for the reason `refreshOpeningMetadata` gives: both values
+    // come from the immutable PGN, while the rest of the row may have been
+    // rewritten since it was read.
+    if (updates.length > 0) {
+      await db.games.bulkUpdate(updates);
     }
 
     await yieldToBrowser();
