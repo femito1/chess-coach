@@ -5,6 +5,7 @@ import {
   type RatedEvent,
 } from './rating';
 import { isSkillTheme } from './themeCatalog';
+import { eventsOf } from './events';
 
 /**
  * Everything the Puzzles page derives from `puzzleAttempts`: the rating's
@@ -23,43 +24,10 @@ const DAY_MS = 24 * HOUR_MS;
  * =======================================================================
  */
 
-/**
- * A row's attempts as events, oldest first.
- *
- * Rows recorded before `history` existed carry only aggregates, and this
- * reconstructs exactly what those can prove and no more:
- *
- *  - The FIRST attempt is knowable. One attempt + `solvedClean` → clean.
- *    Anything else → not clean: the old queue retired a puzzle on its first
- *    clean solve, so a puzzle attempted twice was not solved cleanly the
- *    first time. Which kind of failure is unknowable, so it is `mistake`.
- *  - With 2+ attempts the LAST is knowable too when `solvedClean` is set:
- *    that is the attempt that retired it.
- *  - Attempts in between are left out rather than invented. `attempts`
- *    still reports the true count.
- *
- * Synthesized events have no move counts, so they never enter move accuracy.
- */
-export function eventsOf(row: PuzzleAttempt): PuzzleAttemptEvent[] {
-  if (row.history && row.history.length > 0) return row.history;
-  const firstClean = row.attempts <= 1 && row.solvedClean;
-  const first: PuzzleAttemptEvent = {
-    at: row.firstSeenAt,
-    outcome: firstClean ? 'clean' : row.hintUsed && row.attempts <= 1 ? 'hint' : 'mistake',
-    ...(row.attempts <= 1 && row.msTaken !== undefined ? { ms: row.msTaken } : {}),
-  };
-  if (row.attempts > 1 && row.solvedClean) {
-    return [
-      first,
-      {
-        at: row.lastAttemptedAt,
-        outcome: 'clean',
-        ...(row.msTaken !== undefined ? { ms: row.msTaken } : {}),
-      },
-    ];
-  }
-  return [first];
-}
+// `eventsOf` (a row read as attempts, legacy rows included) lives in
+// `events.ts` so the sync merge can share it without this module's
+// theme-catalogue imports.
+export { eventsOf };
 
 export function isSolved(outcome: PuzzleOutcome): boolean {
   return outcome !== 'revealed';

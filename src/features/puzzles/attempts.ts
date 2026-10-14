@@ -4,9 +4,9 @@ import {
   type PuzzleAttemptEvent,
   type PuzzleOutcome,
 } from '@/db/schema';
-import { MAX_ATTEMPT_HISTORY } from '@/features/sync/diff';
 import { PUZZLE_SHARDS } from '@/data/puzzles.meta.generated';
 import { loadShard, type LibraryPuzzle } from './corpus';
+import { withEvent } from './events';
 
 /**
  * Progress against the puzzle library. Thin Dexie wrapper, kept apart from
@@ -57,7 +57,7 @@ export async function recordAttempt(args: RecordAttemptArgs): Promise<PuzzleAtte
       bad: args.bad,
       ...(args.msTaken !== undefined ? { ms: args.msTaken } : {}),
     };
-    const history = [...(prior?.history ?? []), event].slice(-MAX_ATTEMPT_HISTORY);
+    const history = withEvent(prior, event);
     saved = {
       puzzleId: puzzle.id,
       rating: puzzle.rating,
