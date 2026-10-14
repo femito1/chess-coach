@@ -159,8 +159,7 @@ describe('applyPuzzleMove', () => {
 
   test('expected move with explicit promotion still matches when user promotes to queen', () => {
     // Solution stores 'a7a8q'; user move is 'a7a8' with promotion: 'q'.
-    // The state machine compares only the first 4 chars, then chess.js
-    // applies the user's promotion, which lines up.
+    // The board sends the chosen piece; it matches the stored suffix.
     const fen = '7k/P7/8/8/8/8/8/7K w - - 0 1';
     const result = applyPuzzleMove({
       fen,
@@ -171,5 +170,33 @@ describe('applyPuzzleMove', () => {
     expect(result.kind).toBe('accepted');
     if (result.kind !== 'accepted') return;
     expect(result.solved).toBe(true);
+  });
+  test('an underpromotion line rejects a queen promotion and accepts the knight', () => {
+    // e8=N+ forks from e8 onto the king on g7. Comparing only from/to
+    // credited e8=Q as this move — and on the queen board the scripted
+    // reply of a real line was often illegal, so the line stalled.
+    const fen = '8/4P1k1/8/8/8/8/8/K7 w - - 0 1';
+    const args = { fen, solutionUci: ['e7e8n', 'g7g6'], solvedIdx: 0 };
+    expect(applyPuzzleMove({ ...args, move: { from: 'e7', to: 'e8', promotion: 'q' } })).toEqual({
+      kind: 'rejected',
+      reason: 'wrong-move',
+    });
+    const result = applyPuzzleMove({ ...args, move: { from: 'e7', to: 'e8', promotion: 'n' } });
+    expect(result.kind).toBe('accepted');
+    if (result.kind !== 'accepted') return;
+    expect(result.userOnly?.lastUci).toBe('e7e8n');
+    expect(result.lastUci).toBe('g7g6');
+    expect(result.solved).toBe(true);
+    expect(result.fen.startsWith('4N3/')).toBe(true);
+  });
+
+  test('a promotion move with no piece chosen does not match a promotion line', () => {
+    const result = applyPuzzleMove({
+      fen: '7k/P7/8/8/8/8/8/7K w - - 0 1',
+      solutionUci: ['a7a8q'],
+      solvedIdx: 0,
+      move: { from: 'a7', to: 'a8' },
+    });
+    expect(result).toEqual({ kind: 'rejected', reason: 'wrong-move' });
   });
 });

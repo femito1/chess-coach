@@ -66,6 +66,17 @@ export interface BoardProps {
    * sound preference either way.
    */
   sounds?: boolean;
+  /**
+   * Ask which piece a pawn promotes to, instead of always making a queen.
+   *
+   * Opt-in because the auto-queen is right for most boards here (game
+   * review, repertoire drills, free play) and a picker there would only be
+   * an extra click. Turn it on where an underpromotion can be *the* answer —
+   * puzzles, where queening instead of knighting is a wrong move, not a
+   * shortcut. While the picker is open the move is held; dismissing it
+   * (outside click or Escape) takes the pawn back.
+   */
+  choosePromotion?: boolean;
 }
 
 /** chess.com's right-click red. Used both for the chessground `green` brush
@@ -156,6 +167,7 @@ export function Board({
   onMove,
   highlightSquares = [],
   sounds = false,
+  choosePromotion = false,
 }: BoardProps) {
   const { t } = useTranslation();
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -189,8 +201,18 @@ export function Board({
   onMoveRef.current = onMove;
   const soundsRef = useRef(sounds);
   soundsRef.current = sounds;
+  const choosePromotionRef = useRef(choosePromotion);
+  choosePromotionRef.current = choosePromotion;
   const fenRef = useRef(fen);
   fenRef.current = fen;
+  /** A promotion move waiting on the picker. Chessground has already drawn
+   *  the pawn on the last rank; nothing reaches `onMove` until a piece is
+   *  chosen. */
+  const [pendingPromo, setPendingPromo] = useState<{
+    from: string;
+    to: string;
+    color: 'white' | 'black';
+  } | null>(null);
   /** Last FEN string we pushed into chessground. Tracked here (rather than
    *  inferred from `api.getFen()`) because chessground returns the
    *  pieces-only portion, while we need to compare full-FEN turn/castling
@@ -199,6 +221,59 @@ export function Board({
 
   const dests = useMemo(() => (viewOnly ? new Map<Key, Key[]>() : computeDests(fen)), [fen, viewOnly]);
   const turn = useMemo(() => turnFromFen(fen), [fen]);
+
+  /** Put chessground back on the prop FEN, with no animation.
+   *
+   *  CRUCIAL: chessground sets `state.movable.dests = undefined` and flips
+   *  `state.turnColor` *before* invoking the `after` callback (see
+   *  chessground/dist/board.js ~L119). If we only restored `fen` +
+   *  `turnColor`, the board would end up un-movable: dests is gone, so no
+   *  piece could be dragged legally. We must re-pass the legal `dests` map
+   *  so the user can actually try again. The downstream React effect on
+   *  `[viewOnly, dests]` won't help because the prop reference hasn't
+   *  changed (fen + viewOnly are identical to before).
+   *
+   *  Reads only refs: the `after` handler that calls it is installed once at
+   *  init and keeps the first render's closure. */
+  function snapBack() {
+    const expected = fenRef.current;
+    api.current?.set({
+      fen: expected,
+      turnColor: turnFromFen(expected),
+      movable: {
+        free: false,
+        color: 'both',
+        dests: computeDests(expected),
+        showDests: true,
+      },
+      animation: { enabled: false, duration: 0 },
+    });
+    lastFen.current = expected;
+    skipNextAnim.current = false;
+  }
+
+  /** Hand a move chessground has already drawn to the parent. Refs only,
+   *  for the same reason as `snapBack`. */
+  function commitMove(move: BoardMove) {
+    const cb = onMoveRef.current;
+    if (!cb) return;
+    skipNextAnim.current = true;
+    const result = cb(move);
+    // Parent rejected the move: snap chessground back to the prop FEN
+    // immediately. Without this, the piece would stay in its wrong square
+    // (chessground already animated the move) until something else
+    // triggered a fen sync — which is exactly the "Try again" bug.
+    if (result === false) {
+      // Rejected: the piece is about to snap back, so say so.
+      if (soundsRef.current) playMoveSound('illegal');
+      snapBack();
+    }
+  }
+
+  // A held promotion belongs to the position it was played in. If the
+  // parent moves on (restart, next puzzle) the picker must not commit it
+  // there.
+  useEffect(() => setPendingPromo(null), [fen]);
 
   // ── One-time chessground init ────────────────────────────────────────────
   // IMPORTANT: chessground binds its mousedown / touchstart handlers exactly
@@ -242,8 +317,7 @@ export function Board({
         showDests: true,
         events: {
           after: (orig, dest) => {
-            const cb = onMoveRef.current;
-            if (!cb) return;
+            if (!onMoveRef.current) return;
             const destRank = dest.charAt(1);
             const currentFen = fenRef.current;
             const currentTurn = turnFromFen(currentFen);
@@ -251,48 +325,15 @@ export function Board({
               (destRank === '8' || destRank === '1') &&
               isPawnOn(currentFen, orig) &&
               (destRank === '8' ? currentTurn === 'white' : currentTurn === 'black');
-            skipNextAnim.current = true;
-            const result = cb({
+            if (needsPromo && choosePromotionRef.current) {
+              setPendingPromo({ from: orig, to: dest, color: currentTurn });
+              return;
+            }
+            commitMove({
               from: orig,
               to: dest,
               promotion: needsPromo ? 'q' : undefined,
             });
-            // Parent rejected the move: snap chessground back to the
-            // prop FEN immediately. Without this, the piece would stay
-            // in its wrong square (chessground already animated the
-            // move) until something else triggered a fen sync — which
-            // is exactly the "Try again" bug. We re-set with animation
-            // off so the revert is instantaneous.
-            //
-            // CRUCIAL: chessground sets `state.movable.dests = undefined`
-            // and flips `state.turnColor` *before* invoking this `after`
-            // callback (see chessground/dist/board.js ~L119). If we only
-            // restore `fen` + `turnColor` here, the board ends up
-            // un-movable: dests is gone, so no piece can be dragged
-            // legally. We must re-pass the legal `dests` map so the user
-            // can actually try again. The downstream React effect on
-            // `[viewOnly, dests]` won't help because the prop reference
-            // hasn't changed (fen + viewOnly are identical to before).
-            if (result === false) {
-              // Rejected: the piece is about to snap back, so say so. Read
-              // through the ref because this handler is installed once at
-              // init and would otherwise close over the initial prop.
-              if (soundsRef.current) playMoveSound('illegal');
-              const expected = fenRef.current;
-              api.current?.set({
-                fen: expected,
-                turnColor: turnFromFen(expected),
-                movable: {
-                  free: false,
-                  color: 'both',
-                  dests: computeDests(expected),
-                  showDests: true,
-                },
-                animation: { enabled: false, duration: 0 },
-              });
-              lastFen.current = expected;
-              skipNextAnim.current = false;
-            }
           },
         },
       },
@@ -745,6 +786,22 @@ export function Board({
         destShareCount={knightOverlay.destShareCount}
         orientation={orientation}
       />
+      {pendingPromo && (
+        <PromotionChooser
+          square={pendingPromo.to}
+          color={pendingPromo.color}
+          orientation={orientation}
+          onPick={(piece) => {
+            const { from, to } = pendingPromo;
+            setPendingPromo(null);
+            commitMove({ from, to, promotion: piece });
+          }}
+          onCancel={() => {
+            setPendingPromo(null);
+            snapBack();
+          }}
+        />
+      )}
       {badge && lastMoveUci && lastMoveClassification && (
         <BadgeOverlay
           square={lastMoveUci.slice(2, 4)}
@@ -1002,6 +1059,99 @@ function SquareHighlightOverlay({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+const PROMOTION_CHOICES = [
+  ['q', 'queen'],
+  ['n', 'knight'],
+  ['r', 'rook'],
+  ['b', 'bishop'],
+] as const;
+
+/**
+ * The promotion picker: the four pieces in a column on the promotion file,
+ * running from the promotion square toward the centre — the Lichess layout,
+ * so the queen sits where the pawn was dropped and one more tap promotes.
+ *
+ * Sized off chessground's published `---cg-width` / `---cg-height`, like
+ * `SquareHighlightOverlay`, so the cells line up with the real squares. The
+ * pieces are chessground's own sprites (`.cg-wrap piece.*`, as `MiniBoard`
+ * uses). The dimmed backdrop catches outside clicks as a cancel, and it sits
+ * outside chessground's element, so the board can't start a drag under it.
+ */
+function PromotionChooser({
+  square,
+  color,
+  orientation,
+  onPick,
+  onCancel,
+}: {
+  square: string;
+  color: 'white' | 'black';
+  orientation: 'white' | 'black';
+  onPick: (piece: 'q' | 'n' | 'r' | 'b') => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancelRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const fileIdx = square.charCodeAt(0) - 'a'.charCodeAt(0);
+  const rankIdx = Number(square[1]) - 1;
+  const col = orientation === 'white' ? fileIdx : 7 - fileIdx;
+  const row = orientation === 'white' ? 7 - rankIdx : rankIdx;
+  const step = row === 0 ? 1 : -1;
+  return (
+    <div
+      className="cg-wrap"
+      role="dialog"
+      aria-label={t('common.promotion.choose')}
+      data-testid="promotion-chooser"
+      onClick={onCancel}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: 'var(---cg-width, 100%)',
+        height: 'var(---cg-height, 100%)',
+        // Above the shapes and overlays (9) and a dragged piece (11).
+        zIndex: 12,
+        background: 'rgba(0, 0, 0, 0.4)',
+      }}
+    >
+      {PROMOTION_CHOICES.map(([piece, name], i) => (
+        <button
+          key={piece}
+          type="button"
+          aria-label={t(`common.promotion.${piece}`)}
+          data-promotion={piece}
+          autoFocus={i === 0}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPick(piece);
+          }}
+          className="rounded-full bg-slate-200 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          style={{
+            position: 'absolute',
+            left: `${col * 12.5}%`,
+            top: `${(row + step * i) * 12.5}%`,
+            width: '12.5%',
+            height: '12.5%',
+            boxShadow: '0 1px 4px rgba(0, 0, 0, 0.5)',
+          }}
+        >
+          <piece className={`${color} ${name}`} style={{ width: '100%', height: '100%' }} />
+        </button>
+      ))}
     </div>
   );
 }
