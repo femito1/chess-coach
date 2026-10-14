@@ -162,6 +162,29 @@ export function accuracyTrend(
   return out;
 }
 
+/**
+ * The time-class selection a chart actually applies, given what the user
+ * picked (`null` = every available class) and the classes present now.
+ *
+ * Picks for classes the user no longer has data for are dropped. When
+ * that leaves nothing, the empty chart must still be something the user
+ * can undo — and the chips that would undo it are hidden while only one
+ * class is available. A stored pick of only-absent classes (say
+ * `['blitz']` after the blitz games went) was never a choice of "show
+ * nothing", so it falls back to all; an explicit empty pick does too
+ * once there are no chips left to change it.
+ */
+export function effectiveModeSelection(
+  selection: string[] | null,
+  available: ReadonlyArray<string>,
+): string[] | null {
+  if (selection == null) return null;
+  const present = selection.filter((m) => available.includes(m));
+  if (present.length > 0) return present;
+  if (selection.length > 0 || available.length <= 1) return null;
+  return present;
+}
+
 export interface OpeningBar {
   family: string;
   games: number;

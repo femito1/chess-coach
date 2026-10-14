@@ -3,6 +3,7 @@ import {
   accuracyTrend,
   chartOpeningFamily,
   computeUserTimeStats,
+  effectiveModeSelection,
   stripOpeningMoves,
   totalSecondsPlayed,
   winRateByOpening,
@@ -407,5 +408,27 @@ describe('stripOpeningMoves', () => {
       'Caro Kann Defense: Advance Variation',
     );
     expect(stripOpeningMoves("Van't Kruijs Opening")).toBe("Van't Kruijs Opening");
+  });
+});
+
+describe('effectiveModeSelection', () => {
+  it('passes "all" through and drops classes with no data', () => {
+    expect(effectiveModeSelection(null, ['rapid'])).toBeNull();
+    expect(effectiveModeSelection(['rapid', 'blitz'], ['rapid', 'bullet'])).toEqual([
+      'rapid',
+    ]);
+  });
+
+  // The bug: a stored ['blitz'] once only rapid games remained left every
+  // chart on "no mode selected", with the chips hidden (one class) so
+  // nothing could undo it.
+  it('falls back to all when the stored pick matches nothing available', () => {
+    expect(effectiveModeSelection(['blitz'], ['rapid'])).toBeNull();
+    expect(effectiveModeSelection(['blitz'], ['rapid', 'bullet'])).toBeNull();
+  });
+
+  it('keeps a deliberate empty pick only while chips can change it', () => {
+    expect(effectiveModeSelection([], ['rapid', 'blitz'])).toEqual([]);
+    expect(effectiveModeSelection([], ['rapid'])).toBeNull();
   });
 });
