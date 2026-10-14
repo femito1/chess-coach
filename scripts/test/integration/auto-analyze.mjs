@@ -93,9 +93,18 @@ await runBrowserTest({
       // --- 2. the review page's direct request still wins ------------------
       q.requestAnalysisNow('auto-older');
       const pickedByRequestWhileOff = (await chooser())?.id ?? null;
-      // Drop it back out of contention immediately: `done` makes the chooser
-      // drain it from the priority list on its next look, so the live pump has
-      // nothing to start.
+      // Drop it back out of contention immediately: finished (`done`, with its
+      // analysis row) makes the chooser drain it from the priority list on its
+      // next look, so the live pump has nothing to start. The row matters: the
+      // queue analyses a requested game that is `done` but has NO row — the
+      // repair the review page asks for — so the status alone no longer drains.
+      await db.analyses.put({
+        gameId: 'auto-older',
+        depth: 16,
+        analyzedAt: Date.now(),
+        engine: 'stockfish-16',
+        moves: [],
+      });
       await db.games.update('auto-older', { analysisStatus: 'done' });
       const drainedAfterDone = (await chooser())?.id ?? null;
 
