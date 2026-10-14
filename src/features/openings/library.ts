@@ -338,7 +338,8 @@ export async function addLineToRepertoire(
 ): Promise<number> {
   const c = new Chess();
   let added = 0;
-  for (const uci of line.uci) {
+  for (let i = 0; i < line.uci.length; i++) {
+    const uci = line.uci[i];
     const parentFen = c.fen();
     const mv = c.move({
       from: uci.slice(0, 2),
@@ -346,7 +347,9 @@ export async function addLineToRepertoire(
       promotion: uci.slice(4, 5) || undefined,
     });
     if (!mv) break;
-    const node = await addMove(repertoireId, parentFen, uci);
+    // The move order so far, so a line that transposes into a position
+    // another line already holds keeps its own continuation.
+    const node = await addMove(repertoireId, parentFen, uci, line.uci.slice(0, i));
     if (node) added++;
   }
   return added;
@@ -559,6 +562,28 @@ export function identifyOpeningLine(uci: readonly string[]): OpeningLine | null 
     if (!best || line.uci.length > best.uci.length) best = line;
   }
   return best;
+}
+
+let bookPrefixes: Set<string> | null = null;
+
+/**
+ * Is `uciKey` (moves joined by spaces) a prefix of — or equal to — some
+ * library line? The repertoire line walk uses it to heal nodes written
+ * before move orders were recorded (`repertoire/lineTree.ts`). Built on
+ * first use: ~10k distinct prefixes, and most sessions never need it.
+ */
+export function isLibraryLinePrefix(uciKey: string): boolean {
+  if (!bookPrefixes) {
+    bookPrefixes = new Set();
+    for (const line of OPENING_LINES) {
+      let key = '';
+      for (const u of line.uci) {
+        key = key ? `${key} ${u}` : u;
+        bookPrefixes.add(key);
+      }
+    }
+  }
+  return bookPrefixes.has(uciKey);
 }
 
 /**

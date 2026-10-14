@@ -175,6 +175,17 @@ describe('mergeSnapshots', () => {
     expect(m.nodes.find((n) => n.fen === 'root')!.childFens).toEqual(['x', 'y']);
   });
 
+  it('unions recorded move orders, so neither side hides the other branch', () => {
+    // The line walk only follows an edge whose move order is recorded on
+    // the child, so dropping one side's `paths` hides that side's line as
+    // surely as dropping its `childFens` entry would.
+    const a = snap(2, { nodes: [node('x', [], { paths: ['e2e4'] })] });
+    const b = snap(1, { nodes: [node('x', [], { paths: ['d2d4', 'e2e4'] })] });
+    expect(mergeSnapshots(a, b).nodes[0].paths).toEqual(['e2e4', 'd2d4']);
+    const legacy = snap(2, { nodes: [node('x', [])] });
+    expect(mergeSnapshots(legacy, b).nodes[0].paths).toEqual(['d2d4', 'e2e4']);
+  });
+
   it('keeps a note that only one side wrote', () => {
     const a = snap(2, { nodes: [node('root', [])] });
     const b = snap(1, { nodes: [node('root', [], { notes: 'tricky' })] });

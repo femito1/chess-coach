@@ -9,17 +9,26 @@ import {
   type RepertoireNode,
 } from '@/db/schema';
 import { newSrsState } from '@/srs/sm2';
-import { identifyOpening } from '@/features/openings/library';
+import { identifyOpening, isLibraryLinePrefix } from '@/features/openings/library';
+import {
+  enumerateLinesFromNodes,
+  fenKey,
+  movesFrom,
+  planAddMove,
+  reachedPaths,
+  type RepertoireLine,
+} from './lineTree';
 
 /**
  * Normalize a FEN to a transposition-stable key: strip the halfmove clock
  * and fullmove number. Two FENs that only differ in those will have the
- * same key.
+ * same key. Every lookup of a stored `childFens`/`parentFen`/`mainChildFen`
+ * entry must go through it — see `lineTree.ts` for what a full-FEN lookup
+ * silently drops.
  */
-export function fenKey(fen: string): string {
-  const parts = fen.split(' ');
-  return parts.slice(0, 4).join(' ');
-}
+export { fenKey };
+
+const START_FEN = new Chess().fen();
 
 export function nodeId(repertoireId: string, fen: string): string {
   return `${repertoireId}:${fenKey(fen)}`;
@@ -64,6 +73,9 @@ export async function createRepertoire(input: {
     repertoireId: rep.id,
     fen: startFen,
     childFens: [],
+    // The root's path is the empty sequence; its presence also marks the
+    // repertoire as recording move orders (see `upgradeLegacyPaths`).
+    paths: [''],
     createdAt: now,
   };
   await db.repertoireNodes.put(root);
@@ -76,12 +88,15 @@ export async function deleteRepertoire(id: string): Promise<void> {
     db.repertoires,
     db.repertoireNodes,
     db.repertoireCards,
+    db.repertoireLineStats,
     async () => {
       await db.repertoires.delete(id);
-      const nodes = await db.repertoireNodes.where('repertoireId').equals(id).toArray();
-      for (const n of nodes) await db.repertoireNodes.delete(n.id);
-      const cards = await db.repertoireCards.where('repertoireId').equals(id).toArray();
-      for (const c of cards) await db.repertoireCards.delete(c.id);
+      await db.repertoireNodes.where('repertoireId').equals(id).delete();
+      await db.repertoireCards.where('repertoireId').equals(id).delete();
+      // Repertoire ids are never reused, so stats left behind are dead
+      // weight that every cloud sync still reads (it loads the whole table
+      // and discards orphans) — and that would never be cleaned up.
+      await db.repertoireLineStats.where('repertoireId').equals(id).delete();
     },
   );
 }
@@ -91,11 +106,20 @@ export async function deleteRepertoire(id: string): Promise<void> {
  * exist, create them. For every position where the repertoire-owner is
  * TO MOVE, we also create an SRS card (so the user drills only their
  * own prep, not the opponent's moves).
+ *
+ * `pathToParent` is the UCI sequence from the start position that reached
+ * `parentFen` — the move order this move is being added in. It is recorded
+ * on the child (`RepertoireNode.paths`) so a move added after a
+ * transposition is drilled in the move order it was added in, not in every
+ * move order that reaches the same position. Line-adding callers always
+ * know it; when omitted, the move is added under every move order already
+ * recorded for the parent (a move "at this position", however reached).
  */
 export async function addMove(
   repertoireId: string,
   parentFen: string,
   uci: string,
+  pathToParent?: readonly string[],
 ): Promise<RepertoireNode | null> {
   const rep = await db.repertoires.get(repertoireId);
   if (!rep) return null;
@@ -115,8 +139,11 @@ export async function addMove(
   const childFen = c.fen();
   const now = Date.now();
 
+  await upgradeLegacyPaths(repertoireId);
+
   const parentId = nodeId(repertoireId, parentFen);
   const childId = nodeId(repertoireId, childFen);
+  const parentPathKey = pathToParent ? pathToParent.join(' ') : undefined;
 
   await db.transaction(
     'rw',
@@ -124,41 +151,26 @@ export async function addMove(
     db.repertoireNodes,
     db.repertoireCards,
     async () => {
-      const parent = await db.repertoireNodes.get(parentId);
-      if (!parent) {
-        // If the parent doesn't exist (e.g. PGN import went out of order),
-        // synthesize a minimal parent node. Its own parent pointer will be
-        // wrong, but children/look-ups still work.
-        await db.repertoireNodes.put({
-          id: parentId,
-          repertoireId,
-          fen: parentFen,
-          childFens: [childFen],
-          createdAt: now,
-        });
-      } else if (!parent.childFens.includes(childFen)) {
-        parent.childFens.push(childFen);
-        if (!parent.mainChildFen) parent.mainChildFen = childFen;
-        await db.repertoireNodes.put(parent);
-      }
-
-      const existingChild = await db.repertoireNodes.get(childId);
-      if (!existingChild) {
-        await db.repertoireNodes.put({
-          id: childId,
-          repertoireId,
-          fen: childFen,
-          parentFen,
-          moveUci: uci,
-          moveSan: mv.san,
-          childFens: [],
-          createdAt: now,
-        });
-      }
+      const writes = planAddMove({
+        repertoireId,
+        parentId,
+        childId,
+        parentFen,
+        childFen,
+        uci,
+        san: mv.san,
+        parentPathKey,
+        now,
+        parent: await db.repertoireNodes.get(parentId),
+        child: await db.repertoireNodes.get(childId),
+      });
+      if (writes.length > 0) await db.repertoireNodes.bulkPut(writes);
 
       // SRS card: only for positions where the repertoire owner is TO MOVE
       // in PARENT position (so parent's turn == rep.color and this move is
-      // the user's prep from that position).
+      // the user's prep from that position). One card per position: a
+      // second repertoire move from here is accepted by the trainer via the
+      // node's children (`repertoireMovesAt`), not by a second card.
       const parentTurn = parentFen.split(' ')[1] === 'w' ? 'white' : 'black';
       if (parentTurn === rep.color) {
         const cId = cardId(repertoireId, parentFen);
@@ -182,6 +194,39 @@ export async function addMove(
 }
 
 /**
+ * One-time upgrade of a repertoire written before nodes recorded their
+ * move orders (`RepertoireNode.paths`). The root carries `paths` from
+ * creation on, so its absence marks a legacy tree.
+ *
+ * Must run before the first recorded write: once a node has `paths`, the
+ * line walk trusts them exactly, so recording only the NEW move order on a
+ * legacy node would hide every old line through it. Writing what the
+ * read-time fallback already shows (`reachedPaths`) keeps the drill list
+ * unchanged by the upgrade itself.
+ */
+async function upgradeLegacyPaths(repertoireId: string): Promise<void> {
+  const root = await db.repertoireNodes.get(nodeId(repertoireId, START_FEN));
+  if (!root || root.paths) return;
+  await db.transaction('rw', db.repertoireNodes, async () => {
+    const nodes = await db.repertoireNodes
+      .where('repertoireId')
+      .equals(repertoireId)
+      .toArray();
+    const reached = reachedPaths(nodes, START_FEN, isLibraryLinePrefix);
+    const updated: RepertoireNode[] = [];
+    for (const n of nodes) {
+      const found = reached.get(n.id);
+      if (!found) continue;
+      const paths = [...(n.paths ?? [])];
+      for (const p of found) if (!paths.includes(p)) paths.push(p);
+      updated.push({ ...n, paths });
+    }
+    // The root is always reached, which is what marks the upgrade done.
+    await db.repertoireNodes.bulkPut(updated);
+  });
+}
+
+/**
  * Import moves from a PGN string into a repertoire. Walks the mainline
  * and calls `addMove` for each. Variations are flattened into separate
  * lines sharing the same parent.
@@ -196,54 +241,100 @@ export async function importPgn(repertoireId: string, pgn: string): Promise<numb
   const history = c.history({ verbose: true });
   const replay = new Chess();
   let count = 0;
+  const path: string[] = [];
   for (const mv of history) {
     const parentFen = replay.fen();
     const uci = mv.from + mv.to + (mv.promotion ?? '');
-    await addMove(repertoireId, parentFen, uci);
+    await addMove(repertoireId, parentFen, uci, path);
     replay.move(mv.san);
+    path.push(uci);
     count++;
   }
   return count;
 }
 
 /**
- * Remove a node and (recursively) all of its descendants + their cards.
- * Leaves siblings intact and updates the parent's childFens.
+ * Remove a position and every line through it, with their cards.
+ *
+ * Positions are shared between move orders, so "everything below" is not a
+ * subtree walk: a descendant that some other move order also reaches
+ * survives, minus the move orders that ran through the deleted position.
+ * Every node that pointed at a removed one is cleaned — a transposed
+ * position has more than one parent — and a card whose expected move led
+ * into the removed position is repointed at a remaining repertoire move
+ * there, or dropped when none is left.
  */
 export async function deleteNode(
   repertoireId: string,
   fen: string,
 ): Promise<void> {
-  const root = await db.repertoireNodes.get(nodeId(repertoireId, fen));
-  if (!root) return;
-
-  const toDelete: string[] = [];
-  const stack: string[] = [fen];
-  while (stack.length > 0) {
-    const f = stack.pop()!;
-    const n = await db.repertoireNodes.get(nodeId(repertoireId, f));
-    if (!n) continue;
-    toDelete.push(f);
-    for (const child of n.childFens) stack.push(child);
-  }
-
+  await upgradeLegacyPaths(repertoireId);
   await db.transaction('rw', db.repertoireNodes, db.repertoireCards, async () => {
-    for (const f of toDelete) {
-      await db.repertoireNodes.delete(nodeId(repertoireId, f));
-      await db.repertoireCards.delete(cardId(repertoireId, f));
+    const nodes = await db.repertoireNodes
+      .where('repertoireId')
+      .equals(repertoireId)
+      .toArray();
+    const targetId = nodeId(repertoireId, fen);
+    const target = nodes.find((n) => n.id === targetId);
+    if (!target) return;
+
+    const cut = target.paths ?? [];
+    // `''` is the root's path, which every move order runs through.
+    const runsThrough = (p: string) =>
+      cut.some((t) => t === '' || p === t || p.startsWith(`${t} `));
+    const doomed = new Set<string>([targetId]);
+    for (const n of nodes) {
+      if (n.paths && n.paths.length > 0 && n.paths.every(runsThrough)) doomed.add(n.id);
     }
-    // Drop from parent's childFens.
-    if (root.parentFen) {
-      const parent = await db.repertoireNodes.get(nodeId(repertoireId, root.parentFen));
-      if (parent) {
-        parent.childFens = parent.childFens.filter((c) => c !== fen);
-        if (parent.mainChildFen === fen) {
-          parent.mainChildFen = parent.childFens[0];
+    // Nodes no move order reaches (none recorded) can only be found by
+    // walking down from the target.
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const stack = [target];
+    while (stack.length > 0) {
+      const n = stack.pop()!;
+      for (const f of n.childFens) {
+        const child = byId.get(nodeId(repertoireId, f));
+        if (child && !child.paths?.length && !doomed.has(child.id)) {
+          doomed.add(child.id);
+          stack.push(child);
         }
-        await db.repertoireNodes.put(parent);
+      }
+    }
+
+    const survivors = new Map<string, RepertoireNode>();
+    const trimmed: RepertoireNode[] = [];
+    for (const n of nodes) {
+      if (doomed.has(n.id)) continue;
+      const childFens = n.childFens.filter((f) => !doomed.has(nodeId(repertoireId, f)));
+      const paths = n.paths?.filter((p) => !runsThrough(p));
+      const lostChild = childFens.length !== n.childFens.length;
+      const next: RepertoireNode = { ...n, childFens };
+      if (paths) next.paths = paths;
+      if (n.mainChildFen && doomed.has(nodeId(repertoireId, n.mainChildFen))) {
+        next.mainChildFen = childFens[0];
+      }
+      survivors.set(fenKey(n.fen), next);
+      if (lostChild || paths?.length !== n.paths?.length) trimmed.push(next);
+    }
+
+    for (const id of doomed) {
+      await db.repertoireNodes.delete(id);
+      await db.repertoireCards.delete(id); // card ids share the node-id shape
+    }
+    for (const n of trimmed) {
+      await db.repertoireNodes.put(n);
+      const card = await db.repertoireCards.get(cardId(repertoireId, n.fen));
+      if (!card) continue;
+      const remaining = movesFrom(n, survivors);
+      if (remaining.includes(card.expectedUci)) continue;
+      if (remaining.length > 0) {
+        await db.repertoireCards.update(card.id, { expectedUci: remaining[0] });
+      } else {
+        await db.repertoireCards.delete(card.id);
       }
     }
   });
+  await db.repertoires.update(repertoireId, { updatedAt: Date.now() });
 }
 
 export async function setNoteOnNode(
@@ -264,14 +355,16 @@ export async function childrenOf(
 ): Promise<RepertoireNode[]> {
   const node = await db.repertoireNodes.get(nodeId(repertoireId, fen));
   if (!node) return [];
-  const children = await Promise.all(
-    node.childFens.map((f) => db.repertoireNodes.get(nodeId(repertoireId, f))),
-  );
+  // By key: older rows can list one child twice, under two move orders'
+  // counters.
+  const ids = [...new Set(node.childFens.map((f) => nodeId(repertoireId, f)))];
+  const children = await Promise.all(ids.map((id) => db.repertoireNodes.get(id)));
   const filtered = children.filter((x): x is RepertoireNode => !!x);
   if (node.mainChildFen) {
+    const mainKey = fenKey(node.mainChildFen);
     filtered.sort((a, b) => {
-      if (a.fen === node.mainChildFen) return -1;
-      if (b.fen === node.mainChildFen) return 1;
+      if (fenKey(a.fen) === mainKey) return -1;
+      if (fenKey(b.fen) === mainKey) return 1;
       return 0;
     });
   }
@@ -279,28 +372,30 @@ export async function childrenOf(
 }
 
 /**
- * One root-to-leaf path through the repertoire tree. Used by the "play
- * through the whole line" trainer.
+ * Every repertoire move from `fen`, however the position was reached. The
+ * SRS card for a position stores one `expectedUci` (the first move added
+ * there), but at a branch point every one of these is the user's prep and
+ * must be graded correct.
  */
-export interface RepertoireLine {
-  /** UCI moves from the start position. */
-  uci: string[];
-  /** SAN moves aligned with `uci`. */
-  san: string[];
-  /** FEN after each move; `fens[0]` is the starting FEN, `fens[i]` is the
-   *  position AFTER move `i-1`. Length = uci.length + 1. */
-  fens: string[];
-  /** Display name: best effort. Falls back to first few SAN moves. */
-  name: string;
+export async function repertoireMovesAt(
+  repertoireId: string,
+  fen: string,
+): Promise<string[]> {
+  const node = await db.repertoireNodes.get(nodeId(repertoireId, fen));
+  if (!node) return [];
+  const ids = [...new Set(node.childFens.map((f) => nodeId(repertoireId, f)))];
+  const children = await Promise.all(ids.map((id) => db.repertoireNodes.get(id)));
+  const byKey = new Map<string, RepertoireNode>();
+  for (const c of children) if (c) byKey.set(fenKey(c.fen), c);
+  return movesFrom(node, byKey);
 }
 
+export type { RepertoireLine };
+
 /**
- * Enumerate every root-to-leaf path through a repertoire as a flat list
- * of lines. A "leaf" is any node with no children. We also emit a line at
- * each branching point so partial sub-lines aren't lost.
- *
- * Lines are sorted with the main line (following `mainChildFen` from the
- * root) first; the rest follow alphabetically by their first SAN.
+ * Every added line of a repertoire, as a flat list — see
+ * `enumerateLinesFromNodes` for the rules, including how move orders that
+ * transpose into a shared position are kept apart.
  */
 export async function enumerateLines(
   repertoireId: string,
@@ -311,74 +406,7 @@ export async function enumerateLines(
     .where('repertoireId')
     .equals(repertoireId)
     .toArray();
-  if (allNodes.length === 0) return [];
-  const byFen = new Map<string, RepertoireNode>();
-  for (const n of allNodes) byFen.set(n.fen, n);
-  const startFen = new Chess().fen();
-  const root = byFen.get(startFen);
-  if (!root) return [];
-
-  const lines: RepertoireLine[] = [];
-  // DFS; emit a line whenever we hit a node with no children.
-  function dfs(
-    fen: string,
-    uci: string[],
-    san: string[],
-    fens: string[],
-  ): void {
-    const node = byFen.get(fen);
-    if (!node || node.childFens.length === 0) {
-      if (uci.length === 0) return; // skip empty root
-      lines.push({
-        uci: [...uci],
-        san: [...san],
-        fens: [...fens],
-        name: san.slice(0, 6).join(' ') + (san.length > 6 ? '…' : ''),
-      });
-      return;
-    }
-    // Order children: main child first.
-    const ordered = [...node.childFens].sort((a, b) => {
-      if (a === node.mainChildFen) return -1;
-      if (b === node.mainChildFen) return 1;
-      return 0;
-    });
-    for (const childFen of ordered) {
-      const child = byFen.get(childFen);
-      if (!child || !child.moveUci || !child.moveSan) continue;
-      dfs(
-        childFen,
-        [...uci, child.moveUci],
-        [...san, child.moveSan],
-        [...fens, childFen],
-      );
-    }
-  }
-  dfs(startFen, [], [], [startFen]);
-
-  // De-duplicate: identical move sequences can appear if a sub-tree was
-  // imported twice. Key by joined UCI.
-  const seen = new Set<string>();
-  const unique: RepertoireLine[] = [];
-  for (const l of lines) {
-    const k = l.uci.join(' ');
-    if (seen.has(k)) continue;
-    seen.add(k);
-    unique.push(l);
-  }
-
-  // Sort lexicographically by SAN sequence so related lines (same prefix)
-  // sit next to each other in the trainer's queue. The DFS already pushed
-  // main-children first, so the result begins with the canonical mainline.
-  unique.sort((a, b) => {
-    const min = Math.min(a.san.length, b.san.length);
-    for (let i = 0; i < min; i++) {
-      if (a.san[i] !== b.san[i]) return a.san[i].localeCompare(b.san[i]);
-    }
-    return a.san.length - b.san.length;
-  });
-
-  return unique;
+  return enumerateLinesFromNodes(allNodes, START_FEN, isLibraryLinePrefix);
 }
 
 export async function dueCards(repertoireId?: string): Promise<RepertoireCard[]> {
