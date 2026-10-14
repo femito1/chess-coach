@@ -9,7 +9,7 @@ import { BoardFrame } from '@/components/BoardFrame';
 import { buildSolutionSteps } from '@/components/SolutionPlayer';
 import { SolutionControls } from '@/components/SolutionControls';
 import { gradeSrs, newSrsState, summarizeIntervals, type Grade } from '@/srs/sm2';
-import { dueCards, uciPathToFen } from './store';
+import { dueCards, repertoireMovesAt, uciPathToFen } from './store';
 import { identifyOpening } from '@/features/openings/library';
 
 const INITIAL_FEN =
@@ -55,6 +55,15 @@ export function RepertoireTrainer() {
    *  from move 1 instead of dropping the user into mid-game with no
    *  context. */
   const [leadInUci, setLeadInUci] = useState<string[]>([]);
+  /** Every repertoire move from the current card's position. The card
+   *  stores one `expectedUci` (the first move added there), but at a
+   *  branch point each of these is the user's prep and grades correct —
+   *  the card asks "do you know your move here", not "which one was added
+   *  first". Loaded with the lead-in; until then only `expectedUci`. */
+  const [acceptedUci, setAcceptedUci] = useState<string[]>([]);
+  /** The move the user actually answered with, for the "Correct: …"
+   *  line — it may be a sibling of `expectedUci`. */
+  const [answeredUci, setAnsweredUci] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -83,12 +92,19 @@ export function RepertoireTrainer() {
     if (!current) {
       setOpening(null);
       setLeadInUci([]);
+      setAcceptedUci([]);
       return;
     }
     let cancelled = false;
+    setAcceptedUci([current.expectedUci]);
+    setAnsweredUci(null);
     void (async () => {
-      const path = await uciPathToFen(current.repertoireId, current.fen);
+      const [path, moves] = await Promise.all([
+        uciPathToFen(current.repertoireId, current.fen),
+        repertoireMovesAt(current.repertoireId, current.fen),
+      ]);
       if (cancelled) return;
+      setAcceptedUci([current.expectedUci, ...moves]);
       const op = identifyOpening(path);
       setOpening(
         op ? { family: op.family, name: op.name, eco: op.eco } : null,
@@ -131,11 +147,12 @@ export function RepertoireTrainer() {
   }): boolean {
     if (!current || status !== 'thinking') return false;
     const played = m.from + m.to + (m.promotion ?? '');
-    const expectedBase = current.expectedUci.slice(0, 4);
     const playedBase = played.slice(0, 4);
-    if (playedBase === expectedBase) {
+    const matched = acceptedUci.find((u) => u.slice(0, 4) === playedBase);
+    if (matched) {
       setStatus('right');
       setLastTry(null);
+      setAnsweredUci(matched);
       return true;
     }
     // Wrong-but-legal move: bump the counter, sticky-unlock Hint +
@@ -202,18 +219,19 @@ export function RepertoireTrainer() {
   if (!current) return <div className="text-text-muted">{t('repertoire.trainer.loadingCard')}</div>;
 
   const orientation = repertoire.color;
+  const answerUci = answeredUci ?? current.expectedUci;
   const expectedSan = (() => {
     try {
       const c = new Chess();
       c.load(current.fen);
       const mv = c.move({
-        from: current.expectedUci.slice(0, 2),
-        to: current.expectedUci.slice(2, 4),
-        promotion: current.expectedUci.slice(4, 5) || undefined,
+        from: answerUci.slice(0, 2),
+        to: answerUci.slice(2, 4),
+        promotion: answerUci.slice(4, 5) || undefined,
       });
-      return mv?.san ?? current.expectedUci;
+      return mv?.san ?? answerUci;
     } catch {
-      return current.expectedUci;
+      return answerUci;
     }
   })();
 
