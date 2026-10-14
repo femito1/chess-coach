@@ -117,6 +117,27 @@ describe('practiceMode.reduceSession :: random mode', () => {
     }
   });
 
+  it('keeps drawing fresh lines across repeated skips', () => {
+    // Skips don't count as plays; seeding off the play count made every
+    // skip redraw the same sample, so the walk bounced between two lines
+    // (0, 9, 0, 9, …) no matter how many were selected.
+    let s = initSession({
+      mode: 'random',
+      selectedIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      randSeed: FIXED_SEED,
+    });
+    const seen = new Set<number | null>([s.currentIndex]);
+    let prev = s.currentIndex;
+    for (let i = 0; i < 40; i++) {
+      s = reduceSession(s, { type: 'skip' });
+      expect(s.currentIndex).not.toBe(prev);
+      prev = s.currentIndex;
+      seen.add(s.currentIndex);
+    }
+    expect(s.sessionPlays).toBe(0);
+    expect(seen.size).toBeGreaterThan(5);
+  });
+
   it('is deterministic given the same seed + play count', () => {
     const a = initSession({
       mode: 'random',
