@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideBindAction, type CloudProfile } from './profileBind';
+import { decideBindAction, isBoundToOtherUser, type CloudProfile } from './profileBind';
 
 const clerk = (userId = 'user_abc', displayName?: string) => ({ userId, displayName });
 const cloud = (overrides: Partial<CloudProfile> = {}): CloudProfile => ({
@@ -126,5 +126,21 @@ describe('decideBindAction', () => {
       { username: 'magnus', boundClerkUserId: 'user_OLD' },
     );
     expect(action.kind).toBe('refuseMismatch');
+  });
+});
+
+/** The rule cloud sync gates on (`features/sync/bindingGuard.ts`). It must
+ *  agree with the handshake exactly, or one could refuse what the other does. */
+describe('isBoundToOtherUser', () => {
+  it('is the refuseMismatch condition', () => {
+    expect(isBoundToOtherUser('user_OLD', 'user_NEW')).toBe(true);
+    expect(isBoundToOtherUser('user_abc', 'user_abc')).toBe(false);
+  });
+
+  it('does not refuse an unbound device — the handshake binds it to this user', () => {
+    expect(isBoundToOtherUser(undefined, 'user_abc')).toBe(false);
+    expect(isBoundToOtherUser('', 'user_abc')).toBe(false);
+    const bind = decideBindAction(clerk('user_abc'), null, { username: '' });
+    expect(bind.kind).not.toBe('refuseMismatch');
   });
 });

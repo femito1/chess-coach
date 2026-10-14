@@ -76,6 +76,50 @@ describe('createCoalescingRunner', () => {
     expect(run, 'the flushed job is not run again by the timer').toHaveBeenCalledTimes(1);
   });
 
+  /** pagehide during an upload, with an attempt recorded mid-upload: the
+   *  follow-up must not wait out a delay the frozen page will never reach. */
+  it('flush during a job with a follow-up owed runs it as soon as the job ends', async () => {
+    const job = controllable();
+    const r = createCoalescingRunner({ delayMs: 10_000, run: job.run });
+    r.request();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(job.run).toHaveBeenCalledTimes(1);
+
+    r.request(); // lands mid-run: the follow-up is owed
+    r.flush();
+    expect(job.run, 'still never overlaps').toHaveBeenCalledTimes(1);
+    job.finish();
+    await settle();
+    expect(job.run, 'follow-up ran with no delay').toHaveBeenCalledTimes(2);
+
+    job.finish();
+    await settle();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(job.run, 'and only once').toHaveBeenCalledTimes(2);
+    expect(r.pending()).toBe(false);
+  });
+
+  it('flush during a job with nothing owed adds no job', async () => {
+    const job = controllable();
+    const r = createCoalescingRunner({ delayMs: 1000, run: job.run });
+    r.request();
+    await vi.advanceTimersByTimeAsync(1000);
+    r.flush();
+    job.finish();
+    await settle();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(job.run).toHaveBeenCalledTimes(1);
+    // …and a stale flush must not make a LATER follow-up skip its delay.
+    r.request();
+    await vi.advanceTimersByTimeAsync(1000);
+    r.request();
+    job.finish();
+    await settle();
+    expect(job.run, 'a later follow-up still waits its delay').toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(job.run).toHaveBeenCalledTimes(3);
+  });
+
   it('flush with nothing pending costs nothing', async () => {
     const run = vi.fn(async () => {});
     const r = createCoalescingRunner({ delayMs: 1000, run });

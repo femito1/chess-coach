@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import Dexie, { type Transaction } from 'dexie';
 import { db } from '@/db/schema';
+import { assertLocalDataBelongsTo } from './bindingGuard';
 import {
   mergeSnapshots,
   nextRev,
@@ -16,7 +18,7 @@ import {
  * and is unit-tested; this file is only the plumbing, covered by
  * `repertoire-sync.mjs`.
  *
- * ── Two properties this file is responsible for ──────────────────────────
+ * ── Three properties this file is responsible for ────────────────────────
  *
  *  - **A concurrent push is detected, not overwritten.** Every update is
  *    `where rev = <the rev we planned against>`. If another device got there
@@ -26,6 +28,9 @@ import {
  *    repertoire tables and `repertoireSyncBases` are written in one Dexie
  *    transaction, so a crash mid-pull leaves the old state and the old base
  *    together rather than a half-replaced tree that looks "changed here".
+ *  - **A pull never overwrites an edit made while the sync was in flight.**
+ *    The write transaction re-checks the local snapshot against the one the
+ *    plan was made from and skips the apply if it moved (`replaceLocal`).
  *
  * The table may not exist yet: the app can deploy before the SQL in
  * `supabase/cloud-sync.sql` has been re-run. That must not turn every sync red,
@@ -40,18 +45,28 @@ export interface RepertoireSyncResult {
   merged: number;
   deletedLocal: number;
   tombstoned: number;
-  /** Pushes another device beat us to; retried by the next sync. */
+  /** Pushes another device beat us to, and pulls/merges whose local copy was
+   *  edited while the sync was in flight; both retried by the next sync. */
   conflicts: number;
   /** The cloud table does not exist yet. */
   unavailable: boolean;
 }
 
-/** True while this module writes the repertoire tables itself, so the change
- *  hooks that schedule a sync (`useCloudSync.ts`) do not schedule another one
- *  in response to the sync's own pull. */
-let applyingRemote = false;
-export function isApplyingRemoteRepertoires(): boolean {
-  return applyingRemote;
+/**
+ * The transactions in which this module applies a pull, so the change hooks
+ * that schedule a sync (`useCloudSync.ts`) skip the sync's own writes rather
+ * than scheduling a pointless follow-up.
+ *
+ * Keyed by transaction, not a module-wide "applying" flag: Dexie fires a hook
+ * when the write executes, and a user's write queued behind ours on the same
+ * tables executes the moment ours commits — before a flag cleared in `finally`
+ * would be. Such a write is a real edit that must schedule an upload; only the
+ * hook's own transaction identifies the sync's writes exactly.
+ */
+const remoteApplyTxs = new WeakSet<Transaction>();
+export function isRemoteRepertoireWrite(tx: Transaction | undefined): boolean {
+  for (let t = tx; t; t = t.parent) if (remoteApplyTxs.has(t)) return true;
+  return false;
 }
 
 let warnedUnavailable = false;
@@ -72,14 +87,17 @@ export async function syncRepertoires(args: {
     conflicts: 0,
     unavailable: false,
   };
+  await assertLocalDataBelongsTo(userId);
 
   // ---- manifest: no blobs -----------------------------------------------
+  // Ordered by key so offset pages are stable — see `fetchAll` in cloudSync.ts.
   const remote: RemoteRepertoireMeta[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabase
       .from(TABLE)
       .select('repertoire_id, rev, deleted')
       .eq('user_id', userId)
+      .order('repertoire_id', { ascending: true })
       .range(from, from + 999);
     if (error) {
       if (isMissingTable(error)) {
@@ -149,23 +167,25 @@ export async function syncRepertoires(args: {
       case 'pull': {
         const r = remoteData.get(action.id);
         if (!r?.data) break; // vanished between manifest and fetch: next sync
-        await replaceLocal(action.id, r.data, {
+        const applied = await replaceLocal(action.id, localHashes.get(action.id), r.data, {
           repertoireId: action.id,
           rev: r.rev,
           hash: snapshotHash(r.data),
           deleted: false,
         });
-        out.pulled++;
+        if (applied) out.pulled++;
+        else out.conflicts++;
         break;
       }
       case 'deleteLocal': {
-        await replaceLocal(action.id, null, {
+        const applied = await replaceLocal(action.id, localHashes.get(action.id), null, {
           repertoireId: action.id,
           rev: action.remoteRev,
           hash: '',
           deleted: true,
         });
-        out.deletedLocal++;
+        if (applied) out.deletedLocal++;
+        else out.conflicts++;
         break;
       }
       case 'merge': {
@@ -180,13 +200,17 @@ export async function syncRepertoires(args: {
         }
         // Local gets the merge only once the cloud has it, so a failed push
         // leaves this device exactly as it was and the next sync merges again.
-        await replaceLocal(action.id, merged, {
+        // Likewise if the user trained here meanwhile: the cloud has the merge,
+        // the base still says the old rev, so the next sync sees "changed on
+        // both" and merges that training into it rather than this overwriting it.
+        const applied = await replaceLocal(action.id, localHashes.get(action.id), merged, {
           repertoireId: action.id,
           rev,
           hash: snapshotHash(merged),
           deleted: false,
         });
-        out.merged++;
+        if (applied) out.merged++;
+        else out.conflicts++;
         break;
       }
       case 'adoptBase':
@@ -290,36 +314,60 @@ async function writeRow(
   return (data ?? []).length === 1 ? rev : null;
 }
 
-/** Replace one repertoire's local state wholesale (or delete it), with its
- *  base, in one transaction. */
+async function readLocalSnapshot(id: string): Promise<RepertoireSnapshot | undefined> {
+  const repertoire = await db.repertoires.get(id);
+  if (!repertoire) return undefined;
+  const [nodes, cards, lineStats] = await Promise.all([
+    db.repertoireNodes.where('repertoireId').equals(id).toArray(),
+    db.repertoireCards.where('repertoireId').equals(id).toArray(),
+    db.repertoireLineStats.where('repertoireId').equals(id).toArray(),
+  ]);
+  return { repertoire, nodes, cards, lineStats };
+}
+
+/**
+ * Replace one repertoire's local state wholesale (or delete it), with its
+ * base, in one transaction — unless it changed since the sync read it.
+ *
+ * `expectHash` is the local hash the plan was made from (undefined: absent).
+ * Between that read and this write lie several network round trips, and the
+ * user may have answered a card or added a line in them. Overwriting would lose
+ * that edit for good: the base saved here would then match the overwritten
+ * state, so no later sync could tell anything had happened. So the snapshot is
+ * re-read inside the write transaction — which IndexedDB serializes against
+ * every other write to these tables — and on any difference the apply is
+ * skipped and `false` returned. Base and data stay as they were, so the next
+ * sync sees the edit as "changed here" and pushes or merges it.
+ */
 async function replaceLocal(
   id: string,
+  expectHash: string | undefined,
   snap: RepertoireSnapshot | null,
   base: SyncBase,
-): Promise<void> {
-  applyingRemote = true;
-  try {
-    await db.transaction(
-      'rw',
-      [db.repertoires, db.repertoireNodes, db.repertoireCards, db.repertoireLineStats, db.repertoireSyncBases],
-      async () => {
-        await db.repertoireNodes.where('repertoireId').equals(id).delete();
-        await db.repertoireCards.where('repertoireId').equals(id).delete();
-        await db.repertoireLineStats.where('repertoireId').equals(id).delete();
-        if (snap) {
-          await db.repertoires.put(snap.repertoire);
-          await db.repertoireNodes.bulkPut(snap.nodes);
-          await db.repertoireCards.bulkPut(snap.cards);
-          await db.repertoireLineStats.bulkPut(snap.lineStats);
-        } else {
-          await db.repertoires.delete(id);
-        }
-        await db.repertoireSyncBases.put(base);
-      },
-    );
-  } finally {
-    applyingRemote = false;
-  }
+): Promise<boolean> {
+  return db.transaction(
+    'rw',
+    [db.repertoires, db.repertoireNodes, db.repertoireCards, db.repertoireLineStats, db.repertoireSyncBases],
+    async () => {
+      const current = await readLocalSnapshot(id);
+      const currentHash = current ? snapshotHash(current) : undefined;
+      if (currentHash !== expectHash) return false;
+      remoteApplyTxs.add(Dexie.currentTransaction);
+      await db.repertoireNodes.where('repertoireId').equals(id).delete();
+      await db.repertoireCards.where('repertoireId').equals(id).delete();
+      await db.repertoireLineStats.where('repertoireId').equals(id).delete();
+      if (snap) {
+        await db.repertoires.put(snap.repertoire);
+        await db.repertoireNodes.bulkPut(snap.nodes);
+        await db.repertoireCards.bulkPut(snap.cards);
+        await db.repertoireLineStats.bulkPut(snap.lineStats);
+      } else {
+        await db.repertoires.delete(id);
+      }
+      await db.repertoireSyncBases.put(base);
+      return true;
+    },
+  );
 }
 
 function isMissingTable(error: { code?: string; message?: string }): boolean {

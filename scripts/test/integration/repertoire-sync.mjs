@@ -21,13 +21,17 @@
 //   6. Edits on both sides merge, and both edits survive on both sides.
 //   7. Another device's write between manifest and push is a conflict, not an
 //      overwrite — and the next sync merges it.
+//  7b. A local edit between manifest and pull is not overwritten by the pull —
+//      the next sync merges it.
 //   8. Deleting a repertoire pushes a tombstone; a fresh device does not
 //      resurrect it.
 //   9. A cloud project without the table skips the phase instead of failing.
 
 import { runBrowserTest, expect, appendBypass } from '../harness.mjs';
 
-const USER = 'user_repsync_test';
+// The bypass session's own id: sync refuses local data bound to another user
+// (`bindingGuard.ts`), and the page's handshake binds it to this one.
+const USER = 'e2e_bypass_user';
 
 await runBrowserTest({
   name: 'repertoire-sync',
@@ -50,13 +54,13 @@ await runBrowserTest({
 
         /* ------------------------------------------------ fake Supabase -- */
         const rows = new Map(); // repertoire_id -> row
-        const fake = { tableMissing: false, beforeUpdate: null };
+        const fake = { tableMissing: false, beforeUpdate: null, beforeFetch: null };
         const supabase = {
           from(table) {
             if (table !== 'cloud_repertoires') throw new Error(`fake: unknown table ${table}`);
             if (fake.tableMissing) {
               const missing = { data: null, error: { code: 'PGRST205', message: "Could not find the table 'public.cloud_repertoires'" } };
-              const b = { eq: () => b, in: async () => missing, range: async () => missing };
+              const b = { eq: () => b, order: () => b, in: async () => missing, range: async () => missing };
               return { select: () => b };
             }
             const filters = {};
@@ -73,7 +77,13 @@ await runBrowserTest({
               select(cols) {
                 const b = {
                   eq(k, v) { filters[k] = v; return b; },
+                  // `range` below sorts by key already; just accept the call.
+                  order: () => b,
                   async in(k, vs) {
+                    // The blob fetch: the round trip a local edit can land in.
+                    const before = fake.beforeFetch;
+                    fake.beforeFetch = null;
+                    await before?.();
                     filters[k] = new Set(vs);
                     const data = [...rows.values()].filter(matches).map((r) => pick(cols, r));
                     return { data: JSON.parse(JSON.stringify(data)), error: null };
@@ -227,6 +237,31 @@ await runBrowserTest({
           keptOther: finalLocal.repertoire.description === 'from the other device',
         };
 
+        /* ------------------ 7b. an edit made mid-sync is not overwritten -- */
+        // The cloud moved, this device had not, so the plan says pull — but the
+        // user adds a line while the blobs are in flight. Applying the pull
+        // would delete that line and record the result as agreed, losing it
+        // for good.
+        {
+          const r = rows.get(rep.id);
+          r.data.repertoire = { ...r.data.repertoire, name: 'Renamed mid-sync', updatedAt: clock + 200 };
+          r.rev = ++clock;
+        }
+        fake.beforeFetch = () => store.addMove(rep.id, fen, 'g8f6');
+        const r7c = await sync();
+        const midLocal = await snapshotOf(rep.id);
+        const r7d = await sync();
+        const settledLocal = await snapshotOf(rep.id);
+        const midSync = {
+          conflicts: r7c.conflicts,
+          pulled: r7c.pulled,
+          keptLine: midLocal.nodes.some((n) => n.moveUci === 'g8f6'),
+          thenMerged: r7d.merged,
+          keptLineAfter: settledLocal.nodes.some((n) => n.moveUci === 'g8f6'),
+          cloudHasLine: rows.get(rep.id).data.nodes.some((n) => n.moveUci === 'g8f6'),
+          gotRemote: settledLocal.repertoire.name === 'Renamed mid-sync',
+        };
+
         /* ------------------------------------------- 8. tombstones ------ */
         await store.deleteRepertoire(rep.id);
         const r8 = await sync();
@@ -246,7 +281,7 @@ await runBrowserTest({
         const r9 = await sync();
 
         await wipeLocal();
-        return { ok: true, first, second, restore, localEdit, remoteEdit, merged, conflict, tombstone, missing: r9.unavailable };
+        return { ok: true, first, second, restore, localEdit, remoteEdit, merged, conflict, midSync, tombstone, missing: r9.unavailable };
       } catch (e) {
         return { ok: false, error: e?.message ?? String(e), stack: e?.stack };
       }
@@ -285,6 +320,14 @@ await runBrowserTest({
     expect(out.conflict.thenMerged, '7. the next sync merges it').toBe(1);
     expect(out.conflict.keptNote, "7. this device's note survived").toBe(true);
     expect(out.conflict.keptOther, "7. the other device's edit survived").toBe(true);
+
+    expect(out.midSync.conflicts, '7b. a pull racing a local edit is skipped').toBe(1);
+    expect(out.midSync.pulled, '7b. …not applied').toBe(0);
+    expect(out.midSync.keptLine, '7b. the line added mid-sync survives').toBe(true);
+    expect(out.midSync.thenMerged, '7b. the next sync merges').toBe(1);
+    expect(out.midSync.keptLineAfter, '7b. keeping the line here').toBe(true);
+    expect(out.midSync.cloudHasLine, '7b. …and in the cloud').toBe(true);
+    expect(out.midSync.gotRemote, "7b. with the other device's edit").toBe(true);
 
     expect(out.tombstone.tombstoned, '8. a deletion pushes a tombstone').toBe(1);
     expect(out.tombstone.cloudDeleted, '8. the cloud row is marked deleted, not removed').toBe(true);

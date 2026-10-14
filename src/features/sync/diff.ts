@@ -458,6 +458,25 @@ export function diffAttempts(
   return out;
 }
 
+/**
+ * A planned local write, re-applied onto the row as it is at write time.
+ *
+ * `diffAttempts` plans from a read taken before the manifest round trip; a
+ * `recordAttempt` committed since then is not in the planned row, and writing
+ * the plan as-is would erase that attempt locally (and, once pushed, in the
+ * cloud too). Merging the plan into the current row instead is exact, not a
+ * heuristic: `current` only ever moved forward from what was read, and the merge
+ * is commutative and idempotent, so merge(current, merge(read, remote)) keeps
+ * everything in `current` and adds what the remote contributed — and when
+ * nothing raced, it is the planned row unchanged.
+ */
+export function rebaseAttemptWrite(
+  current: PuzzleAttempt | undefined,
+  planned: PuzzleAttempt,
+): PuzzleAttempt {
+  return current ? mergeAttempt(current, planned) : planned;
+}
+
 /* =======================================================================
  *  Row (de)serialization
  * =======================================================================
