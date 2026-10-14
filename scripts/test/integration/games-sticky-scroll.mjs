@@ -108,7 +108,25 @@ await runBrowserTest({
         return out;
       });
 
-    const top = await geom();
+    // Wait (bounded) for the strip rather than sampling once. It is drawn from a
+    // `ResizeObserver` callback, which fires after layout — so the moment the
+    // 40th row lands there is a frame or more where the table overflows but the
+    // strip isn't up yet. On CI's slower runners the single sample landed in
+    // that gap (`stripPresent: false` with every precondition true). Settling
+    // short of the timeout keeps assertion 2 meaningful: a strip that never
+    // appears still fails it below, just with the geometry logged.
+    let top = await geom();
+    try {
+      top = await pollUntil(
+        async () => {
+          const g = await geom();
+          return { done: g.stripPresent, value: g };
+        },
+        { timeoutMs: 3_000, intervalMs: 100, logOnChange: false },
+      );
+    } catch {
+      top = await geom();
+    }
     console.log('small window, page at top:', JSON.stringify(top));
 
     // --- 1: the precondition ---------------------------------------------
@@ -180,8 +198,20 @@ await runBrowserTest({
 
     // --- the no-op case ---------------------------------------------------
     await page.setViewportSize(WIDE);
-    await page.waitForTimeout(400);
-    const wide = await geom();
+    // The same `ResizeObserver` lag in reverse: wait (bounded) for the strip to
+    // go rather than a fixed sleep; one that never goes still fails below.
+    let wide = await geom();
+    try {
+      wide = await pollUntil(
+        async () => {
+          const g = await geom();
+          return { done: !g.stripPresent && !g.tableOverflows, value: g };
+        },
+        { timeoutMs: 3_000, intervalMs: 100, logOnChange: false },
+      );
+    } catch {
+      wide = await geom();
+    }
     console.log('wide window:', JSON.stringify(wide));
     expect(wide.tableOverflows, 'precondition: at this width the table fits').toBe(false);
     expect(
