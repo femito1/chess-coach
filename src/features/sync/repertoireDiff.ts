@@ -138,9 +138,9 @@ export function planRepertoireSync(args: {
  *  - The repertoire record: the side with the newer `updatedAt` (name,
  *    description, bulk-load stamp). Ties go to `a`.
  *  - Nodes: the union. A node on both sides takes the newer side's fields, with
- *    `childFens` unioned so neither side's branches are orphaned. Consequence: a
- *    line deleted on one device while the same repertoire was edited on another
- *    comes back. Resurrecting a deletion is the deliberate trade against losing
+ *    `childFens` and `paths` unioned so neither side's branches are orphaned.
+ *    Consequence: a line deleted on one device while the same repertoire was
+ *    edited on another comes back. Resurrecting a deletion is the deliberate trade against losing
  *    a line someone added.
  *  - Cards: per card, the one reviewed most recently — its SRS state is the
  *    later state of the same schedule. Then more reps, then `a`.
@@ -161,12 +161,21 @@ export function mergeSnapshots(a: RepertoireSnapshot, b: RepertoireSnapshot): Re
     }
     const childFens = [...n.childFens];
     for (const f of prev.childFens) if (!childFens.includes(f)) childFens.push(f);
+    // Move orders too: a child edge with no recorded move order through it
+    // is never walked (`repertoire/lineTree.ts`), so a one-sided `paths`
+    // would hide the other side's branch just as a one-sided `childFens`.
+    let paths = n.paths;
+    if (prev.paths) {
+      paths = [...(n.paths ?? [])];
+      for (const p of prev.paths) if (!paths.includes(p)) paths.push(p);
+    }
     nodes.set(n.id, {
       ...prev,
       ...n,
       childFens,
       mainChildFen: n.mainChildFen ?? prev.mainChildFen,
       notes: n.notes ?? prev.notes,
+      paths,
     });
   }
 

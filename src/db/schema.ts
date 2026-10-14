@@ -482,6 +482,14 @@ export interface RepertoireNode {
   /** For the SIDE being studied: the "main" line out of this node. All
    *  other children are alternatives. */
   mainChildFen?: string;
+  /** Every root-to-this-node UCI sequence (space-joined, `''` for the root)
+   *  this node was added along. Nodes are shared between move orders that
+   *  transpose into the same position, so this is what tells the line walk
+   *  which continuations belong to which move order — see
+   *  `repertoire/lineTree.ts`. Optional and unindexed: rows written before
+   *  it existed are read with a fallback rule and upgraded on the
+   *  repertoire's next write. */
+  paths?: string[];
   createdAt: number;
 }
 

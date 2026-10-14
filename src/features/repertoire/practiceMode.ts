@@ -52,7 +52,8 @@ export interface PracticeSessionState {
    *  in the UI as "X plays this session". */
   sessionPlays: number;
   /** RNG seed for deterministic random mode. The page initialises
-   *  this to `Date.now()` (or a test-supplied number). */
+   *  this to `Date.now()` (or a test-supplied number); every pick —
+   *  finish or skip — advances it by one. */
   randSeed: number;
 }
 
@@ -185,14 +186,18 @@ export function reduceSession(
         sessionPlays,
         perfectThisSession,
         currentIndex: next,
+        randSeed: state.randSeed + 1,
       };
     }
     case 'skip': {
       // Skip = treat as a non-perfect finish that doesn't bump session
       // plays (the user explicitly *didn't* play it). Same routing
       // logic — pick the next line per mode.
+      // The seed must advance here too: a skip does not count as a play,
+      // and seeding off the play count made repeated skips re-draw the
+      // same sample, bouncing between two lines forever.
       const next = pickNext(state);
-      return { ...state, currentIndex: next };
+      return { ...state, currentIndex: next, randSeed: state.randSeed + 1 };
     }
     case 'changeMode': {
       // Reset the perfect-this-session set when transitioning to or
@@ -271,15 +276,10 @@ function pickNext(state: PracticeSessionState): number | null {
   if (mode === 'random') {
     if (sel.length === 1) return sel[0];
     // Mulberry32 \u2014 deterministic, fast, seedable so tests are
-    // reproducible. Mutating the seed in `state.randSeed` would be
-    // ideal but reducers must be pure; we derive a fresh sample by
-    // advancing the seed *deterministically* via the count of session
-    // plays, so two calls for the same `(seed, sessionPlays)` always
-    // return the same index. That's good enough for a UI random walk.
-    let candidate = sampleIndex(
-      state.randSeed + state.sessionPlays,
-      sel.length,
-    );
+    // reproducible. The reducer returns the seed advanced by one per pick
+    // (still pure: a new state, not a mutation), so the same starting
+    // seed and the same events always yield the same walk.
+    let candidate = sampleIndex(state.randSeed, sel.length);
     if (sel[candidate] === state.currentIndex) {
       candidate = (candidate + 1) % sel.length;
     }

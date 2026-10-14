@@ -3,6 +3,8 @@ import { OPENING_LINES } from '@/data/openings.generated';
 import { openingFamily } from '@/features/dashboard/progress';
 import { parseOpeningFromEcoUrl } from '@/import/importer';
 import {
+  colorHint,
+  familyColor,
   familyDescription,
   getFamilies,
   getVariations,
@@ -31,6 +33,124 @@ function group(
     description: '',
   };
 }
+
+/** Every family whose repertoire is Black's. Everything else is White's.
+ *  Pinned over the whole dataset because `ensureFamilyRepertoire` creates a
+ *  repertoire in this colour, and a wrong one quizzes the opponent's moves —
+ *  a data refresh that adds a family must fail here until someone looks. */
+const BLACK_FAMILIES = [
+  'Alekhine Defense',
+  'Australian Defense',
+  'Barnes Defense',
+  'Benko Gambit',
+  'Benko Gambit Accepted',
+  'Benko Gambit Declined',
+  'Benoni Defense',
+  'Blumenfeld Countergambit',
+  'Blumenfeld Countergambit Accepted',
+  'Bogo-Indian Defense',
+  'Borg Defense',
+  'Caro-Kann Defense',
+  'Carr Defense',
+  'Czech Defense',
+  'Döry Defense',
+  'Duras Gambit',
+  'Dutch Defense',
+  'East Indian Defense',
+  'Elephant Gambit',
+  'English Defense',
+  'Englund Gambit',
+  'Englund Gambit Declined',
+  'French Defense',
+  'Fried Fox Defense',
+  'Goldsmith Defense',
+  'Grünfeld Defense',
+  'Gunderam Defense',
+  'Hippopotamus Defense',
+  'Horwitz Defense',
+  'Indian Defense',
+  'Kangaroo Defense',
+  "King's Indian Defense",
+  'Lasker Simul Special',
+  'Latvian Gambit',
+  'Latvian Gambit Accepted',
+  'Lemming Defense',
+  'Lion Defense',
+  'Mexican Defense',
+  'Mikenas Defense',
+  'Modern Defense',
+  'Montevideo Defense',
+  'Neo-Grünfeld Defense',
+  'Nimzo-Indian Defense',
+  'Nimzowitsch Defense',
+  'Old Indian Defense',
+  'Owen Defense',
+  "Petrov's Defense",
+  'Philidor Defense',
+  'Pirc Defense',
+  'Polish Defense',
+  "Pseudo Queen's Indian Defense",
+  'Pterodactyl Defense',
+  "Queen's Gambit Accepted",
+  "Queen's Gambit Declined",
+  "Queen's Indian Accelerated",
+  "Queen's Indian Defense",
+  "Queen's Indian Defense, with e3",
+  "Queen's Indian Defense, with e3, Bb4+ Line",
+  'Rat Defense',
+  'Robatsch Defense',
+  'Scandinavian Defense',
+  'Semi-Slav Defense',
+  'Semi-Slav Defense Accepted',
+  'Sicilian Defense',
+  'Slav Defense',
+  'Slav Indian',
+  'St. George Defense',
+  'Tarrasch Defense',
+  'Vulture Defense',
+  'Wade Defense',
+  'Ware Defense',
+  'Zaire Defense',
+  'Zukertort Defense',
+];
+
+describe('familyColor', () => {
+  it('pins the side of every family', () => {
+    const black = getFamilies('alpha')
+      .filter((g) => g.color === 'black')
+      .map((g) => g.family);
+    expect(black.sort()).toEqual([...BLACK_FAMILIES].sort());
+  });
+
+  it.each([
+    // Black gambits and systems a "Defense"-suffix rule missed.
+    ['Latvian Gambit', 'black'],
+    ['Latvian Gambit Accepted', 'black'],
+    ['Elephant Gambit', 'black'],
+    ['Duras Gambit', 'black'],
+    ['Benko Gambit Accepted', 'black'],
+    ['Semi-Slav Defense Accepted', 'black'],
+    ["Queen's Indian Accelerated", 'black'],
+    ['Slav Indian', 'black'],
+    // White's gambits stay White's, accepted or not.
+    ["King's Gambit Accepted", 'white'],
+    ['Danish Gambit Accepted', 'white'],
+    ['Blackmar-Diemer Gambit Declined', 'white'],
+    // Defining line ends on White's move, but the defence is Black's.
+    ["King's Indian Defense", 'black'],
+    // Ends in "Defense", but it is White's Vienna Gambit.
+    ['Vienna Gambit, with Max Lange Defense', 'white'],
+    ["Queen's Gambit Declined", 'black'],
+  ] as const)('%s → %s', (family, color) => {
+    expect(familyColor(family)).toBe(color);
+  });
+
+  it("gives every line its family's side", () => {
+    for (const line of OPENING_LINES) {
+      expect(colorHint(line)).toBe(familyColor(line.family));
+    }
+  });
+});
 
 describe('isFamilySort', () => {
   it('accepts every supported value', () => {
