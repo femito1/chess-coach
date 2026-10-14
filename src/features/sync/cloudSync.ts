@@ -264,29 +264,33 @@ export async function runCloudSync(opts: SyncOptions): Promise<SyncResult> {
     // analysis with a shallower local one, which the next sync then has to pull
     // back. Two full round trips to converge on what we already had.
     //
-    // `accuracy` and `brilliantCount` are recomputed here rather than read from
-    // `cloud_games` because that row is only pulled when the game itself is a
-    // pull candidate, which it usually is not — the local copy is fine. They are
-    // derived from the analysis we just stored, by the same functions the queue
-    // uses, so the dashboard tiles agree either way.
-    const settle = rows.filter((a) => {
-      const st = statusBefore.get(a.gameId);
-      return st !== undefined && st !== 'done';
-    });
-    if (settle.length > 0) {
+    // `accuracy` and `brilliantCount` are re-derived for EVERY pulled analysis
+    // whose game is here, not only the ones being settled, and never read from
+    // `cloud_games`. That row is only pulled when the game itself is a pull
+    // candidate, and its cached numbers can be stale: a restore pulls games
+    // already `done`, so if only settling games were re-derived, a restored
+    // library kept whatever accuracy the cloud row last carried — measured as
+    // 225 of 469 games still showing the mating side's pre-repair score. Same
+    // functions the queue uses, so every device agrees.
+    const here = rows.filter((a) => statusBefore.has(a.gameId));
+    if (here.length > 0) {
+      let settled = 0;
       await db.transaction('rw', db.games, async () => {
-        for (const a of settle) {
+        for (const a of here) {
           const color = colorById.get(a.gameId);
+          const settle = statusBefore.get(a.gameId) !== 'done';
           await db.games.update(a.gameId, {
-            analysisStatus: 'done',
-            analysisError: undefined,
+            ...(settle ? { analysisStatus: 'done', analysisError: undefined } : {}),
             accuracy: computeAccuracy(a.moves),
             ...(color ? { brilliantCount: countUserBrilliancies(a.moves, color) } : {}),
           });
-          statusBefore.set(a.gameId, 'done');
+          if (settle) {
+            statusBefore.set(a.gameId, 'done');
+            settled++;
+          }
         }
       });
-      counts.gamesSettled += settle.length;
+      counts.gamesSettled += settled;
     }
 
     counts.analysesPulled += rows.length;

@@ -285,6 +285,10 @@ export interface Settings {
    *  classifications is cheap, so it gets its own stamp rather than
    *  riding on the expensive full re-classification. */
   lastBrilliantBackfillVersion?: number;
+  /** Last version of the boot-time `backfillAccuracies` pass that ran
+   *  against this DB. Its own stamp for the same reason as the brilliant
+   *  one: re-deriving accuracy reads only stored winrates. */
+  lastAccuracyBackfillVersion?: number;
   /** Epoch ms when the user dismissed the in-app "install the
    *  browser extension" promotion. Set by the dismiss button on the
    *  Settings → Browser extension card; once stamped the card

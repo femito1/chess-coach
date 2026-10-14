@@ -385,18 +385,21 @@ export function harmonicMean(xs: number[], floor = 20): number {
 }
 
 export interface AccuracyAggregationOptions {
-  /** Synthetic book plies carry no engine information. */
+  /** Count book plies, as perfect moves. Never with their stored winrates:
+   *  no engine search produced those, so they are not evidence of loss. */
   includeBook: boolean;
   /** Lower bound applied before the harmonic mean. */
   floor: number;
+  /** Decay of the per-move curve (`moveAccuracy`). Default: Lichess's. */
+  moveDecay?: number;
   /** Calibrates distance from 100 while preserving endpoints/order. */
   gapMultiplier?: number;
 }
 
 export const CURRENT_ACCURACY_MODEL: AccuracyAggregationOptions = {
-  includeBook: false,
-  floor: 20,
-  gapMultiplier: 1.5,
+  includeBook: true,
+  floor: 24,
+  moveDecay: 0.074,
 };
 
 export function computeAccuracyWithModel(
@@ -408,8 +411,9 @@ export function computeAccuracyWithModel(
       .filter((move) => (move.ply % 2 === 1) === white)
       .filter((move) => model.includeBook || move.classification !== 'book')
       .map((move) => {
+        if (move.classification === 'book') return moveAccuracy(0, model.moveDecay);
         const lossPct = Math.max(0, (move.winrateBefore - move.winrateAfter) * 100);
-        return moveAccuracy(lossPct);
+        return moveAccuracy(lossPct, model.moveDecay);
       });
 
   const rounded = (scores: number[]) => {
@@ -428,26 +432,32 @@ export function computeAccuracyWithModel(
  * Compute per-color accuracy from the move list.
  *
  * Approach:
- *  1) Per-move accuracy comes from the Lichess exponential formula applied
- *     to the player's winrate loss.
- *  2) Synthetic book plies are excluded because no engine evaluation ran.
- *  3) The game accuracy is the harmonic mean of engine-scored moves, with a
- *     floor of 20 before aggregation.
- *  4) Distance from 100 is multiplied by 1.5. This monotonic calibration
- *     corrects the former high-score bias without depending on Chess.com at
- *     runtime.
+ *  1) Per-move accuracy is Lichess's exponential curve over the mover's
+ *     winrate loss, with a steeper decay (0.074 vs Lichess's 0.04354).
+ *  2) Book plies count as perfect moves, as they do on Chess.com.
+ *  3) The game accuracy is the harmonic mean, each move floored at 24 first
+ *     so one disaster can't zero an otherwise sound game.
  *
- * Rationale: the earlier version blended a std-dev-weighted mean with the
- * harmonic mean, which in quiet games (lots of ~0% winrate-loss moves) pulled
- * every number up toward 95+. The harmonic mean alone tracks real move
- * quality much more faithfully: good games still score high, but a game with
- * two or three real mistakes drops meaningfully (-5 to -15 pts), which is
- * the signal you actually want for improvement.
+ * Calibrated 2026-10-14 against Chess.com's own `accuracies` on this user's
+ * games: 938 colour-scores from 469 rapid/blitz/bullet games (~700-1000
+ * rated), all analysed with Stockfish 16 NNUE at depth 18. 5-fold
+ * cross-validated MAE 4.24 (was 9.18; bias −6.8 → +0.9); 95% of scores within
+ * ±10 (was 62%). Fitted on Jan-Jul only, it scored 4.4 on Aug-Oct, where the
+ * previous model scored 10.4. The fitted values were stable across folds
+ * (decay 0.072-0.074, floor 23.3-23.8).
  *
- * Calibration evidence (20 public games / 40 color scores, Stockfish depth
- * 16): on a Magnus Carlsen archive, MAE fell from 5.97 to 4.30 and signed
- * bias from +5.88 to +0.91; on a separate Hikaru Nakamura holdout archive,
- * MAE fell from 6.10 to 4.25 and bias from +5.56 to -0.56.
+ * What the fit settled:
+ *  - The previous model's ×1.5 stretch of the distance from 100 was fitted on
+ *    Carlsen/Nakamura archives and read club games ~7 points low. Refitted
+ *    here, the stretch goes to ×1.0 once the per-move decay is free: the
+ *    shape of the curve was wrong, not its scale.
+ *  - Mixing in an arithmetic mean never helped (its weight fitted to 0).
+ *  - Counting book plies cut MAE from 4.74 to 4.24.
+ *
+ * Known residual: in games Chess.com scores below 60 this reads ~5 high.
+ * Changing the model needs an `ACCURACY_BACKFILL_VERSION` bump
+ * (`db/queries.ts`) to reach stored games. Synced games need nothing more:
+ * cloud sync re-derives accuracy from every analysis it pulls.
  */
 export function computeAccuracy(moves: MoveEval[]): { white: number; black: number } {
   if (moves.length === 0) return { white: 100, black: 100 };

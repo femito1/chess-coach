@@ -26,7 +26,7 @@ import { looksLikePhone } from '@/engine/device';
  *
  * Bump rules:
  *   RECOMPUTE_VERSION   — bump when classifyMove / detectMotifs /
- *                         computeAccuracy / detectPhase / clock-derivation
+ *                         detectPhase / clock-derivation
  *                         logic changes its output for existing data, or when
  *                         `repairTerminalMoveEval` learns to fix a stored
  *                         reading it previously left alone.
@@ -41,6 +41,10 @@ import { looksLikePhone } from '@/engine/device';
  *                         `analyses` deserves its own cheap pass with its
  *                         own version stamp — see
  *                         `BRILLIANT_BACKFILL_VERSION`.
+ *   ACCURACY_BACKFILL_VERSION
+ *                       — bump when `computeAccuracy` changes its output for
+ *                         existing analyses (a recalibration). Its own cheap
+ *                         pass: accuracy reads only stored winrates.
  *   OPENING_REFRESH_VERSION
  *                       — bump when reparseOpeningFromPgn changes its
  *                         output for existing PGNs (e.g. updated openings
@@ -59,6 +63,9 @@ export const USER_TIME_BACKFILL_VERSION = 1;
  *  when `countUserBrilliancies` or the `brilliant` classification rule
  *  changes its output for existing analyses. */
 export const BRILLIANT_BACKFILL_VERSION = 1;
+/** Version stamp for the boot-time `backfillAccuracies` pass. 1 = the
+ *  2026-10-14 recalibration against Chess.com (see `computeAccuracy`). */
+export const ACCURACY_BACKFILL_VERSION = 1;
 /**
  * Stamps `Analysis.recomputeVersion` on rows that predate the field, using the
  * DB's own `lastRecomputeVersion` as the claim. Its own pass with its own gate,
@@ -1153,6 +1160,75 @@ export async function backfillBrilliantCounts(opts?: {
     await updateSettings({
       lastBrilliantBackfillVersion: BRILLIANT_BACKFILL_VERSION,
     });
+  }
+  return updated;
+}
+
+/**
+ * Re-derive every analyzed game's cached `accuracy` with the current model.
+ *
+ * The brilliant-count pass's twin, for the same reason: `computeAccuracy`
+ * reads only each move's stored `winrateBefore` / `winrateAfter`, so a
+ * recalibration needs no reclassification — riding on `RECOMPUTE_VERSION`
+ * would re-run chess.js over every move of every game to change one number.
+ *
+ * Also repairs rows whose cached accuracy predates a move-list repair: 225 of
+ * 469 checked games carried the mating side's pre-`repairTerminalMoveEval`
+ * score (~10 low) in the cloud, because a restored game arrives `done` and
+ * nothing re-derived it.
+ */
+export async function backfillAccuracies(opts?: { force?: boolean }): Promise<number> {
+  if (!opts?.force) {
+    const settings = await getSettings();
+    const stamped = settings.lastAccuracyBackfillVersion;
+    if (stamped != null && stamped >= ACCURACY_BACKFILL_VERSION) return 0;
+  }
+
+  const doneIds = (await db.games
+    .where('analysisStatus')
+    .equals('done')
+    .primaryKeys()) as string[];
+  let updated = 0;
+  const chunkSize = recomputeChunkSize();
+
+  for (let start = 0; start < doneIds.length; start += chunkSize) {
+    const chunkIds = doneIds.slice(start, start + chunkSize);
+
+    // Only the cached accuracy is read off each game — cursor it rather than
+    // `bulkGet`, which would hold a chunk of PGNs for nothing.
+    const stored = new Map<string, Game['accuracy']>();
+    await db.games
+      .where(':id')
+      .anyOf(chunkIds)
+      .each((g) => {
+        stored.set(g.id, g.accuracy);
+      });
+
+    const updates: Array<{ key: string; changes: { accuracy: Game['accuracy'] } }> = [];
+    await db.analyses
+      .where(':id')
+      .anyOf(chunkIds)
+      .each((a) => {
+        if (!stored.has(a.gameId)) return;
+        const accuracy = computeAccuracy(a.moves);
+        const prev = stored.get(a.gameId);
+        if (prev && prev.white === accuracy.white && prev.black === accuracy.black) return;
+        updates.push({ key: a.gameId, changes: { accuracy } });
+        updated++;
+      });
+
+    // One-field patches, for the reason `backfillBrilliantCounts` gives: the
+    // analyzer writes these rows at boot too, and putting back a whole row
+    // read moments earlier would revert whatever landed in between.
+    if (updates.length > 0) await db.games.bulkUpdate(updates);
+
+    await yieldToBrowser();
+  }
+
+  // Stamp only when there was something to consider — see the empty-DB rule
+  // on `backfillBrilliantCounts`.
+  if (doneIds.length > 0) {
+    await updateSettings({ lastAccuracyBackfillVersion: ACCURACY_BACKFILL_VERSION });
   }
   return updated;
 }

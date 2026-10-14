@@ -13,12 +13,17 @@ export function cpToWinrate(cp: number): number {
   return pct / 100;
 }
 
+/** Lichess's decay constant for `moveAccuracy`. */
+export const LICHESS_MOVE_DECAY = 0.04354;
+
 /**
- * Per-move accuracy (0-100) from winrate loss (pp). Lichess formula.
+ * Per-move accuracy (0-100) from winrate loss (pp). Lichess's curve; `decay`
+ * sets how fast it falls. Game accuracy passes a steeper, calibrated value —
+ * see `CURRENT_ACCURACY_MODEL` in `analyzer.ts`.
  */
-export function moveAccuracy(winrateLossPct: number): number {
+export function moveAccuracy(winrateLossPct: number, decay = LICHESS_MOVE_DECAY): number {
   const loss = Math.max(0, winrateLossPct);
-  const acc = 103.1668 * Math.exp(-0.04354 * loss) - 3.1669;
+  const acc = 103.1668 * Math.exp(-decay * loss) - 3.1669;
   return Math.max(0, Math.min(100, acc));
 }
 

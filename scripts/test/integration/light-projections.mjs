@@ -42,6 +42,7 @@ await runBrowserTest({
         OPENING_REFRESH_VERSION,
         USER_TIME_BACKFILL_VERSION,
         BRILLIANT_BACKFILL_VERSION,
+        ACCURACY_BACKFILL_VERSION,
       } = await import('/src/db/queries.ts');
 
       // Insulate from the live app (TESTING.md § Tests race the live app):
@@ -115,6 +116,7 @@ await runBrowserTest({
         lastOpeningRefreshVersion: OPENING_REFRESH_VERSION,
         lastUserTimeBackfillVersion: USER_TIME_BACKFILL_VERSION,
         lastBrilliantBackfillVersion: BRILLIANT_BACKFILL_VERSION,
+        lastAccuracyBackfillVersion: ACCURACY_BACKFILL_VERSION,
       });
 
       return {

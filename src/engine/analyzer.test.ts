@@ -77,25 +77,28 @@ describe('harmonicMean', () => {
 });
 
 describe('computeAccuracy', () => {
-  it('uses the calibrated no-book production model', () => {
+  it('uses the model calibrated against Chess.com', () => {
+    // Pinned so a change is deliberate: it needs an ACCURACY_BACKFILL_VERSION
+    // bump to reach stored games. Evidence in the `computeAccuracy` doc
+    // comment.
     expect(CURRENT_ACCURACY_MODEL).toEqual({
-      includeBook: false,
-      floor: 20,
-      gapMultiplier: 1.5,
+      includeBook: true,
+      floor: 24,
+      moveDecay: 0.074,
     });
   });
 
-  it('does not let synthetic book plies inflate the score', () => {
+  it('counts book plies as perfect moves, whatever winrates they carry', () => {
+    // Chess.com counts theory as accurate play, and including it fit their
+    // numbers better (MAE 4.74 → 4.24). The stored winrates on a book ply came
+    // from no engine search, so they must not read as a loss.
     const scoredMove = move(21, 0.1, 'mistake');
+    const cleanBook = computeAccuracy([move(1, 0, 'book'), scoredMove]);
+    const noisyBook = computeAccuracy([move(1, 0.05, 'book'), scoredMove]);
     const withoutBook = computeAccuracy([scoredMove]);
-    const withBook = computeAccuracy([
-      move(1, 0, 'book'),
-      move(3, 0, 'book'),
-      move(5, 0, 'book'),
-      scoredMove,
-    ]);
 
-    expect(withBook.white).toBe(withoutBook.white);
+    expect(noisyBook.white).toBe(cleanBook.white);
+    expect(cleanBook.white).toBeGreaterThan(withoutBook.white);
   });
 
   it('keeps a genuinely lossless game at 100', () => {
@@ -118,7 +121,9 @@ describe('computeAccuracy', () => {
 
     expect(smallLoss).toBeGreaterThan(mediumLoss);
     expect(mediumLoss).toBeGreaterThan(mateSwing);
-    expect(mateSwing).toBe(0);
+    // A single disaster bottoms out at the floor, not 0 — the floor exists so
+    // one move can't zero a game.
+    expect(mateSwing).toBe(CURRENT_ACCURACY_MODEL.floor);
   });
 
   it('penalizes an isolated blunder without flattening an otherwise clean game', () => {

@@ -226,6 +226,7 @@ await runBrowserTest({
         lastOpeningRefreshVersion: q.OPENING_REFRESH_VERSION,
         lastUserTimeBackfillVersion: q.USER_TIME_BACKFILL_VERSION,
         lastBrilliantBackfillVersion: q.BRILLIANT_BACKFILL_VERSION,
+        lastAccuracyBackfillVersion: q.ACCURACY_BACKFILL_VERSION,
       });
     });
 

@@ -66,11 +66,16 @@ await runBrowserTest({
 
     const final = await page.evaluate(async ({ ids, meta }) => {
       const { db } = await import('/src/db/schema.ts');
-      const { computeAccuracyWithModel } = await import('/src/engine/analyzer.ts');
+      const { computeAccuracyWithModel, CURRENT_ACCURACY_MODEL } = await import(
+        '/src/engine/analyzer.ts'
+      );
       const metaById = new Map(meta.map((entry) => [entry.id, entry]));
       const models = {
         legacy: { includeBook: true, floor: 20 },
-        calibrated: { includeBook: false, floor: 20, gapMultiplier: 1.5 },
+        // What ships. `previous` is the 2026-10-14 model's predecessor, fitted on
+        // elite archives; `computeAccuracy` documents the recalibration.
+        current: CURRENT_ACCURACY_MODEL,
+        previous: { includeBook: false, floor: 20, gapMultiplier: 1.5 },
         noBookFloor20: { includeBook: false, floor: 20 },
         noBookFloor10: { includeBook: false, floor: 10 },
         noBookFloor5: { includeBook: false, floor: 5 },

@@ -57,7 +57,7 @@ PGN and per-move data. So these are cached on the `Game` row:
 
 | field | written by |
 |---|---|
-| `accuracy` | queue on analysis · recompute pass |
+| `accuracy` | queue on analysis · recompute pass · `backfillAccuracies` · cloud sync on every pulled analysis |
 | `userTimeSec` / `userPlyCount` | queue on analysis · `backfillUserTimeStats` |
 | `brilliantCount` | queue on analysis · recompute pass · `backfillBrilliantCounts` |
 
@@ -83,12 +83,13 @@ of 60 games.
 | 1 | `resetRunningToPending()` — **awaited, blocking**; recovers games left `running` by an unclean unload | every boot | — |
 | 2 | `requeueStaleErrors()` — requeues games whose `analysisError` matches a known-transient pattern | every boot | — |
 | 3 | `refreshOpeningMetadata()` — re-parses `opening`/`eco` from PGN | `lastOpeningRefreshVersion` | `OPENING_REFRESH_VERSION` (1) |
-| 4 | `recomputeClassificationsAndAccuracies()` | `lastRecomputeVersion` | `RECOMPUTE_VERSION` (2) |
+| 4 | `recomputeClassificationsAndAccuracies()` | `lastRecomputeVersion` | `RECOMPUTE_VERSION` (3) |
 | 5 | `backfillUserTimeStats()` | `lastUserTimeBackfillVersion` | `USER_TIME_BACKFILL_VERSION` (1) |
 | 6 | `backfillBrilliantCounts()` | `lastBrilliantBackfillVersion` | `BRILLIANT_BACKFILL_VERSION` (1) |
-| 7 | `backfillRecomputeVersion()` — copies the DB-wide recompute stamp onto rows that predate `Analysis.recomputeVersion` | `lastRecomputeStampBackfillVersion` | `RECOMPUTE_STAMP_BACKFILL_VERSION` (1) |
+| 7 | `backfillAccuracies()` — re-derives cached `Game.accuracy` from stored winrates after a model recalibration | `lastAccuracyBackfillVersion` | `ACCURACY_BACKFILL_VERSION` (1) |
+| 8 | `backfillRecomputeVersion()` — copies the DB-wide recompute stamp onto rows that predate `Analysis.recomputeVersion` | `lastRecomputeStampBackfillVersion` | `RECOMPUTE_STAMP_BACKFILL_VERSION` (1) |
 
-The analyzer run loop starts *before* passes 2-6, so a fresh import is never
+The analyzer run loop starts *before* passes 2-8, so a fresh import is never
 held up by housekeeping. `BootBanner` only renders if the passes are still
 running 400 ms in, so a warm boot shows nothing.
 
@@ -157,7 +158,7 @@ Three parts make that work, and all three are needed:
   round-trips as a *fixed point*, because a dropped column would re-push the
   entire library on every sync.
 
-`backfillRecomputeVersion` (boot pass 7) exists for libraries that predate the
+`backfillRecomputeVersion` (boot pass 8) exists for libraries that predate the
 field: a DB carrying `lastRecomputeVersion` has already been through that pass,
 so the claim can simply be copied onto its rows — one write per 60 rows and no
 classification. It claims nothing when there is no DB-wide stamp, since there
@@ -171,7 +172,7 @@ Pinned by `recompute-skip.mjs` phase 5.
 
 **A pass that found nothing to do must not stamp.** Otherwise a first boot on
 an empty DB marks the work done and the pass never runs on the data that
-arrives afterwards. All of passes 3-7 hold this now; `backfillBrilliantCounts`
+arrives afterwards. All of passes 3-8 hold this now; `backfillBrilliantCounts`
 used to stamp unconditionally, which cloud restore turned from a latent bug into
 a live one — a wiped device boots empty, stamps, and then never counts
 brilliancies on the library that arrives seconds later.
@@ -240,17 +241,23 @@ the boot recompute pass minutes slower on a large library. Keep it as the
 `isCheckmate()` / `isStalemate()` pair: `moves().length === 0` reads simpler and
 measured 3× slower, because public `moves()` builds a SAN string per move.
 
-**Game accuracy under-scores low-rated play by ~10 points — open.**
-`CURRENT_ACCURACY_MODEL.gapMultiplier = 1.5` amplifies distance from 100, and was
-fitted on elite archives (Carlsen, Nakamura) where that distance is small. Against
-Chess.com's own figures on ~700-rated games every score came out low (MAE 10.3,
-bias −10.3); `m ≈ 1.1` fitted those at MAE 3.3, though on only 8 colour-scores.
-A proper re-fit has ground truth to hand: Chess.com publishes `accuracies` on a
-minority of games (61 of ~800 in this user's recent archive), fetchable without
-auth from `api.chess.com/pub/player/<user>/games/YYYY/MM`. Decide whether book
-plies stay excluded (`includeBook: false`) and whether one multiplier is the right
-form before fitting. Any change needs a `RECOMPUTE_VERSION` bump to reach stored
-games.
+**Game accuracy is calibrated against Chess.com's own figures** (2026-10-14).
+`CURRENT_ACCURACY_MODEL` is the harmonic mean of per-move accuracies — Lichess's
+curve with a steeper decay (0.074) — each floored at 24, book plies counted as
+perfect. Fitted on 938 colour-scores from this user's games (~700-1000 rated,
+all Stockfish 16 NNUE depth 18) that carry Chess.com `accuracies`: 5-fold
+cross-validated MAE 4.24 (was 9.18; bias −6.8 → +0.9), 95% within ±10, and 4.4
+on Aug-Oct when fitted on Jan-Jul only. The old ×1.5 gap stretch, fitted on
+Carlsen/Nakamura, refits to ×1.0 once the decay is free. Residual: ~5 high where
+Chess.com scores below 60. The fitting data: Chess.com publishes `accuracies` on
+~20% of this user's games, unauthenticated, at
+`api.chess.com/pub/player/<user>/games/YYYY/MM`; the matching move lists are in
+`cloud_analyses`. **A model change is an `ACCURACY_BACKFILL_VERSION` bump** (the
+cheap `backfillAccuracies` pass — stored winrates only), **not** a
+`RECOMPUTE_VERSION` bump. The Cloud Run worker computes accuracy with its own
+bundled copy, but only into `cloud_games`, which clients never trust for it (they
+re-derive on every pulled analysis) — so redeploying it keeps that cached copy
+tidy rather than fixing anything users see.
 
 **`cancelAnalysis()` on the shared singleton kills whatever is running, whoever
 started it.** `useLiveEval` only calls it once its consumer refcount hits zero,
@@ -277,9 +284,13 @@ analysis means someone did the work better elsewhere.
 `analysisStatus: 'pending'`, so the local queue re-analyzed a game whose analysis
 had just arrived and clobbered depth-18 NNUE with a shallower local pass — which
 the next sync then pulled back. `accuracy` and `brilliantCount` are recomputed from
-the pulled analysis because `cloud_games` is only fetched when the *game* is a pull
-candidate, which it usually isn't. Both halves pinned separately by
-`cloud-sync.mjs` § 5b.
+**every** pulled analysis whose game is local — not only the ones being settled —
+and never trusted from `cloud_games`. That row is only fetched when the *game* is a
+pull candidate, and its cached numbers go stale: a restore pulls games already
+`done`, so re-deriving only for settled games left a restored library with
+whatever the cloud row last carried (225 of 469 checked games held the mating
+side's pre-`repairTerminalMoveEval` score, ~10 low). Pinned by `cloud-sync.mjs`
+§ 3 (a stale cloud accuracy must not survive a restore) and § 5b.
 
 **Opening a review preempts the queue.** `requestAnalysisNow(gameId)` in
 `queue.ts` puts a game at the front and aborts whatever is running; the review

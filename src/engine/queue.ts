@@ -10,6 +10,7 @@ import {
 } from '@/db/schema';
 import {
   backfillBrilliantCounts,
+  backfillAccuracies,
   backfillRecomputeVersion,
   backfillUserTimeStats,
   nextPendingGame,
@@ -238,6 +239,13 @@ export async function startAnalysisQueue(): Promise<void> {
       if (stamped > 0) {
         console.info(`[queue] stamped brilliant counts for ${stamped} games`);
       }
+    });
+
+    // Re-derive cached accuracy when the model is recalibrated. Stored
+    // winrates only, so cheap like the brilliant pass above.
+    await bootStep('backfillAccuracies', async () => {
+      const n = await backfillAccuracies();
+      if (n > 0) console.info(`[queue] recomputed accuracy for ${n} games`);
     });
 
     // Record which rules vintage the existing analyses came from. Cheap (a
