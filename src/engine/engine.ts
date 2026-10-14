@@ -86,6 +86,34 @@ export class EngineWorker {
   private nnueEnabled = false;
   /** Corroboration from the engine's own `info string`. Diagnostic. */
   private nnueConfirmed = false;
+  /**
+   * How many `go` commands this worker has been sent, and how many `bestmove`
+   * lines it has answered with. Together they say which search a line of output
+   * belongs to — see `analyze`.
+   *
+   * Why this is needed at all: cancelling a search does not make its output go
+   * away. `stop` is answered with the stopped search's own `bestmove`, and any
+   * `info` lines the worker posted before it saw the `stop` are still sitting in
+   * the message channel. Both arrive AFTER the next job has attached its
+   * listener. Measured against native Stockfish 16: `go depth 40` on the start
+   * position, `stop`, then a KR-vs-K position and `go depth 8` prints the start
+   * position's `info … pv e2e4 …` and `bestmove e2e4` first, and only then the
+   * new search. Attributing lines by "whoever is listening now" therefore handed
+   * every call the PREVIOUS call's result, permanently one behind — and
+   * `rememberLiveEval` cached it under the new FEN.
+   *
+   * Counting rather than waiting for the stale `bestmove` before starting: UCI
+   * guarantees exactly one `bestmove` per `go` (a `stop` that lands after the
+   * search already finished produces nothing extra, and the finished search's
+   * `bestmove` is already in flight), and Stockfish only starts a new search
+   * once the previous one has printed its `bestmove`. So the stream is strictly
+   * ordered by search, and "search N's lines are the ones after the (N−1)th
+   * `bestmove`" is exact — without a round trip before every new search.
+   *
+   * Reset together in `terminate`: a fresh worker has started nothing.
+   */
+  private searchesStarted = 0;
+  private searchesFinished = 0;
 
   private init(): Promise<void> {
     if (this.ready) return this.ready;
@@ -317,12 +345,20 @@ export class EngineWorker {
    * Internal sniff of every line the worker emits, for state we need regardless
    * of who is listening.
    *
-   * Currently just Stockfish's own NNUE acknowledgement, which arrives at the
-   * first `go` rather than during the handshake. Kept to two cheap checks: most
-   * lines during a search start `info depth`, so the `startsWith` rejects them
-   * before any substring scan, and the whole thing short-circuits once confirmed.
+   * Two things: the `bestmove` count that attributes output to searches (see
+   * `searchesFinished`), and Stockfish's own NNUE acknowledgement, which arrives
+   * at the first `go` rather than during the handshake. The count lives here,
+   * not in `analyze`'s listener, because it must also see the `bestmove` of a
+   * search whose job was cancelled — that job's listener is already gone. It
+   * runs before the listeners, so a listener sees the count including the line
+   * it is handed.
+   *
+   * Kept to cheap checks: most lines during a search start `info depth`, so the
+   * `startsWith`s reject them before any substring scan, and the NNUE half
+   * short-circuits once confirmed.
    */
   private noteLine(line: string): void {
+    if (line.startsWith('bestmove')) this.searchesFinished++;
     if (this.nnueConfirmed) return;
     if (!line.startsWith('info string')) return;
     if (line.includes('NNUE evaluation')) this.nnueConfirmed = true;
@@ -422,14 +458,29 @@ export class EngineWorker {
     return new Promise<AnalysisResult>((resolve, reject) => {
       let cancelled = false;
       let lastInfo: InfoLine = {};
+      // This job's search, numbered in `go` order. Lines are attributed by
+      // count, never by who happens to be listening — see `searchesStarted`.
+      const search = ++this.searchesStarted;
 
       const off = this.onLine((line) => {
         if (cancelled) return;
         if (line.startsWith('info ')) {
+          // Output of an earlier, stopped search still draining: ours only
+          // begins once every earlier search has printed its `bestmove`.
+          if (this.searchesFinished !== search - 1) return;
           const parsed = parseInfo(line);
           // We want the latest info with a PV and the requested depth.
           if (parsed.pv && parsed.pv.length > 0) {
             lastInfo = { ...lastInfo, ...parsed };
+            // A score is one of cp or mate, never both, so a line carrying
+            // either replaces the pair. A plain spread kept the stale half: a
+            // mate seen at depth 12 survived a depth-18 `score cp`, and since
+            // every caller reads `scoreMate` first, the result reported a mate
+            // the engine had since refuted.
+            if (parsed.scoreCp != null || parsed.scoreMate != null) {
+              lastInfo.scoreCp = parsed.scoreCp;
+              lastInfo.scoreMate = parsed.scoreMate;
+            }
           }
           // Fan out *every* info line that carries any parsed field
           // (depth / score / nps / pv) so the cockpit can render the
@@ -451,6 +502,10 @@ export class EngineWorker {
             });
           }
         } else if (line.startsWith('bestmove ')) {
+          // `noteLine` has already counted this line, so it is ours iff it
+          // brings the count to our own number. Anything lower is the
+          // `bestmove` a cancelled predecessor answered `stop` with.
+          if (this.searchesFinished !== search) return;
           off();
           this.currentJob = null;
           const bestMove = line.split(/\s+/)[1] ?? null;
@@ -500,6 +555,8 @@ export class EngineWorker {
     // on the same evaluator — the preference is re-read on the next boot.
     this.nnueConfirmed = false;
     this.nnueEnabled = false;
+    this.searchesStarted = 0;
+    this.searchesFinished = 0;
     this.listeners.clear();
     // Note: we deliberately do NOT clear `observers` here. The cockpit
     // store holds long-lived observer subscriptions across pool
