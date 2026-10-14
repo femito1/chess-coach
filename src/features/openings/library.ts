@@ -52,6 +52,21 @@ export function isFamilySort(v: unknown): v is FamilySort {
   return typeof v === 'string' && (FAMILY_SORT_VALUES as readonly string[]).includes(v);
 }
 
+/**
+ * Black's answers to the Queen's Gambit by long convention, although by
+ * `sideFromName`'s "Accepted/Declined" rule they would follow the Queen's
+ * Gambit (White's). The only families the rules cannot derive.
+ */
+const BLACK_BY_CONVENTION = new Set<string>([
+  "Queen's Gambit Declined",
+  "Queen's Gambit Accepted",
+]);
+
+/** Memo for `familyColor`. Declared up here, with the list above, because
+ *  `FAMILIES_RAW` calls `familyColor` while the module is still
+ *  initialising. */
+const familyColorCache = new Map<string, Color>();
+
 /** Build the per-family aggregate by joining `OPENING_LINES` with the
  *  authored `OPENING_FAMILIES` metadata (popularity + description).
  *  Computed once at module load — `OPENING_LINES` and `OPENING_FAMILIES`
@@ -468,59 +483,10 @@ export async function ensureRepertoire(
 
 /**
  * Which side picks this opening — i.e. who needs to know it as preparation?
- *
- * The Lichess dataset names are remarkably consistent: families whose name
- * ends with "Defense" (or "Defence", or familiar shorthands like "Sicilian"
- * / "Caro-Kann" / "Pirc") are Black's response systems; everything else
- * (Openings, Attacks, Gambits, named Games, etc.) is initiated by White.
- * For lines that BOTH sides need to know (mainline Italian, QGD), we pick
- * the side that "owns" the variation by whose turn it is at the deepest ply.
+ * Per family; see `familyColor`.
  */
 export function colorHint(line: OpeningLine): Color {
-  const family = line.family;
-  // Hard-coded list of families that are unambiguously Black-side prep
-  // (Black is the one choosing the system). Covers everything in the
-  // Lichess dataset that doesn't end with "Defense" but should.
-  const BLACK_FAMILIES = new Set<string>([
-    'Sicilian Defense',
-    'Caro-Kann Defense',
-    'French Defense',
-    'Pirc Defense',
-    'Modern Defense',
-    'Alekhine Defense',
-    'Scandinavian Defense',
-    'Nimzo-Indian Defense',
-    "Queen's Indian Defense",
-    "King's Indian Defense",
-    'Grünfeld Defense',
-    "Queen's Gambit Declined",
-    "Queen's Gambit Accepted",
-    'Slav Defense',
-    'Semi-Slav Defense',
-    'Dutch Defense',
-    'Benoni Defense',
-    'Benko Gambit',
-    'Old Indian Defense',
-    'Bogo-Indian Defense',
-    'Tarrasch Defense',
-    'Chigorin Defense',
-    'Czech Defense',
-    "Owen's Defense",
-    "St. George Defense",
-    "Robatsch Defense",
-    'Englund Gambit',
-    'Budapest Defense',
-    'Albin Countergambit',
-    "Marshall Defense",
-  ]);
-  if (BLACK_FAMILIES.has(family)) return 'black';
-  // Family name ends with "Defense"/"Defence" -> Black's prep.
-  const lower = family.toLowerCase();
-  if (lower.endsWith('defense') || lower.endsWith('defence')) return 'black';
-  if (lower.includes('countergambit')) return 'black';
-  // Default: White is the one initiating the opening (anything labeled
-  // Opening/Attack/Gambit/Game/named-after-a-master).
-  return 'white';
+  return familyColor(line.family);
 }
 
 /** Human-friendly label for the colorHint output. */
@@ -528,11 +494,71 @@ export function colorLabel(c: Color): string {
   return c === 'white' ? 'You play White' : 'You play Black';
 }
 
-/** Family-level color hint. Defers to the first line in the family. */
+/** Naming rules that settle the side outright, or null when the name
+ *  says nothing (bare "Gambit", "Indian", "Special", …). */
+function sideFromName(name: string): Color | null {
+  if (BLACK_BY_CONVENTION.has(name)) return 'black';
+  // "<X> Accepted"/"<X> Declined" is X's opening, whichever side accepts:
+  // the Latvian and Benko Gambits Accepted are Black's prep, the King's
+  // and Danish Gambits Accepted White's.
+  const reply = /^(.*) (?:Accepted|Declined)$/.exec(name);
+  if (reply && OPENING_LINES.some((l) => l.family === reply[1])) {
+    return familyColor(reply[1]);
+  }
+  if (/\b(?:Defen[cs]e|Countergambit)\b/.test(name)) return 'black';
+  if (/\b(?:Opening|Attack|System|Game|Formation)$/.test(name)) return 'white';
+  return null;
+}
+
+/** The side that made the last move of the family's defining line — its
+ *  bare (unnamed-variation) row, else its shortest one. */
+function definingMoveSide(family: string): Color {
+  let best: OpeningLine | null = null;
+  for (const l of OPENING_LINES) {
+    if (l.family !== family) continue;
+    const bare = l.variation === '';
+    const bestBare = best?.variation === '';
+    if (
+      !best ||
+      (bare && !bestBare) ||
+      (bare === bestBare && l.uci.length < best.uci.length)
+    ) {
+      best = l;
+    }
+  }
+  if (!best || best.uci.length === 0) return 'white';
+  return best.uci.length % 2 === 1 ? 'white' : 'black';
+}
+
+/**
+ * Which side picks this family, and so the colour its repertoire is created
+ * with (`ensureFamilyRepertoire`) — a wrong answer makes every drill card
+ * quiz the opponent's moves.
+ *
+ * The name decides where it is explicit, and the moves decide where it is
+ * not. A name list missed every Black gambit not spelled "Defense" (Latvian,
+ * Elephant, Duras, Benko Gambit Accepted, Slav Indian, Queen's Indian
+ * Accelerated came back White), while the moves alone mislabel ~20
+ * families: the King's Indian's defining line ends on 3.Nc3, an
+ * "… Accepted" line on the accepting reply, a ", with e6" variant on the
+ * opponent's setup. So, in order:
+ *
+ *  1. Naming rules (`sideFromName`), applied to X alone for "<X>, with
+ *     <Y>" — X's opening with Y played against it, so "Vienna Gambit, with
+ *     Max Lange Defense" is White's despite ending in "Defense".
+ *  2. Whoever made the last move of the family's defining line — the move
+ *     that gives a bare "… Gambit" its name.
+ *
+ * `library.test.ts` pins the resulting Black set over every family, so a
+ * data refresh that adds a family forces a look at its side.
+ */
 export function familyColor(family: string): Color {
-  const first = OPENING_LINES.find((l) => l.family === family);
-  if (!first) return 'white';
-  return colorHint(first);
+  const cached = familyColorCache.get(family);
+  if (cached) return cached;
+  const color =
+    sideFromName(family.split(', with ')[0]) ?? definingMoveSide(family);
+  familyColorCache.set(family, color);
+  return color;
 }
 
 /**
