@@ -57,6 +57,15 @@ in `CLOUD_SYNC_TABLES` as empty rather than throwing, because cloud sync is
 mounted in `AppLayout` and therefore runs in every browser test. **A new cloud
 table must be added to that set.**
 
+**A test that drives sync must pass `e2e_bypass_user` as the user id**
+(`BYPASS_USER_ID` in `testAuth.ts`). The page's profile handshake binds local
+data to the signed-in bypass user, and every sync entry point — `runCloudSync`,
+`syncPuzzleAttempts`, `syncRepertoires` — first refuses a library bound to a
+different account (`features/sync/bindingGuard.ts`). An invented id such as
+`'u1'` is refused before the manifest, so the test sees no requests and fails
+for a reason that has nothing to do with what it pins. A hand-rolled Supabase
+fake must also answer `.order()`: manifests page in key order.
+
 The harness launches an ephemeral Chromium context, so a test that calls
 `db.*.clear()` cannot touch your real browser data. It also means no disk cache:
 each context re-fetches the 40 MB NNUE network if the engine wants it.
@@ -78,6 +87,7 @@ worth knowing before you touch their area:
 | `src/features/sync/diff.test.ts` | The sync conflict rules, including that the attempt merge is commutative and idempotent and that a pushed row round-trips as a fixed point. |
 | `src/features/openings/difficulty.test.ts` | Tier scoring as properties (exposure lowers a tier, rarity raises one, tiers are family-relative) — never constant assertions on the weights. |
 | `src/features/repertoire/pickerModel.test.ts` | The repertoire ∪ library merge, including the "leaf extends a library variation" match. |
+| `src/features/repertoire/lineTree.test.ts` | The repertoire line walk over the shared-position graph: transposing move orders each keep their own continuation, lookups go by `fenKey`, and nodes predating `paths` heal through the library-prefix fallback. Put a new walk rule here, against rows built by `planAddMove`, not in a browser test. |
 | `src/app/routeHeaders.test.ts` | Every route in `routes.tsx` has a `no-store` entry in `public/_headers`. Guards the enumeration a wildcard can't replace — without it, a new route silently serves a cacheable document and deploys stop taking effect on a normal reload there. |
 | `src/i18n/parity.test.ts` | Every locale carries exactly the English key set (keys aren't typed and `fallbackLng` hides omissions, so this is the only backstop). |
 
@@ -86,7 +96,9 @@ Real browser stack — Stockfish, IndexedDB, the analysis queue — driven with
 synthetic data so results are deterministic. This is where engine pool, queue,
 cache, migration, backfill and cloud-sync behaviour is pinned. `recompute-skip`
 pins the boot-pass version gates (including that an empty DB must not stamp);
-`cloud-sync` pins the three ordering rules in ARCHITECTURE.md § Cloud sync;
+`cloud-sync` pins the three ordering rules in ARCHITECTURE.md § Cloud sync, and
+that a library bound to another account is refused by every entry point with no
+request sent;
 `puzzle-library` is the worked example of seeding synthetic analyses safely.
 
 `sync-coalescing` pins that a sync request is never silently dropped — concurrent
@@ -99,7 +111,10 @@ the contract.
 `analysis-priority` pins demand-driven queueing: that the game you are viewing is
 analyzed ahead of newer pending ones, that re-requesting the in-flight game does
 *not* abort it (which would livelock the review page), and that a preempted game
-returns to `pending` rather than `error`. It drives the queue's own chooser through
+returns to `pending` rather than `error`. It also pins that the chooser asks about
+the analysis row, not just the status: an `error` game is dropped from the
+priority list (re-choosing it was a tight loop), and a `done` game with no row is
+analyzed rather than discarded. It drives the queue's own chooser through
 a test seam rather than reimplementing "priority first, else newest" — a
 hand-rolled copy would pass even if the pump ignored priority entirely.
 

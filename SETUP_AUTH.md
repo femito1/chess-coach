@@ -218,9 +218,21 @@ It is deliberately opt-in **per account**, enforced in the database:
    for `error.code === 'PGRST205'`. Not a head-only count: on a missing table
    `select('*', { count: 'exact', head: true })` returns `error: null,
    count: null`, which reads as "exists".
+
+   **Enrolment is by literal Clerk user id**, not a lookup: § 5 of the file
+   inserts one hard-coded `user_…` id. To enrol a different account, replace
+   that id before running — find it with
+   `select id, display_name, chesscom_username from public.profiles;` and
+   confirm it in the Clerk dashboard (**Users**), never against what the profile
+   row says about itself. The file used to look the id up by
+   `chesscom_username`, but every user writes their own profile row, username
+   included, so each re-run enrolled anyone who had typed that username into
+   onboarding. A Clerk id is issued by Clerk and cannot be claimed.
 3. The last statement prints the allowlist. You should see exactly one row, for
-   the account you want to sync. If it prints none, the lookup found no matching
-   profile; the file's closing comment explains how to insert the id by hand.
+   the account you want to sync. **Check every row it prints**: any other is an
+   account enrolled by hand or by the old username lookup, and if it is not
+   meant to sync, delete it
+   (`delete from public.cloud_sync_allowlist where user_id = '<id>';`).
 4. Reload the app and open **Settings**. A **Cloud sync** card appears, with the
    last run and a **Sync now** button. It appears *only* for enrolled accounts.
 
@@ -238,7 +250,11 @@ policy actually stops that.
 **What sync does not do.** There is no `delete` policy on any cloud table, so the
 mirror only ever grows. Deleting a game locally does not remove the cloud copy,
 and a later sync restores it. That is the intended behaviour for a backup; prune
-from the dashboard if you ever need to.
+from the dashboard if you ever need to. Nor does it **mix two accounts' data**:
+on a browser whose local library is bound to a different Clerk user than the one
+signed in, sync pauses (the Settings card says why) rather than pushing one
+library into the other's mirror — which, with no delete policy, could never be
+undone. Sign out, or use a separate browser profile.
 
 ---
 

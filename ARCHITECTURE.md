@@ -25,7 +25,7 @@ Everything is client-side: Dexie over IndexedDB (`src/db/schema.ts`, DB name
 | `puzzleAttempts` | `puzzleId` | Progress against the Lichess corpus (v12). |
 | `repertoires` / `repertoireNodes` / `repertoireCards` / `repertoireLineStats` | `id` | Repertoire trees, SM-2 cards, per-line practice stats. |
 | `evalCache` | `key` | Stockfish results, keyed by position **and evaluator**. |
-| `importRecords` | `id` | Which Chess.com archives have been imported. |
+| `importRecords` | `id` | Which Chess.com archives have been imported. A month counts as synced only if imported ≥24 h after its UTC end (`isImportComplete`): Chess.com caches archives, and a record of a month still in progress is a snapshot that kept growing. |
 | `repertoireSyncBases` | `repertoireId` | What this device last agreed with the cloud about each repertoire (v13). See § Cloud sync. |
 | `settings` | `key` (always `main`) | Single row: username, boot-pass stamps, prefs. |
 | `puzzles`, `notes` | `id` / `fenKey` | **Dead stores.** Nothing in `src/` reads or writes them. |
@@ -83,11 +83,17 @@ of 60 games.
 | 1 | `resetRunningToPending()` — **awaited, blocking**; recovers games left `running` by an unclean unload | every boot | — |
 | 2 | `requeueStaleErrors()` — requeues games whose `analysisError` matches a known-transient pattern | every boot | — |
 | 3 | `refreshOpeningMetadata()` — re-parses `opening`/`eco` from PGN | `lastOpeningRefreshVersion` | `OPENING_REFRESH_VERSION` (1) |
-| 4 | `recomputeClassificationsAndAccuracies()` | `lastRecomputeVersion` | `RECOMPUTE_VERSION` (3) |
+| 4 | `recomputeClassificationsAndAccuracies()` | `lastRecomputeVersion` | `RECOMPUTE_VERSION` (4) |
 | 5 | `backfillUserTimeStats()` | `lastUserTimeBackfillVersion` | `USER_TIME_BACKFILL_VERSION` (1) |
 | 6 | `backfillBrilliantCounts()` | `lastBrilliantBackfillVersion` | `BRILLIANT_BACKFILL_VERSION` (1) |
 | 7 | `backfillAccuracies()` — re-derives cached `Game.accuracy` from stored winrates after a model recalibration | `lastAccuracyBackfillVersion` | `ACCURACY_BACKFILL_VERSION` (1) |
 | 8 | `backfillRecomputeVersion()` — copies the DB-wide recompute stamp onto rows that predate `Analysis.recomputeVersion` | `lastRecomputeStampBackfillVersion` | `RECOMPUTE_STAMP_BACKFILL_VERSION` (1) |
+
+Every constant lives in `src/db/queries.ts` except `RECOMPUTE_VERSION`, which is
+defined in `src/db/analysisVintage.ts` and re-exported by `queries.ts`:
+`analysisVintage.ts` has no Dexie import, so `analyzer.ts` — and through it the
+Node worker — can stamp rows with it. Its last bump (to 4) was for a
+`detectMotifs` output change, which is exactly what the expensive pass is for.
 
 The analyzer run loop starts *before* passes 2-8, so a fresh import is never
 held up by housekeeping. `BootBanner` only renders if the passes are still
@@ -141,10 +147,15 @@ blocked main thread for no change at all.
 
 Three parts make that work, and all three are needed:
 
-- **`saveAnalysis` stamps.** The analyzer runs the same `classifyMove` /
-  `detectMotifs` / `detectPhase`, so its output is current by construction.
-  Cloud *pulls* write `db.analyses` directly and must never stamp — they carry
-  whatever vintage the producing device recorded.
+- **The producer stamps.** `analyzeGamePgn` runs the same `classifyMove` /
+  `detectMotifs` / `detectPhase`, so its output is current by construction, and
+  it sets `recomputeVersion` on the row it returns; `saveAnalysis` stamps again,
+  to keep any other producer honest. The stamp has to be on the producer
+  because the off-laptop worker writes straight to `cloud_analyses` and never
+  calls `saveAnalysis` — its unstamped rows read as vintage 0, so every restore
+  reclassified and re-pushed the whole server-analyzed library. Cloud *pulls*
+  write `db.analyses` directly and must never stamp — they carry whatever
+  vintage the producing device recorded.
 - **The pass stamps even when nothing changed.** A restored row recomputes to
   identical values, so a changed-only write would leave every one of them
   unstamped and the next restore would redo the library again. Recording "these
@@ -176,6 +187,21 @@ arrives afterwards. All of passes 3-8 hold this now; `backfillBrilliantCounts`
 used to stamp unconditionally, which cloud restore turned from a latent bug into
 a live one — a wiped device boots empty, stamps, and then never counts
 brilliancies on the library that arrives seconds later.
+
+**A pass writes only the fields it derives, and never puts back a row it read
+earlier.** Every pass runs at boot beside the analyzer and cloud sync, and yields
+between chunks, so a row read at the top of a chunk may have been rewritten by
+the time the chunk writes: the analyzer sets `analysisStatus`, "Re-analyze all"
+deletes the analysis and sets the game `pending`, a pull replaces an analysis
+with a better one. A `bulkPut` of the rows as read silently reverted all of
+those. So game-row passes patch with `bulkUpdate`, and
+`backfillRecomputeVersion` uses `modify`, whose check and write see the same row
+in one transaction. The recompute pass cannot patch — it rewrites the whole
+`moves` array — so inside its write transaction it re-reads each analysis and
+writes only those still the same search it reclassified (`isSameSearch` in
+`analysisVintage.ts`: `analyzedAt` + `engine` + `depth`, the identity of a
+search; the derived fields are what the pass rewrites, so they cannot be part of
+it). A row replaced or deleted meanwhile is skipped, along with its game patch.
 
 **The recompute pass OWNS `MoveEval.classification`, `.motifs`, `.accuracy`, and
 the after-move fields of a terminal position.** It re-derives them from each
@@ -233,6 +259,73 @@ dozen scored plies, enough to take a 74 game to 45. The move list still says
 `best` (`classifyMove` consults `isBest`), so the only symptom is a number that
 feels wrong, on roughly a third of a blitz library. `mateToCp(0)` returns the
 mated side's floor for the same reason: `mate 0` means "already mated".
+
+**A stopped search's output still arrives, so lines are attributed by count,
+never by who is listening.** `stop` is answered with the stopped search's own
+`bestmove`, and any `info` lines posted before the worker saw the `stop` are
+still in the channel — both land *after* the next job has attached its listener.
+Measured against native Stockfish 16: `go depth 40`, `stop`, a new position and
+`go depth 8` prints the old search's `info … pv e2e4` and `bestmove e2e4` first.
+Taking "whatever arrives now" handed every call the *previous* call's result,
+permanently one behind, and `rememberLiveEval` cached it under the new FEN. UCI
+guarantees exactly one `bestmove` per `go` and Stockfish starts a search only
+after printing the last one's, so `EngineWorker` counts `go`s sent and
+`bestmove`s seen (`searchesStarted` / `searchesFinished`, counted in `noteLine`
+so a cancelled job's `bestmove` is seen too) and a job accepts only the lines
+after the (N−1)th `bestmove` — exact, with no round trip before each search.
+Within a job, an `info` line carrying a score replaces **both** `scoreCp` and
+`scoreMate`: a plain spread kept the stale half, so a mate seen at depth 12
+survived a depth-18 `score cp`, and every caller reads `scoreMate` first. The
+Node worker has the mirror problem after a timeout — see § Off-laptop analysis
+worker.
+
+**A stored mate is from the side to move in its FEN — not the mover, not
+White.** `mateInBefore` is the mover's (side to move in `fenBefore`);
+`mateInAfter` is the *opponent's* (side to move in `fenAfter`): positive means the
+opponent mates, so the move allowed it, and `0` means the mover just delivered
+mate. That is Stockfish's own convention, and stored rows, the eval bar and the
+terminal repair already rely on it, so it is converted at the reader, never in
+storage: `allowedMate` tests for a **positive** `mateInAfter` (it used to want a
+negative one, so a blunder into mate was never tagged), and display goes through
+`mateForWhite` so the move list's mate reads from White's side like the
+centipawn figure beside it.
+
+**Motif inputs, and what makes a motif count** (`engine/motifs.ts`):
+
+- *"Walked into"* motifs (`fork`, `pin`, `skewer`, `backRank`) play the
+  **opponent's best reply** on `fenAfter` (`replyUci`), never `bestUci` — that
+  is the mover's move from the position before, and playing it on `fenAfter`
+  moves the wrong side's piece, so chess.js threw and none was ever tagged.
+  `replyUci` is the next ply's `bestMoveUci`, passed only when that ply's
+  `fenBefore` equals this `fenAfter` (and, in the analyzer, that ply is not a book
+  ply), because that is all the recompute pass can read back — tagging
+  differently in the two would make a game's motifs depend on whether it was
+  ever recomputed.
+- *Back rank* means a real rook/queen mate on that rank, threatened or
+  delivered, against the **side to move's** king boxed in by its own pieces —
+  not "a king behind pawns", which was true of nearly every castled position.
+- *Pins and skewers* count only lines that did not exist before the move, so a
+  pin standing since move 6 does not tag every later mistake.
+- *Fork* targets are undefended only if `chess.js` `attackers()` finds no
+  defender; a move list never lands on its own side's piece, so counting moves
+  found every target undefended.
+
+**A game must start from a position the analysis can represent.**
+`analyzeGamePgn` replays from the game's own first position
+(`history[0].before`, which honours a `[SetUp "1"] [FEN …]` header) — replaying
+from `new Chess()` failed every set-up game on its first move. A **White-to-move**
+set-up start is analysed normally. Two cases are refused with a sentence in
+`analysisError` (deterministic, so it must not match `requeueStaleErrors`'
+transient patterns): a non-Standard `[Variant]`, because chess.js and Stockfish
+both play standard rules here (no `UCI_Chess960`), and a **Black-to-move**
+start, because every reader of a stored analysis splits colours on ply parity
+(`ply % 2 === 1` is White) and would swap them. Variants are also filtered at
+import — `isStandardChessComGame` (Chess.com `rules` other than `chess`; absent
+counts as standard) in the bulk imports, the new-games banner's count (or it
+would offer the same "N new games" forever), the off-laptop worker, and the
+deep link, which names the variant in its error rather than claiming the game
+was not found. The analyzer check catches rows imported before the filter, and
+any other source.
 
 **Ask `terminalOutcome` once per game, of the final position only.** An earlier
 position with no legal move would have ended the game, and the check costs a full
@@ -304,7 +397,21 @@ Preempting is nearly free, and that is the whole reason it is allowed:
 an abandoned game keeps its evaluated positions and resumes from them later. The
 loss is one position per worker.
 
-Two invariants that are easy to break:
+**Preemption also drops the abandoned game's queued positions.** `analyzeGamePgn`
+enqueues every position of a game up front, so aborting only its per-ply loop
+left the rest in the pool's FIFO, ahead of the game the user asked for — most of
+a 60-ply game on four workers, which is exactly the wait preemption exists to
+remove. So the game's `{ aborted }` flag travels with each position
+(`EngineBackend.analyze` → `cachedAnalyze` → `EnginePool.analyze`) and `pump`
+rejects a tripped task instead of dispatching it. Only *waiting* tasks are
+dropped; one a worker already started runs to the end and is cached. That makes
+`cachedAnalyze`'s in-flight coalescing subtle, because the preempting game is
+usually the same opening and asks for positions the abandoned one still has
+queued: a joiner of an abandoned entry takes its result if a worker had started
+it, and re-asks under its own signal if it was dropped — inheriting the
+`aborted` rejection would record a genuine-looking failure on the new game.
+
+Invariants that are easy to break:
 
 - **Re-requesting the in-flight game must be a no-op.** The review page's effect
   re-runs on re-render; if that preempted the game it is waiting for, the analysis
@@ -314,8 +421,15 @@ Two invariants that are easy to break:
   throws `aborted` when its signal trips, and the queue's catch would otherwise
   record a scary "analysis failed" on a game we cancelled deliberately —
   which `requeueStaleErrors` would then have to undo.
+- **The chooser asks about the analysis row, not just the status**
+  (`priorityGameWantsAnalysis`). An `error` game is dropped from the priority
+  list: re-choosing it, with no sleep between, was a tight loop (~380 status
+  writes in 300 ms) that starved the rest of the library, and the review page's
+  Retry re-requests it anyway. A `done` game with **no** analysis row (a partial
+  sync, a deleted row) is analysed: the page requests that case on purpose, and
+  dropping every `done` id left it saying "queued" forever.
 
-Both pinned by `analysis-priority.mjs`.
+All pinned by `analysis-priority.mjs`.
 
 **Worker count is a per-device setting, not a smarter heuristic.** Measured on a
 12-core / 7.7 GB laptop, one 59-ply game at depth 18 NNUE through the real
@@ -751,6 +865,18 @@ each re-playable. This replaced five tabs of fixed tiers (400-1299, 1300-1899,
   rating, for Review, and for first-try stats. A wrong move then Restart is
   still a `mistake`: the solver tallies moves in refs that `restart()` does
   not reset.
+- **No live engine until the puzzle is solved or revealed.** Its read of the
+  position is the answer in another form — "M2" on the eval bar says mate in 2
+  as plainly as the hidden `mateIn2` theme would. The bar stays in place,
+  neutral, so the board does not resize when it comes alive. Likewise the hint
+  is withheld while the opponent's scripted reply is pending (it would ring
+  *their* piece and still mark the attempt hinted), and clears once the reply
+  lands.
+- **The solver asks for the promotion piece.** `applyPuzzleMove` compares the
+  whole UCI, promotion included, because some lines hinge on an underpromotion
+  and crediting an auto-queen stalled them on an illegal scripted reply. The
+  piece picker is `Board`'s opt-in `choosePromotion` prop; every other board
+  still auto-queens.
 
 **Puzzle rating** (`rating.ts`) is Glicko-1 replayed over each puzzle's
 **first** attempt, from 1500 / RD 350; puzzle RD is taken as 75 (the build
@@ -794,6 +920,16 @@ fallback: once the puzzle rating is established (not provisional), the plan
 centres on it plus the difficulty offset, ±150 — captured when the run starts,
 for the same don't-rebuild-mid-run reason.
 
+**The plan shapes the next batch, never the puzzle on screen.** It is recomputed
+on every refire of the games table, which the analysis queue writes constantly;
+as a dependency of the batch loader it swapped the puzzle mid-solve. So
+`PuzzlesPage` reads it through a ref, like the rating, and the run's first batch
+instead waits for `recommendation.loaded` (and for the attempt rows, without
+which the rating reads as the 1500 default). That makes `loaded` load-bearing:
+every input to the plan is `undefined` until known, so `loaded` means "the plan
+is real" — an inactive query answering `[]` used to make it true, with an empty
+plan, the instant the theme was picked.
+
 **`motifThemes.ts` maps our `Motif` union to Lichess theme strings, and
 `motifThemes.test.ts` fails if any mapped theme is absent from
 `PUZZLE_THEMES`.** That vocabulary is derived from the surviving rows of the
@@ -806,12 +942,24 @@ test forbids mapping onto descriptor themes (`short`, `crushing`, `master`,
 Review schedule and stats are all derived from them at read time, so any of
 those can be retuned with no migration. Since 2026-10 each row also carries
 `history` (one `{at, outcome, ms, good, bad}` per attempt, capped at
-`MAX_ATTEMPT_HISTORY` = 25 in `sync/diff.ts`) and a snapshot of its puzzle
+`MAX_ATTEMPT_HISTORY` = 25 in `puzzles/events.ts`, Dexie-free so the sync merge
+can share it) and a snapshot of its puzzle
 (`fen`, `solution`, `themes`, ~200 bytes) so the history grid and Review need no
 shard. All of it lives in the synced `data` jsonb, so it needed **no DDL**.
 Older rows have neither: `eventsOf` reconstructs only what their aggregates
 prove (first attempt always; last attempt when `solvedClean` after 2+), and
 `backfillAttemptContent` fetches their content once when Progress opens.
+
+**The first attempt must survive everything that rewrites `history`**, because
+it is the one the rating, first-try stats and band stats read
+(`eventsOf(row)[0]`). So `capHistory` keeps the first event plus the newest 24
+rather than the newest 25 — a plain slice re-keyed all of those to attempt #2 on
+the 26th try. And `recordAttempt` (via `withEvent`) and `mergeAttempt` build from
+`eventsOf`, not `.history`: appending to a legacy row's empty history made the
+retry its only event, so `eventsOf` stopped synthesizing the old first attempt
+and a clean retry of an old miss re-scored as a clean first try. The synthesized
+first attempt thereby becomes a stored event on the first retry or merge, with
+the same `at`+`outcome` key, so a shared attempt still appears once.
 `solvedClean` is deliberately **not** indexed: IndexedDB cannot key on a boolean
 and Dexie *silently skips* such rows, so `attempts.ts` scans and filters in JS.
 
@@ -858,11 +1006,32 @@ costs one PGN read per *unresolved* row and nothing at all when every row
 resolves. Pinned by `chart-opening-links.mjs`, which asserts on the link's
 target rather than merely on a link existing.
 
-**`openingFamily()` splits the stored name on the first colon**, and the
-importer only inserts one at the first
-`Variation|Defense|Attack|Gambit|System|Opening` token. Slugs whose tail *is*
-one of those words arrive unsplit as a single blob — which is why the prefix
-stages above exist.
+**The win-rate chart groups by `chartOpeningFamily`, not by `openingFamily()`
+alone** (`dashboard/progress.ts`). `openingFamily()` splits the stored name on
+the first colon, and the importer inserts one only at the first
+`Variation|Defense|Attack|Gambit|System|Opening` token, so where it lands
+depends on the slug's tail and one opening arrived as up to a dozen chart rows.
+`chartOpeningFamily` strips any move text (`stripOpeningMoves` — after a colon,
+after a space, or fused: "Scotch Game 3...d6", "Pirc Defense...4.c3"), then
+resolves through `resolveOpeningFamily`, which is also the canonical name the
+row's link needs. A name the library does not know falls back to the name cut
+after its first family-ending word (`Opening|Defense|Game|Attack|Gambit|System`),
+so its variations still fold into one row; that row keeps Chess.com's spelling
+and its link comes from moves, as above.
+
+**A family's side comes from its name where explicit, else from its defining
+move** (`familyColor`, `openings/library.ts`). It is the colour a family
+repertoire is created with, so a wrong answer makes every drill card quiz the
+opponent's moves. Neither source works alone: a name list missed every Black
+gambit not spelled "Defense" (Latvian, Elephant, Benko Gambit Accepted), and the
+moves alone mislabel ~20 families (the King's Indian's defining line ends on
+3.Nc3). So naming rules first — `Defense`/`Countergambit` is Black, a trailing
+`Opening`/`Attack`/`System`/`Game`/`Formation` is White, "<X> Accepted/Declined"
+follows X, and "<X>, with <Y>" is judged on X — then whoever played the last move
+of the family's bare (else shortest) line. Only the Queen's Gambit Declined and
+Accepted are hard-coded Black, by convention against the Accepted/Declined
+rule. `library.test.ts` pins the resulting Black set, so a data refresh that adds
+a family forces a look at its side.
 
 **Personal opening stats are expensive.** `buildPersonalOpeningStats` re-parses
 every game's PGN through chess.js (~1.3 s at 2 500 games). Compute one colour,
@@ -898,9 +1067,36 @@ treat this as live rather than hypothetical: `PracticePage` calls
 (capped at the guided starter size). Pinned in `curriculum.test.ts` — keep that
 guard when touching the guided flow.
 
+**The repertoire is a shared-position graph, and the line walk follows move
+orders.** Nodes are keyed by `fenKey` (the FEN without its move counters), so two
+move orders that transpose share one node — and the second arrives with
+different counters, so **every** `childFens` / `parentFen` / `mainChildFen`
+lookup must go by `fenKey`; a full-FEN lookup misses the shared node and
+silently drops every line behind it. A shared node's stored `moveUci`/`moveSan`
+describe only its first way in; `edgeMove` re-derives the move along any other
+edge. Position-keying alone cannot say which continuations belong to which move
+order, and following every edge cross-multiplied them (bulk-adding the Queen's
+Gambit Declined drilled 605 lines, ~500 never added). So each node records
+`paths`, the root-to-node UCI sequences it was added along
+(`RepertoireNode.paths`, optional and unindexed — no schema bump), and the walk
+follows an edge only when the extended sequence is one of them. Rows predating
+`paths` heal at read time: along their creation tree edges are followed as
+before, and past a transposition only when the sequence is a library-line prefix
+(`isLibraryLinePrefix`) — every line added since the v10 wipe came from the
+library. The first write to such a repertoire upgrades it, writing exactly the
+paths the fallback showed (`upgradeLegacyPaths`), since recording only the new
+move order on a legacy node would hide every old line through it. Sync merges
+union `paths` like `childFens`. The rules live in pure `repertoire/lineTree.ts`
+and are unit-tested in `lineTree.test.ts`.
+
+The **card trainer** grades against every repertoire move from a card's position
+(`repertoireMovesAt`), not only the card's single `expectedUci`: at a branch point
+each is the user's prep, and the card asks "do you know your move here", not
+"which was added first".
+
 **Repertoire line indices are not stable, and a picker row is not a line.**
-`enumerateLines` (`repertoire/store.ts`) DFS-walks the FEN-keyed node tree and
-emits a line per childless node, so adding one line renumbers every leaf after
+`enumerateLines` (`repertoire/store.ts`, over `lineTree.ts`'s `walkLines`) emits a
+line wherever a move order stops, so adding one line renumbers every line after
 it — and adding a line that *extends* an existing leaf makes that leaf stop
 existing. Any index held across a repertoire write silently comes to mean a
 different line. Hold line **keys** (`lineKey(uci)`, the joined UCI) and derive
@@ -958,8 +1154,11 @@ carried a trailing move sequence — the same opening arrives as both
 `"Caro Kann Defense Advance Variation: 4.Nf3"` and
 `"Caro Kann Defense: Advance Variation"`. Splitting on the colon files those
 under two different families and fragments the very record that makes a gap
-visible. `openingGroupKey` instead drops the move tail, neutralises the
-punctuation and groups on the whole remaining name. The result is a grouping
+visible. `openingGroupKey` instead drops the move tail wherever it sits
+(`stripOpeningMoves` — not only after a colon or comma: once a colon is placed,
+moves arrive after a space or fused to the name, and each distinct tail was its
+own group too small to reach `MIN_GAMES_FOR_GAP`), neutralises the punctuation
+and groups on the whole remaining name. The result is a grouping
 key only: it is variation-grained but is not a library name (note the lost
 hyphen), so it must never reach the UI as a label.
 
@@ -1099,7 +1298,10 @@ affordance, not a boundary. Two deliberate shapes:
 
 - The allowlist has a SELECT policy (`allowlist_select_own`) and **no
   insert/update/delete policy at all**, so the app can check its own membership
-  but can never enrol itself. Enrolment is a dashboard action.
+  but can never enrol itself. Enrolment is a dashboard action, and is by
+  **literal Clerk user id** in `cloud-sync.sql` — never a lookup on `profiles`,
+  whose rows (username included) each user writes for themselves, so a lookup by
+  username enrolled anyone who claimed it.
 - It is a separate table rather than a `profiles` column because column-level
   `REVOKE` does not subtract from a table-level `GRANT` — a column flag would
   still be settable by a crafted insert.
@@ -1115,13 +1317,32 @@ sync stateless, idempotent, resumable and self-healing — no flag can be left
 lying. Rows are jsonb `data` blobs plus decision columns, so the fast-moving
 Dexie schema needs no Postgres migration. Two notes: attempts are the exception
 that fetches whole rows (below), and `fetchAll` pages at 1000 because PostgREST
-silently caps there.
+silently caps there — **ordered by the row key**, because offset paging over an
+unordered scan has no stable page boundaries: an upsert between two pages
+(another device, the worker) can move a row, which then lands on two pages or on
+none. The repertoire manifest pages the same way.
+
+**Sync refuses a local library bound to another account.** When user B signs in
+on a browser bound to user A, the profile handshake refuses to merge — but sync
+is a separate trigger and used not to ask, so it pushed A's library into B's
+mirror (permanently: no DELETE policy) and pulled B's into A's local DB. Every
+entry point — `runCloudSync`, `syncPuzzleAttempts`, `syncRepertoires` — now calls
+`assertLocalDataBelongsTo` (`sync/bindingGuard.ts`) before any request, which
+reuses the handshake's own rule (`isBoundToOtherUser` in `auth/profileBind.ts`)
+rather than a parallel one. An unbound device passes: the handshake binds it to
+whoever signs in first, so syncing it agrees with what the handshake does.
+`useCloudSync` asks too, so the triggers stay disarmed and the reason shows on
+the Settings card. Pinned by `cloud-sync.mjs` step 9 — which is why sync tests
+must use the bypass user's own id (TESTING.md).
 
 **Every decision column must actually be written.** The diff reads columns, not
 payloads, so a column left NULL makes the row read as something it isn't — and
 the diff stops being a fixed point, so every sync re-pushes everything.
 `toCloudAnalysis` carrying `engine` is the live example; `diff.test.ts` pins the
-round trip.
+round trip. **Every writer goes through the serializer**, the off-laptop worker
+included: its hand-built `cloud_analyses` row once omitted `recompute_version`,
+so every server analysis read as vintage 0 and each restore reclassified and
+re-pushed the library.
 
 Conflict rules, all in `diff.ts`:
 
@@ -1129,7 +1350,7 @@ Conflict rules, all in `diff.ts`:
 |---|---|
 | analyses | `isBetter`: **NNUE beats classical above depth**, then deeper, then newer. A classical search at depth 20 is a weaker judge searching further, not a better analysis — ranking depth first would let a laptop's classical re-analysis overwrite the server's NNUE work. |
 | games | Whichever side is analyzed wins, **except** that a local `pending`/`running` is left alone. |
-| puzzle attempts | Field-by-field merge: max `attempts`, OR the sticky `solvedClean`/`hintUsed`, min `firstSeenAt`, max `lastAttemptedAt`, `rating`/`msTaken` from the more recent side, `history` unioned by `at`+`outcome` (copies of one event merged field-wise, so it stays commutative), content from whichever side has it. |
+| puzzle attempts | Field-by-field merge: max `attempts`, OR the sticky `solvedClean`/`hintUsed`, min `firstSeenAt`, max `lastAttemptedAt`, `rating`/`msTaken` from the more recent side, `history` unioned by `at`+`outcome` over each side's `eventsOf` (so a legacy side's synthesized first attempt is not lost; copies of one event merged field-wise, so it stays commutative), capped first + newest by `capHistory`, content from whichever side has it. |
 
 Attempts are the only genuinely concurrent table, and their merge is
 **commutative and idempotent** (both pinned in `diff.test.ts`) so two devices
@@ -1171,7 +1392,20 @@ locally needs the same treatment**: a full-sync trigger will not cover it. The
 attempt-only path reads and writes **only** `cloud_puzzle_attempts` — the game and
 analysis manifests are thousands of rows, fine once per app open, wasteful once
 per puzzle — and waits behind an in-flight full sync rather than racing it, since
-both diff the same rows. Pinned by step 8 of `cloud-sync.mjs`.
+both diff the same rows. Its plan comes from a read a network round trip old, so
+it **re-merges inside its write transaction** (`rebaseAttemptWrite`): a puzzle
+solved meanwhile has committed a newer row that writing the plan verbatim would
+erase. Exact rather than heuristic, because the merge is commutative and
+idempotent — with no race it is the planned row unchanged. Pinned by step 8 of
+`cloud-sync.mjs`.
+
+Its runner — `createCoalescingRunner`, which the repertoire upload uses too —
+has one rule that matters on tab hide:
+`flush()` runs a pending job now, and **a follow-up owed by a request that
+arrived mid-run counts as pending** — it runs the moment the in-flight job ends
+instead of waiting out a delay the hidden page may never get. That follow-up
+carries the attempt recorded during the upload, which is exactly what `flush`
+exists for.
 
 **Repertoires sync as whole snapshots, three-way.** One `cloud_repertoires` row
 per repertoire holds its record, node tree, SRS cards and line stats, so a node
@@ -1189,12 +1423,20 @@ Rules that must hold:
   overwriting it. A duplicate insert's `23505` means the same.
 - **A pull replaces the repertoire and its base in one transaction.** A base
   written apart from its data would misreport a half-applied pull as a local edit.
+- **An apply never overwrites an edit made while the sync was in flight.** The
+  write transaction re-reads the local snapshot and compares its hash with the
+  one the plan was made from; on any difference the pull, delete or merge is
+  skipped and counted as a conflict. Overwriting would lose the edit for good,
+  since the base saved with it would match the overwritten state. Skipped, base
+  and data stay as they were, and the next sync sees "changed here".
 - **Deletion is a tombstone** (`deleted = true`); there is no DELETE policy, and a
   device that still has the repertoire must learn it was deleted.
 - **Changes are caught by Dexie table hooks**, not call sites: the store, the
   openings library and both trainers all write. The hooks skip the sync's own
-  pull writes (`isApplyingRemoteRepertoires`), or every pull would schedule a
-  pointless follow-up.
+  pull writes, or every pull would schedule a pointless follow-up — identified
+  by **transaction** (`isRemoteRepertoireWrite(tx)`), not a module-wide flag: a
+  user's write queued behind the sync's executes the moment it commits, before a
+  flag cleared in `finally` would be, and is a real edit that must upload.
 - **A project without the table skips the phase** with one warning: the app can
   deploy before `supabase/cloud-sync.sql` is re-run, and that must not turn every
   sync red. Policy is unit-tested in `repertoireDiff.test.ts`; plumbing, including
@@ -1261,6 +1503,17 @@ there before changing any of its flags. Five things that must not be missed:
   converge the library without the laptop, and to make devices that cannot run a
   4-worker NNUE pool (phones) fast. A review the user is waiting on is always
   answered locally — see § Engine.
+
+Its per-game writes — analysis, then the `done` summary on `cloud_games` — are
+**not atomic** (PostgREST gives it no transaction across them), so a run killed
+between them leaves an adequate analysis beside an un-`done` game that
+`selectCandidates` would then skip forever. Each run settles those first
+(`selectUnsettled`), with no engine. Both rows go through `toCloudAnalysis` /
+`toCloudGame` (§ Cloud sync, "every decision column"). A run stopped by the
+50-failure budget **exits non-zero** so the Cloud Run execution reads as
+failed, and a search that times out is stopped and its `bestmove` drained — or,
+if wedged, the engine replaced — so the next position never receives the old
+search's answer. Details in the worker README § Resuming, and stopping.
 
 Auth is the Supabase **service_role** key, which bypasses RLS entirely — hence
 `USER_ID` is mandatory and every query filters on it. A classical analysis counts
@@ -1372,3 +1625,12 @@ origin into `options.js` only (`content.js` keeps its localhost dev default on
 purpose). The options page seeds that origin into `chrome.storage` on first
 load, because `storage.sync.get` defaults are read-only and nothing was
 persisted until the user pressed Save.
+
+Its deep link's `endTime` is the **click time**, a hint rather than the game's
+end (the page exposes none), so `importGameByUrl` scans the hinted, current and
+previous months and, only when all miss, up to `MAX_WIDENED_MONTHS` (24) older
+months from the player's archive index — an old game opened from the archive
+would otherwise never be found. Daily games keep the `/game/daily/<id>` shape
+end to end: their ids are a separate number space, so rewriting one to
+`/game/live/<id>` named a live game that may not exist. See
+`extension/README.md`.

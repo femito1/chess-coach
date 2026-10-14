@@ -32,7 +32,16 @@ browser runs. Only the engine transport differs.
 Per game it writes two rows, not one: the analysis into `cloud_analyses`, and a
 summary back onto `cloud_games` (`analysis_status: 'done'`, `accuracy`,
 `brilliantCount`). The second is what lets a laptop that never analyzed the game
-see it as analyzed after a sync.
+see it as analyzed after a sync. Both go through the browser's own serializers
+(`toCloudAnalysis`, `toCloudGame` in `src/features/sync/diff.ts`), so every
+decision column cloud sync reads is written. A hand-built analysis row here once
+omitted `recompute_version`: every server analysis then read as rules vintage 0,
+and each restore reclassified and re-pushed the whole library. The analysis
+itself carries `recomputeVersion` because `analyzeGamePgn` stamps it — the
+worker never calls `saveAnalysis`.
+
+Chess.com variants (`rules` other than `chess`) are skipped at import, as in the
+browser: nothing downstream plays them by their own rules.
 
 ---
 
@@ -188,12 +197,32 @@ construction — Ctrl-C or kill it and re-run, and it continues from where it go
 to. `SIGINT`/`SIGTERM` finish the in-flight game first. There is no lease or
 checkpoint state to corrupt.
 
+**The two writes per game are not atomic** — PostgREST gives the worker no
+transaction across them — so a run killed between them (the 55-minute task
+timeout is the routine way) leaves an adequate analysis beside a game row still
+`pending`. That game is no longer a candidate, because its analysis is good
+enough, so on its own it would stay un-`done` forever for every reader of
+`cloud_games`. Each run therefore settles such games first
+(`selectUnsettled` in `src/features/sync/selectCandidates.ts`): it fetches the
+stored analysis and re-stamps the summary, with no engine and before the pool
+starts. "N analyzed but not marked done — settling" in the log is that step.
+
 A single failing game (unparseable PGN, say) is logged and skipped rather than
 ending the run; the next invocation retries it. A run that is failing more than
 it is succeeding does stop, though: past 50 failures, once failures outnumber
-completions, it breaks out rather than burning the rest of the compute — so a
-short run that ends early is telling you something is wrong with the setup, not
-with one game.
+completions, it breaks out rather than burning the rest of the compute, and
+**exits non-zero** so the Cloud Run execution reads as failed — exiting 0 made a
+broken setup look like a run that simply finished early. Settle failures count
+against the same budget.
+
+**A timed-out search is stopped, not abandoned.** Each position gets 300 s to
+answer `bestmove`. A timeout only stops *waiting* — Stockfish keeps searching —
+and an engine handed back to the pool in that state answered its next position
+with the old search's `bestmove` and `info` lines: a wrong evaluation for a
+different position, silently. So on a timeout the engine is sent `stop` and its
+`bestmove` drained before it is reused; if even that does not arrive within
+10 s the process is wedged, and it is killed and replaced with a fresh engine so
+the pool keeps its size.
 
 ## Cost and duration
 
@@ -288,7 +317,8 @@ does not serialize executions of a job, and with no lease two overlapping runs
 would analyze the same games twice. A timeout under the hour makes overlap
 impossible, and no retries keeps a retry from running into the next execution.
 The worker is resumable — every analysis is written the moment it finishes — so a
-run cut off loses at most its in-flight game. **A backlog therefore shows as a
+run cut off loses at most its in-flight game (one cut between its two writes is
+settled by the next run — § Resuming, and stopping). **A backlog therefore shows as a
 string of timed-out executions, each making progress: that is the design working,
 not a fault.** It also bounds a hung engine to 55 minutes.
 

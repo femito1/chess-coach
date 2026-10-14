@@ -23,10 +23,23 @@ queues analysis, and redirects to `/review/<id>`. See
 `src/features/import/auto.ts → importGameByUrl` and
 `src/features/import/ImportAndReviewPage.tsx` on the app side.
 
-The deep link is bounded — Chess Coach scans **at most three** monthly
-archives (the month containing the `endTime` hint plus the current month
-plus the previous one) before giving up. This keeps the per-click cost
-predictable and avoids a "scan back to 2007" worst case.
+`endTime` is a **hint, taken at the click** — the Chess.com page exposes no
+reliable end time. For a game just finished that is the right month; for one
+opened from the archive months later it is not, so the app does not trust it
+alone. Chess Coach first scans the month containing the hint plus the current
+month and the previous one, and only when all three miss does it walk the
+player's other archives from Chess.com's own index, newest first, **at most
+24** more (`MAX_WIDENED_MONTHS` in `src/features/import/urlShape.ts`). That
+keeps the common click to one or two fetches, bounds a wrong username (which
+can never hit) to a couple of years of fetches, and still avoids a "scan back
+to 2007" worst case.
+
+Daily (correspondence) games keep their own URL shape. Daily ids are a
+separate number space — a daily id can equal some live game's id — so the
+content script sends `/game/daily/<id>` as `/game/daily/<id>` rather than
+canonicalizing it to `/game/live/<id>`, which missed the archive's exact match
+and named a live game that may not exist. The app likewise only varies a daily
+URL into the daily shape.
 
 ## Install (development)
 
@@ -73,7 +86,7 @@ The Chrome Web Store path is documented in the repo root
 
 ## Files
 
-- `manifest.json` — MV3 manifest. Permissions are minimal: `storage`
+- `manifest.json` — MV3 manifest (version 0.3.1). Permissions are minimal: `storage`
   (for the username + URL config) and host access only on
   `https://www.chess.com/*`.
 - `src/content.js` — runs on chess.com pages, detects end-of-game,
@@ -106,7 +119,10 @@ updated.
 
 The content script also dedupes per game URL so the prompt only
 appears once per game even if chess.com re-mounts its modal (e.g.
-after clicking "Game Review" inline).
+after clicking "Game Review" inline). Clicking **Review** counts as handling
+the prompt, exactly like dismissing it: the game-over modal is still on
+screen, so otherwise the panel's own removal woke the observer and the prompt
+re-appeared ~100 ms after the click.
 
 ## Troubleshooting
 
