@@ -216,7 +216,7 @@ export async function importGameByUrl(
     // this one game, so "not found" would be a lie and a silent no-op worse.
     if (!isStandardChessComGame(hit)) {
       throw new Error(
-        `importGameByUrl: ${gameUrl} is a ${hit.rules} game — only standard chess can be reviewed`,
+        `importGameByUrl: ${gameUrl} is a ${hit.rules} game. Only standard chess can be reviewed.`,
       );
     }
     // A deep link represents one explicit review choice. Importing the

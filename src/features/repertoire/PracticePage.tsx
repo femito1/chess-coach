@@ -1679,7 +1679,7 @@ function PracticeStatusBar({
           <span className="text-good">
             {expectedSan && (
               <>
-                <span className="font-mono">{expectedSan}</span> — {t('common.correct')}.
+                {t('repertoire.trainer.correct')}<span className="font-mono">{expectedSan}</span>.
               </>
             )}
           </span>

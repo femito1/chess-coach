@@ -11,7 +11,7 @@
 //   3. Pre-mistake: only the Hint button is on-screen. No "Try
 //      again", no "Show answer", no "Play it for me".
 //   4. Make a wrong-but-legal user move. The board snaps the piece
-//      back, the status copy switches to "Not your prep here — try
+//      back, the status copy switches to "Not your prep here. Try
 //      again", and Hint + Show-answer both appear; "Try again" is
 //      NEVER rendered (auto-retry change).
 //   5. The board must still be interactive (chessground's

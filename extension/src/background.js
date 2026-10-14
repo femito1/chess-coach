@@ -1,5 +1,5 @@
 /**
- * Chess Coach — Review After Game (service worker)
+ * Chess Coach: Review After Game (service worker)
  *
  * Three responsibilities:
  *

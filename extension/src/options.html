@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Chess Coach — Options</title>
+    <title>Chess Coach options</title>
     <style>
       :root {
         color-scheme: dark;
@@ -96,16 +96,16 @@
     </style>
   </head>
   <body>
-    <h1>Chess Coach — Review After Game</h1>
+    <h1>Chess Coach: Review After Game</h1>
     <p class="lead">
-      When you finish a game on Chess.com, this extension offers a one-click
-      "Review in Chess Coach" prompt that deep-links into your local app.
+      When you finish a game on Chess.com, this extension shows a prompt that
+      opens the game in your Chess Coach app with one click.
     </p>
 
     <label>
       Chess.com username
       <span class="hint">
-        Used in the deep link so Chess Coach knows whose archive to pull.
+        Chess Coach uses this to find the game in your archive.
       </span>
       <input type="text" id="username" autocomplete="off" spellcheck="false" />
     </label>
@@ -113,8 +113,9 @@
     <label>
       Chess Coach URL
       <span class="hint">
-        Where your Chess Coach app is running. Defaults to the local dev server.
-        Use your hosted URL (e.g. https://chess-coach-bip.pages.dev) once deployed.
+        Where your Chess Coach app runs. The default is the local dev server.
+        If you use a hosted copy, enter its URL (for example
+        https://chess-coach-bip.pages.dev).
       </span>
       <input type="url" id="coachOrigin" autocomplete="off" spellcheck="false" />
     </label>

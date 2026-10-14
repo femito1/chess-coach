@@ -74,7 +74,7 @@ await runBrowserTest({
     const revealCount = await page.locator('[data-testid="learn-reveal"]').count();
     expect(revealCount, 'reveal offered for the user move').toBe(1);
     expect(
-      prompt.includes("stepped through the whole line"),
+      prompt.includes("seen the whole line"),
       'has not auto-played to the end',
     ).toBeFalsy();
 

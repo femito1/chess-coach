@@ -87,7 +87,7 @@ export function ProgressView({
         />
         <Tile
           label={t('puzzles.progress.medianTime')}
-          value={overall.medianCleanMs !== null ? formatMs(overall.medianCleanMs) : '—'}
+          value={overall.medianCleanMs !== null ? formatMs(overall.medianCleanMs) : '–'}
           sub={t('puzzles.progress.medianTimeSub')}
         />
         <Tile
@@ -130,7 +130,7 @@ function useContentBackfill(rows: readonly PuzzleAttempt[]) {
 }
 
 function pct(x: number | null): string {
-  return x === null ? '—' : `${Math.round(x * 100)}%`;
+  return x === null ? '–' : `${Math.round(x * 100)}%`;
 }
 
 function formatMs(ms: number): string {

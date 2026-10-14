@@ -1,4 +1,4 @@
-# Chess Coach — Review After Game (browser extension)
+# Chess Coach: Review After Game (browser extension)
 
 A small Manifest V3 (Chromium) extension that watches Chess.com for the end
 of a live game and offers a one-click "Review in Chess Coach" prompt that

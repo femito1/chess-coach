@@ -1,6 +1,6 @@
 /**
  * Single source of truth for the Chrome Web Store identity of the
- * "Chess Coach — Review After Game" browser extension.
+ * "Chess Coach: Review After Game" browser extension.
  *
  * The extension was published 2026-05-13 under id
  * `gocmhcmncjaokcfcnfjjkaglconhiedo`. The Chrome Web Store resolves
@@ -39,7 +39,7 @@ export const CHROME_EXTENSION_SLUG = 'chess-coach-review-after-game';
 /** Display name used in user-facing copy. Matches the Web Store
  *  listing exactly so copy stays consistent if a user toggles
  *  between the listing and the in-app prompt. */
-export const CHROME_EXTENSION_NAME = 'Chess Coach — Review After Game';
+export const CHROME_EXTENSION_NAME = 'Chess Coach: Review After Game';
 
 /** Public install URL. Resolves to the canonical detail page
  *  regardless of slug — Google redirects slug-less requests to the

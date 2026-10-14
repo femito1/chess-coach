@@ -224,7 +224,7 @@ await runBrowserTest({
         saysEmpty: /Nothing uploaded yet/i.test(text),
         // Nothing may be left untranslated.
         rawKeys: /sync\.cloud\./.test(text),
-        hint: /Counts only/i.test(text),
+        hint: /Only counts are read/i.test(text),
       };
     });
     console.log('rendered:', JSON.stringify(rendered));

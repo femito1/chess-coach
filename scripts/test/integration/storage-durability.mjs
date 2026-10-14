@@ -91,7 +91,7 @@ await runBrowserTest({
 
     const saysSomething =
       cardText.includes('has promised to keep') ||
-      cardText.includes('best-effort') ||
+      cardText.includes("data isn't protected") ||
       cardText.includes("won't say") ||
       cardText.includes("Couldn't check");
     expect(saysSomething, 'the card states a durability verdict').toBeTruthy();

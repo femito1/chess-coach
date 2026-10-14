@@ -466,12 +466,12 @@ function describe(error: { message: string; code?: string }): string {
     /row-level security/i.test(error.message) || error.code === '42501';
   if (rls) {
     return (
-      `${error.message} — this account is not in cloud_sync_allowlist. ` +
+      `${error.message}. This account is not in cloud_sync_allowlist. ` +
       `Run supabase/cloud-sync.sql (step 5) to enrol it.`
     );
   }
   if (error.code === '42P01') {
-    return `${error.message} — the cloud tables don't exist yet. Run supabase/cloud-sync.sql.`;
+    return `${error.message}. The cloud tables don't exist yet. Run supabase/cloud-sync.sql.`;
   }
   return error.message;
 }

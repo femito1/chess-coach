@@ -11,11 +11,11 @@ export function AccuracyPanel({ game }: { game: Game }) {
         <span className="text-text-muted text-[10px] uppercase tracking-wide">{t('review.accuracy.engine')}</span>
         <span className="text-text-muted">{t('review.accuracy.white')}</span>
         <span className="text-text font-mono text-right">
-          {acc ? `${acc.white.toFixed(1)}%` : '—'}
+          {acc ? `${acc.white.toFixed(1)}%` : '–'}
         </span>
         <span className="text-text-muted">{t('review.accuracy.black')}</span>
         <span className="text-text font-mono text-right">
-          {acc ? `${acc.black.toFixed(1)}%` : '—'}
+          {acc ? `${acc.black.toFixed(1)}%` : '–'}
         </span>
       </div>
     </div>

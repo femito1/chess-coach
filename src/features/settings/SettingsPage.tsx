@@ -147,7 +147,7 @@ export function SettingsPage() {
     // silently flipping a setting the user just chose.
     const stalled =
       ' Background analysis is off, so these stay queued until you turn it back' +
-      ' on — or open one, which analyzes it right away.';
+      ' on. Opening a game analyzes it right away.';
     setRequeueStatus(
       n === 0
         ? 'No games matched that scope.'

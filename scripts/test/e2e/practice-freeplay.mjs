@@ -193,7 +193,7 @@ await runBrowserTest({
     // ── Arrow-key navigation ────────────────────────────────────────
     // Now that there's at least one move on the board (Stockfish's
     // first reply), the back arrow should be live. Pressing ← rewinds
-    // the cursor and the page surfaces the "Reviewing past position"
+    // the cursor and the page surfaces the "Viewing an earlier position"
     // hint; pressing → walks back to the tip and the hint goes away.
     // Pin the round-trip + the hint visibility so a future refactor
     // can't silently break the navigation contract.
@@ -205,7 +205,7 @@ await runBrowserTest({
       'back arrow button rendered',
     ).toBe(1);
     expect(
-      await page.locator('text=/Reviewing past position/').count(),
+      await page.locator('text=/Viewing an earlier position/').count(),
       'no past-position hint at the tip',
     ).toBe(0);
     // Press the left arrow key to rewind. We focus the body first so
@@ -220,14 +220,14 @@ await runBrowserTest({
     await page.keyboard.press('ArrowLeft');
     await sleep(200);
     expect(
-      await page.locator('text=/Reviewing past position/').count(),
+      await page.locator('text=/Viewing an earlier position/').count(),
       'past-position hint visible after ←',
     ).toBeAtLeast(1);
     // Forward returns to the tip.
     await page.keyboard.press('ArrowRight');
     await sleep(200);
     expect(
-      await page.locator('text=/Reviewing past position/').count(),
+      await page.locator('text=/Viewing an earlier position/').count(),
       'past-position hint gone after →',
     ).toBe(0);
 

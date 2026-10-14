@@ -66,7 +66,7 @@ function save() {
   try {
     new URL(coachOrigin);
   } catch (_e) {
-    setStatus('Coach URL is not a valid URL', true);
+    setStatus('The Chess Coach URL isn\'t valid', true);
     return;
   }
 
@@ -129,7 +129,7 @@ async function testConnection() {
     return;
   }
   if (!granted) {
-    setStatus('Permission to fetch that origin was denied', true);
+    setStatus('Permission to reach that URL was denied', true);
     return;
   }
 
@@ -149,10 +149,10 @@ async function testConnection() {
     } else {
       // Reachable but doesn't look like Chess Coach — could be a
       // proxy, a 200 OK landing page, etc. Still useful info.
-      setStatus('Reachable, but not recognised as Chess Coach', true);
+      setStatus('The site responded, but it doesn\'t look like Chess Coach', true);
     }
   } catch (err) {
-    setStatus('Could not reach: ' + (err && err.message ? err.message : err), true);
+    setStatus('Couldn\'t reach it: ' + (err && err.message ? err.message : err), true);
   }
 }
 

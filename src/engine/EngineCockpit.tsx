@@ -296,7 +296,7 @@ function CockpitReadout({ slot, pvLine, cacheDelta, queueRunning }: CockpitReado
       ? `M${Math.abs(slot.scoreMate)}${slot.scoreMate < 0 ? t('engineCockpit.againstSTM') : ''}`
       : slot.scoreCp !== null
         ? `${(slot.scoreCp / 100).toFixed(2)}`
-        : '—';
+        : '–';
 
   return (
     <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
@@ -331,21 +331,21 @@ function Stat({ label, value }: { label: string; value: string }) {
 }
 
 function formatNps(nps: number): string {
-  if (!nps) return '—';
+  if (!nps) return '–';
   if (nps >= 1_000_000) return `${(nps / 1_000_000).toFixed(1)}M nps`;
   if (nps >= 1_000) return `${(nps / 1_000).toFixed(0)}k nps`;
   return `${nps} nps`;
 }
 
 function formatNodes(nodes: number): string {
-  if (!nodes) return '—';
+  if (!nodes) return '–';
   if (nodes >= 1_000_000) return `${(nodes / 1_000_000).toFixed(1)}M`;
   if (nodes >= 1_000) return `${(nodes / 1_000).toFixed(0)}k`;
   return String(nodes);
 }
 
 function formatTime(ms: number): string {
-  if (!ms) return '—';
+  if (!ms) return '–';
   if (ms >= 10_000) return `${(ms / 1000).toFixed(0)}s`;
   if (ms >= 1_000) return `${(ms / 1000).toFixed(1)}s`;
   return `${ms}ms`;

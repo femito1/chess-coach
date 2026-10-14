@@ -88,7 +88,7 @@ export function DashboardPage() {
         <Stat
           label={t('dashboard.stats.avgAccuracy')}
           value={avgAccuracy(games ?? [])}
-          suffix={avgAccuracy(games ?? []) === '—' ? '' : '%'}
+          suffix={avgAccuracy(games ?? []) === '–' ? '' : '%'}
         />
         <Stat
           label={t('dashboard.stats.hoursPlayed')}
@@ -249,7 +249,7 @@ function RecordStat({
         </div>
       </div>
       <div className="text-2xl font-semibold tabular-nums">
-        {total > 0 ? `${winPct}%` : '—'}
+        {total > 0 ? `${winPct}%` : '–'}
       </div>
       <div
         className="h-1.5 w-full rounded-full bg-bg-raised overflow-hidden flex"
@@ -330,7 +330,7 @@ function AnalysisStatus({
 
 function avgAccuracy(games: ReadonlyArray<{ accuracy?: { white: number; black: number }; userColor: 'white' | 'black' }>): string {
   const withAcc = games.filter((g) => g.accuracy);
-  if (withAcc.length === 0) return '—';
+  if (withAcc.length === 0) return '–';
   const sum = withAcc.reduce((acc, g) => acc + (g.userColor === 'white' ? g.accuracy!.white : g.accuracy!.black), 0);
   return (sum / withAcc.length).toFixed(1);
 }
@@ -345,7 +345,7 @@ function avgAccuracy(games: ReadonlyArray<{ accuracy?: { white: number; black: n
  *  `useTranslation` because it's a plain helper, not a component, and
  *  hooks must only be called from React render paths. */
 function formatHours(h: number, t: TFunction): string {
-  if (!Number.isFinite(h) || h <= 0) return '—';
+  if (!Number.isFinite(h) || h <= 0) return '–';
   if (h < 1) return t('dashboard.format.minutes', { value: Math.round(h * 60) });
   if (h < 10) return t('dashboard.format.hours', { value: h.toFixed(1) });
   return t('dashboard.format.hours', { value: Math.round(h) });

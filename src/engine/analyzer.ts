@@ -111,7 +111,7 @@ function unsupportedStart(
 ): string | null {
   const variant = headers.Variant;
   if (variant && !/^(standard|chess)$/i.test(variant.trim())) {
-    return `Can't analyze ${variant} games — only standard chess is supported.`;
+    return `Can't analyze ${variant} games. Only standard chess is supported.`;
   }
   if (startFen.split(' ')[1] === 'b') {
     return (

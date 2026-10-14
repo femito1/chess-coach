@@ -1,7 +1,7 @@
 # Chrome Web Store submission — copy-paste cheat sheet
 
 Everything the Chrome Web Store dev-console asks you to fill in for
-the **Chess Coach — Review After Game** extension, in the order the
+the **Chess Coach: Review After Game** extension, in the order the
 form presents it. Copy-paste straight from this file.
 
 > The production Chess Coach host is `chess-coach-bip.pages.dev`
@@ -35,43 +35,43 @@ rejects the upload.
 
 ### Item name
 ```
-Chess Coach — Review After Game
+Chess Coach: Review After Game
 ```
 
 ### Summary (≤132 characters)
 ```
-After a chess.com game ends, one click sends it to your Chess Coach analysis tool — keeps the loop tight, no copy-pasting URLs.
+When a chess.com game ends, one click opens it in Chess Coach for review. No copying URLs.
 ```
 
-### Description (rich text — line breaks preserved)
+### Description (rich text, line breaks preserved)
 ```
-Chess Coach — Review After Game closes the gap between "I just finished a game" and "I'm staring at the engine eval bar."
+Chess Coach: Review After Game takes you from a finished game to its review in one click.
 
 How it works
 • You finish a game on chess.com.
 • A small "Review in Chess Coach?" card appears in the corner of the page.
-• Click it. Your Chess Coach app opens to that exact game, fully imported and ready to analyse.
+• Click it. Chess Coach opens that game, imported and ready to analyse.
 
 What it talks to
-• chess.com tabs — to detect when a game ends.
-• Your own Chess Coach instance — to deep-link the finished game in.
+• chess.com tabs, to see when a game ends.
+• Your Chess Coach app, to open the finished game there.
 
-That's it. The extension does not send your data anywhere else, has no analytics, and stores only your chess.com username and the URL of your Chess Coach app in chrome.storage.sync.
+Nothing else. The extension sends your data nowhere else and has no analytics. It only stores your chess.com username and the address of your Chess Coach app, in chrome.storage.sync.
 
 Setup
 1. Install.
-2. The options page opens automatically.
+2. The options page opens on its own.
 3. Enter your chess.com username.
-4. The Chess Coach URL is pre-filled with the production host. (Optional: click "Test connection" to verify.)
+4. The Chess Coach address is already filled in. You can click "Test connection" to check it.
 5. Save.
 
-That's the whole onboarding. Finish a chess.com game and the prompt appears.
+That's it. Finish a chess.com game and the card appears.
 
-Manual trigger
-If chess.com refactors its end-of-game UI faster than this extension can keep up and the prompt doesn't appear automatically, you can click the extension's toolbar icon while looking at the finished game — same prompt, manually summoned.
+If the card doesn't appear
+chess.com sometimes changes its end-of-game screen. If the card doesn't show up, click the extension's toolbar icon while you're on the finished game and you'll get the same card.
 
 Source code
-This extension is open-source. See the listed homepage URL.
+The extension is open source. See the homepage link on this listing.
 ```
 
 ### Category

@@ -1,5 +1,5 @@
 /**
- * Chess Coach — Review After Game (content script)
+ * Chess Coach: Review After Game (content script)
  *
  * Watches the chess.com tab for completed games. A game URL is necessary
  * but not sufficient: chess.com now assigns numeric URLs while play is

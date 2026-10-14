@@ -219,7 +219,7 @@ export function GamesPage() {
                   <td className="p-2 max-w-[220px]">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="text-text-muted truncate">
-                        {g.opening ?? '—'}
+                        {g.opening ?? '–'}
                       </span>
                       <BrilliantBadge count={g.brilliantCount} />
                     </div>
@@ -228,7 +228,7 @@ export function GamesPage() {
                     <ResultBadge result={g.result} />
                   </td>
                   <td className="p-2 text-text-muted">{g.timeClass ?? g.timeControl}</td>
-                  <td className="p-2 font-mono">{userAcc != null ? `${userAcc}%` : '—'}</td>
+                  <td className="p-2 font-mono">{userAcc != null ? `${userAcc}%` : '–'}</td>
                   <td className="p-2">
                     <StatusBadge status={g.analysisStatus} error={g.analysisError} />
                   </td>

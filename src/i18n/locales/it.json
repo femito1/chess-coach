@@ -56,7 +56,7 @@
   },
   "dashboard": {
     "title": "Dashboard",
-    "subtitle": "Importa partite, lascia che il motore le analizzi in background e rivedi cosa correggere.",
+    "subtitle": "Importa le tue partite e il motore le analizza in background. Poi rivedi cosa correggere.",
     "importGames": "Importa partite",
     "stats": {
       "games": "Partite",
@@ -72,7 +72,7 @@
       "drill": "Allena",
       "prep": "Prepara",
       "puzzles": "Puzzle",
-      "puzzlesDesc": "Tattica da una libreria di problemi valutati — abbinati ai tuoi errori recenti.",
+      "puzzlesDesc": "Problemi con rating, scelti in base ai tuoi errori recenti.",
       "repertoire": "Repertorio",
       "repertoireDesc": "Allenamento aperture con ripetizione spaziata.",
       "repertoireDue": "· {{count}} in scadenza",
@@ -104,7 +104,7 @@
       "title": "Lacune di preparazione",
       "subtitle": "Aperture in cui perdi e che non sono ancora in un repertorio.",
       "row": "perse {{losses}} su {{games}}",
-      "tooltip": "{{label}} — {{wins}}V {{draws}}P {{losses}}S su {{games}} partite registrate come \"{{groupName}}\", e non nel tuo repertorio"
+      "tooltip": "{{label}}: {{wins}}V {{draws}}P {{losses}}S in {{games}} partite. Classificate come \"{{groupName}}\" nella libreria e non presenti nel tuo repertorio."
     },
     "sectionTitle": "Progressi",
     "ratingTitle": "Andamento rating",
@@ -139,7 +139,7 @@
       "openingsNoMode": "Nessun dato di apertura per i tempi selezionati.",
       "openingsEmpty": "Nessun dato di apertura ancora."
     },
-    "openingTooltip": "{{family}} — {{wins}}V {{draws}}P {{losses}}S su {{games}} partite",
+    "openingTooltip": "{{family}}: {{wins}}V {{draws}}P {{losses}}S in {{games}} partite",
     "openingRow": "{{wins}}V · {{draws}}P · {{losses}}S · {{games}}p",
     "openInLibrary": "Apri",
     "openInLibraryTitle": "Vedi {{family}} nella libreria aperture",
@@ -150,23 +150,23 @@
     "storage": {
       "title": "Archiviazione del browser",
       "persisted": "Il browser ha promesso di conservare i dati di questo dispositivo.",
-      "bestEffort": "I dati di questo dispositivo sono conservati senza garanzia — il browser può eliminarli.",
+      "bestEffort": "I dati di questo dispositivo non sono protetti. Il browser potrebbe eliminarli.",
       "unsupported": "Questo browser non dice se conserverà i tuoi dati.",
       "error": "Impossibile verificare la durabilità dell'archiviazione: {{message}}",
-      "persistedHint": "Partite, analisi e progressi vivono in IndexedDB su questo dispositivo, e il browser ha accettato di non rimuoverli per recuperare spazio. Non è assoluto: se il disco si esaurisce il browser non rispetta più la promessa e può comunque eliminare tutto. La sincronizzazione cloud è la rete di sicurezza.",
-      "bestEffortHint": "Il browser può cancellare questa origine per recuperare spazio, e la cancellerà anche se hai impostato l'eliminazione dei dati del sito alla chiusura — cosa che ti disconnette e svuota la libreria finché la sincronizzazione cloud non la ripristina. Tenere attiva la sincronizzazione è la protezione.",
+      "persistedHint": "Partite, analisi e progressi sono salvati in questo browser, che ha accettato di non cancellarli per liberare spazio. Se il disco si riempie del tutto, può comunque eliminarli. La sincronizzazione cloud è il tuo backup.",
+      "bestEffortHint": "Il browser può cancellare i dati di questo sito per liberare spazio. Li cancella anche alla chiusura, se l'hai impostato per eliminare i dati dei siti quando lo chiudi. In quel caso vieni disconnesso e la libreria resta vuota finché la sincronizzazione cloud non la ripristina, quindi tienila attiva.",
       "usage": "{{used}} usati di {{quota}} disponibili ({{percent}}%)",
-      "diskLow": "Questo dispositivo ha poco spazio per i dati dell'app. Se si esaurisce, il browser eliminerà la libreria locale — la sincronizzazione cloud può ripristinarla, ma tieni d'occhio lo spazio libero su disco.",
-      "diskCritical": "Questo dispositivo non ha quasi più spazio per i dati dell'app. Il browser può eliminare la libreria locale in qualsiasi momento, e l'archiviazione durevole non lo impedisce. Libera spazio su disco.",
+      "diskLow": "Questo dispositivo ha poco spazio libero. Se si esaurisce, il browser eliminerà la libreria locale. La sincronizzazione cloud può ripristinarla, ma tieni d'occhio lo spazio su disco.",
+      "diskCritical": "Questo dispositivo ha quasi esaurito lo spazio. Il browser può eliminare la libreria locale in qualsiasi momento, anche se si era impegnato a conservarla. Libera un po' di spazio su disco.",
       "bannerTitle": "Spazio su disco in esaurimento.",
-      "bannerBody": "Il browser può eliminare i dati locali di questa app, incluso il tuo accesso. Libera spazio sul dispositivo; la sincronizzazione cloud può poi ripristinare la libreria."
+      "bannerBody": "Il browser può eliminare i dati locali di questa app, compreso il tuo accesso. Libera spazio sul dispositivo. Dopo, la sincronizzazione cloud può ripristinare la libreria."
     },
     "title": "Impostazioni",
     "username": "Nome utente Chess.com",
     "engineDepth": "Profondità motore: {{depth}}",
-    "engineDepthHint": "Più alta = più forte ma più lenta. 16 è un buon compromesso per una revisione casuale.",
+    "engineDepthHint": "Un valore più alto è più forte ma più lento. 16 è un buon compromesso per una revisione informale.",
     "timeFilter": "Filtro tempi predefinito",
-    "timeFilterHint": "I problemi consigliati sono abbinati alle partite in questi controlli di tempo. Scegli una o più opzioni, o \"Tutti\". Gli errori nel bullet sono molti ma poco utili allo studio — sbagli per l'orologio, non per uno schema — quindi rapid è un default sensato.",
+    "timeFilterHint": "I problemi consigliati vengono dalle tue partite in questi controlli di tempo. Scegline uno o più, oppure \"Tutti\". Nel bullet gli errori dipendono più dall'orologio che dagli schemi, quindi rapid è una buona scelta predefinita.",
     "autoAnalyze": "Analizza automaticamente le partite importate in background",
     "depthChanged": "Profondità motore cambiata da <strong>{{from}}</strong> a <strong>{{to}}</strong>. Rianalizzare le partite esistenti alla nuova profondità?",
     "scope": {
@@ -178,17 +178,17 @@
     },
     "language": {
       "title": "Lingua",
-      "description": "Scegli la lingua usata in tutta l'app. Le traduzioni coprono l'interfaccia utente; la notazione delle mosse (SAN) e i codici ECO seguono sempre la convenzione internazionale."
+      "description": "Scegli la lingua dell'app. La notazione delle mosse (SAN) e i codici ECO restano nella forma internazionale standard."
     },
     "sounds": {
       "title": "Suoni",
       "moveSounds": "Riproduci un suono quando un pezzo si muove",
-      "description": "Segnali per mosse, catture, scacco, arrocco e fine partita su ogni scacchiera che giochi o esplori. Salvato per dispositivo."
+      "description": "Suoni per mosse, catture, scacco, arrocco e fine partita, su ogni scacchiera. Salvato su questo dispositivo."
     },
     "nnue": {
       "title": "Forza del motore (NNUE)",
       "toggle": "Usa la valutazione con rete neurale di Stockfish",
-      "description": "La NNUE giudica le posizioni tranquille molto meglio del valutatore classico che sostituisce: in un finale di torri segna +3,77 dove il classico segna +0,53. Richiede un file di rete da 40 MB, scaricato una sola volta per dispositivo al primo avvio del motore e poi conservato in cache in modo permanente. Disattivala per evitare quel download su una connessione a consumo; l'analisi torna al valutatore classico, più debole. Salvato per dispositivo.",
+      "description": "La NNUE valuta le posizioni in modo molto più preciso del valutatore classico. Richiede un file da 40 MB, scaricato una volta per dispositivo e poi tenuto in cache. Disattivala per evitare il download su una connessione a consumo. L'analisi userà allora il valutatore classico, più debole. Salvato su questo dispositivo.",
       "applies": "Ha effetto al prossimo avvio del motore."
     },
     "workers": {
@@ -196,14 +196,14 @@
       "auto": "Automatico ({{n}})",
       "workers": "{{n}} processi",
       "one": "1 processo",
-      "description": "Quanti processi Stockfish analizzano una partita in parallelo. Più processi sono più veloci finché la memoria basta, poi diventano drasticamente più lenti — misurato su un portatile 12 core / 8 GB a profondità 18: 4 processi 9,7 s, 6 processi 7,6 s, 8 processi due minuti perché è iniziato lo swap. L'automatico resta prudente perché il browser riporta la memoria totale, mai quella libera, quindi non può conoscere il margine disponibile. Aumentalo se l'analisi sembra lenta e hai RAM in abbondanza; riducilo se le ventole danno fastidio. Memorizzato per dispositivo.",
+      "description": "Quanti processi Stockfish analizzano una partita insieme. Più processi vanno più veloci finché la memoria basta, poi tutto rallenta molto. L'opzione Automatico resta prudente perché il browser non sa quanta memoria è libera. Aumenta il numero se l'analisi ti sembra lenta e hai RAM in avanzo, oppure riducilo se le ventole ti danno fastidio. Salvato su questo dispositivo.",
       "applies": "Ha effetto dalla prossima analisi.",
       "slowBuildTitle": "L'analisi è circa 11 volte più lenta del previsto",
-      "slowBuild": "Questa pagina non è cross-origin isolated, quindi Stockfish è ripiegato sulla build a thread singolo. Misurato sulla stessa partita a profondità 18: 9,7 s con i thread contro 110 s senza. La build veloce richiede le intestazioni COOP e COEP di public/_headers — verifica che siano pubblicate e che nessun proxy le rimuova."
+      "slowBuild": "Questa pagina non è cross-origin isolated, quindi Stockfish usa la build a thread singolo. Sulla stessa partita a profondità 18 servono 110 s invece di 9,7 s. La build veloce richiede le intestazioni COOP e COEP di public/_headers. Verifica che siano pubblicate e che nessun proxy le rimuova."
     },
     "freePlayStrength": {
-      "title": "Gioca contro il motore — forza predefinita",
-      "description": "Usato quando clicchi su \"Gioca contro il motore\" dopo aver completato una linea di pratica. Massimo è Stockfish a piena forza. I livelli inferiori limitano il motore tramite UCI_LimitStrength + Skill Level per testare la linea a un livello più umano. Puoi sovrascrivere questo valore per sessione direttamente nella pagina di pratica.",
+      "title": "Gioca contro il motore: forza predefinita",
+      "description": "Usata quando clicchi \"Gioca contro il motore\" dopo una linea di pratica. Il massimo è Stockfish a piena forza. I livelli più bassi indeboliscono il motore, così gioca in modo più simile a una persona. Puoi cambiarla per una sessione nella pagina di pratica.",
       "level": {
         "max": "Massimo",
         "2000": "≈ 2000",
@@ -213,11 +213,11 @@
     },
     "extensionPromo": {
       "title": "Estensione del browser",
-      "intro": "<strong>{{name}}</strong> trasforma il flusso manuale qui sotto in un solo clic: finisci una partita su Chess.com, clicca il prompt che appare nell'angolo e arrivi qui con la partita già importata e in analisi.",
+      "intro": "<strong>{{name}}</strong> ti evita i passaggi manuali qui sotto. Finisci una partita su Chess.com, clicca l'avviso nell'angolo e la partita si apre qui, già importata e in analisi.",
       "bullets": {
-        "noPaste": "Niente copia-incolla di URL dalla scheda chess.com.",
-        "noLeak": "Nessun dato lascia la tua macchina — l'estensione legge solo l'URL della partita e apre questa app.",
-        "openSource": "Open source; stessa licenza MIT dell'app."
+        "noPaste": "Non serve copiare gli URL delle partite da Chess.com.",
+        "noLeak": "Niente lascia il tuo computer. L'estensione legge solo l'URL della partita e apre questa app.",
+        "openSource": "Open source, con la stessa licenza MIT dell'app."
       },
       "cta": "Scaricala dal Chrome Web Store",
       "dismissed": "Promo dell'estensione browser nascosta."
@@ -225,7 +225,7 @@
   },
   "import": {
     "pageTitle": "Importa da Chess.com",
-    "pageSubtitle": "Inserisci il tuo nome utente Chess.com, scegli i mesi e scaricheremo le partite tramite l'API pubblica. L'analisi parte in background dopo l'import.",
+    "pageSubtitle": "Inserisci il tuo nome utente Chess.com e scegli i mesi da importare. Le partite arrivano dall'API pubblica di Chess.com e vengono analizzate in background.",
     "usernameLabel": "Nome utente Chess.com",
     "usernamePlaceholder": "magnuscarlsen",
     "loadMonths": "Carica mesi",
@@ -257,12 +257,12 @@
     "checking": "Controllo nuove partite su Chess.com…",
     "newGame_one": "{{count}} nuova partita su Chess.com",
     "newGame_other": "{{count}} nuove partite su Chess.com",
-    "newGameDesc": "Importarle e analizzarle ora? L'analisi gira in background — puoi continuare a usare l'app.",
+    "newGameDesc": "Importarle e analizzarle ora? L'analisi gira in background mentre continui a usare l'app.",
     "importing_one": "Importazione… {{done}}/{{total}} partita",
     "importing_other": "Importazione… {{done}}/{{total}} partite",
     "importingDesc": "L'analisi partirà automaticamente man mano che arrivano.",
-    "imported_one": "Importata {{count}} nuova partita — l'analisi è in corso.",
-    "imported_other": "Importate {{count}} nuove partite — l'analisi è in corso.",
+    "imported_one": "Importata {{count}} nuova partita. Analisi in corso.",
+    "imported_other": "Importate {{count}} nuove partite. Analisi in corso.",
     "allCaughtUp": "Tutto aggiornato.",
     "couldNotImport_one": "Non è stato possibile importare la {{count}} nuova partita",
     "couldNotImport_other": "Non è stato possibile importare le {{count}} nuove partite",
@@ -276,16 +276,16 @@
   },
   "importAndReview": {
     "fetchingTitle": "Sto recuperando la tua partita da Chess.com…",
-    "fetchingSubtitle": "Solo il download dall'archivio — l'analisi parte subito dopo.",
+    "fetchingSubtitle": "Download dell'archivio in corso. Subito dopo parte l'analisi.",
     "analyzingTitle": "Sto analizzando la tua partita",
-    "analyzingSubtitle": "Stockfish sta esaminando ogni mossa. Verrai reindirizzato automaticamente a fine analisi — oppure entra subito.",
+    "analyzingSubtitle": "Stockfish sta controllando ogni mossa. Alla fine verrai portato alla revisione, oppure puoi entrare subito.",
     "skipToReview": "Vai alla revisione adesso",
     "errorTitle": "Non è stato possibile importare quella partita",
     "openManualImport": "Apri la pagina di import manuale",
-    "errorPostlude": " — se la partita è in un mese recente apparirà lì.",
+    "errorPostlude": ". Se la partita è di un mese recente, la troverai lì.",
     "missingUrl": "Parametro `url` mancante",
-    "noUsernameSettings": "Nessun nome utente Chess.com trovato. Apri Impostazioni → imposta un nome utente, poi riprova il link.",
-    "engineErrored": "Stockfish ha riscontrato un errore durante l'analisi. Apri la dashboard e clicca Riprova.",
+    "noUsernameSettings": "Nessun nome utente Chess.com trovato. Impostane uno nelle Impostazioni, poi riapri il link.",
+    "engineErrored": "Stockfish ha avuto un errore durante l'analisi di questa partita. Apri la dashboard e clicca Riprova.",
     "unknownError": "Errore sconosciuto."
   },
   "games": {
@@ -337,7 +337,7 @@
   "puzzles": {
     "title": "Puzzle",
     "solver": {
-      "notQuite": "Non proprio — riprova",
+      "notQuite": "Non proprio. Riprova",
       "fromHere": " da qui.",
       "wrongCount_one": "{{count}} sbagliato finora",
       "wrongCount_other": "{{count}} sbagliati finora",
@@ -368,8 +368,8 @@
     "motifWeight_other": "{{count}} errori, il più recente {{days}} giorni fa",
     "sessionNote": "Focus: {{motifs}}",
     "loadFailed": "Impossibile caricare i problemi",
-    "recommendedNoMotifs": "Nessuno schema chiaro nei tuoi errori recenti — niente spicca abbastanza da allenare.",
-    "recommendedNeedsGames": "I consigliati richiedono partite analizzate. Importane e analizzane alcune, poi torna qui.",
+    "recommendedNoMotifs": "Ancora nessuno schema chiaro nei tuoi errori recenti, quindi non c'è niente di specifico da allenare.",
+    "recommendedNeedsGames": "Per i problemi consigliati servono prima alcune partite analizzate. Importane e rivedine qualcuna, poi torna qui.",
     "subtitle": "Problemi valutati dal database aperto di Lichess, calibrati sul tuo livello.",
     "yourRating": "Rating puzzle",
     "ratingTitle": "Il tuo rating puzzle, calcolato solo sui primi tentativi (±{{rd}}). Un ? indica che è ancora provvisorio.",
@@ -381,9 +381,9 @@
     "backToProgress": "← Torna ai progressi",
     "backToTraining": "← Torna all'allenamento",
     "startTraining": "Inizia l'allenamento",
-    "retryUnrated": "Un nuovo tentativo — non cambia il tuo rating.",
+    "retryUnrated": "È un nuovo tentativo, quindi non cambia il tuo rating.",
     "themeSessionNote": "Tema: {{theme}}",
-    "goesToReview": "Sbagliato — torna nel Ripasso domani.",
+    "goesToReview": "Sbagliato. Torna nel Ripasso domani.",
     "sessionScore": "{{clean}}/{{total}} senza errori",
     "switchToMixed": "Allenati con problemi misti",
     "windowExhausted": "Hai fatto tutti i problemi di questa fascia. Scegli un'altra difficoltà o un altro tema.",
@@ -396,7 +396,7 @@
       "offsetTitle": "Problemi intorno a {{rating}}",
       "exact": "Esatto",
       "exactRating": "Rating obiettivo",
-      "exactTitle": "Digita un rating: viene arrotondato al multiplo di {{step}} più vicino. Invio per applicare.",
+      "exactTitle": "Digita un rating e premi Invio. Viene arrotondato al multiplo di {{step}} più vicino.",
       "lower": "Più basso",
       "higher": "Più alto",
       "window": "Rating {{lo}}–{{hi}}",
@@ -406,7 +406,7 @@
       "weakest": "I tuoi punti deboli",
       "chipTitle_one": "{{count}} problema vicino a questo livello",
       "chipTitle_other": "{{count}} problemi vicini a questo livello",
-      "pickerLegend": "Numero piccolo: problemi vicini al tuo livello. Percentuale: la tua riuscita al primo tentativo, dopo averne fatti alcuni — in rosso se è sotto quanto prevede il tuo rating."
+      "pickerLegend": "Numero piccolo: problemi vicini al tuo livello. Percentuale: la tua riuscita al primo tentativo, dopo averne fatti alcuni. Il rosso indica che è sotto quanto prevede il tuo rating."
     },
     "themeGroups": {
       "tactics": "Tattiche",
@@ -419,13 +419,13 @@
       "dueNow": "Da ripassare ora",
       "later": "In arrivo",
       "learned": "Imparati",
-      "explain": "I problemi sbagliati tornano qui — il giorno dopo, poi tre giorni dopo un nuovo tentativo senza errori. Con due tentativi di fila senza errori, un problema conta come imparato. I nuovi tentativi non cambiano mai il tuo rating.",
+      "explain": "I problemi che sbagli tornano qui il giorno dopo, poi tre giorni dopo un nuovo tentativo senza errori. Con due tentativi di fila senza errori, un problema conta come imparato. I nuovi tentativi non cambiano il tuo rating.",
       "start_one": "Ripassa {{count}} problema",
       "start_other": "Ripassa {{count}} problemi",
       "early_one": "Ripassa {{count}} in anticipo",
       "early_other": "Ripassa {{count}} in anticipo",
       "nothingDueNext": "Niente da ripassare. Il prossimo sarà pronto tra circa {{hours}} h.",
-      "empty": "Niente da ripassare — sbaglia un problema in Allenamento e comparirà qui.",
+      "empty": "Niente da ripassare. I problemi che sbagli in Allenamento compaiono qui.",
       "finish": "Termina ripasso",
       "doneScore": "Ripasso finito: {{clean}} su {{total}} senza errori.",
       "doneMissed": "Quelli sbagliati di nuovo ripartono da domani.",
@@ -449,11 +449,11 @@
       "today_other": "{{count}} oggi, {{clean}} senza errori",
       "provisional": "ancora provvisorio",
       "weekChange": "variazione settimanale",
-      "insightCalculation": "Trovi gran parte delle mosse giuste ma spesso sbagli prima della fine — allenati a calcolare tutta la linea prima di muovere. I problemi lunghi allenano proprio questo.",
+      "insightCalculation": "Trovi gran parte delle mosse giuste, ma spesso sbagli prima della fine. Prova a calcolare tutta la linea prima di muovere. I problemi lunghi sono un buon esercizio per questo.",
       "insightReview_one": "{{count}} problema sbagliato ti aspetta nel Ripasso.",
-      "insightReview_other": "{{count}} problemi sbagliati ti aspettano nel Ripasso — è lì che si impara davvero.",
+      "insightReview_other": "{{count}} problemi sbagliati ti aspettano nel Ripasso.",
       "themesTitle": "Punti di forza e debolezze",
-      "themesExplain": "Riuscita al primo colpo per tema. La tacca bianca è ciò che il tuo rating prevede per quei problemi: una barra che non arriva alla sua tacca è una vera debolezza, non solo problemi difficili.",
+      "themesExplain": "Riuscita al primo tentativo per tema. La tacca bianca indica cosa prevede il tuo rating per quei problemi. Una barra che si ferma prima della sua tacca è un punto debole.",
       "themesNeedMore": "Fai almeno {{count}} problemi di un tema per vederlo in classifica qui.",
       "themeBarTitle": "{{rate}}% senza errori contro {{expected}}% previsto, su {{count}} problemi",
       "train": "Allena",
@@ -506,7 +506,7 @@
     "noRepertoires": "Nessun repertorio ancora.",
     "noRepertoiresHelp1": "Scegli una famiglia di apertura e aggiungi qualche linea dalla ",
     "noRepertoiresHelp2": "libreria di aperture",
-    "noRepertoiresHelp3": " — il repertorio viene creato per te.",
+    "noRepertoiresHelp3": ". Il repertorio viene creato automaticamente.",
     "loading": "Caricamento…",
     "card": {
       "custom": "Personalizzato (non legato a una singola famiglia)",
@@ -517,7 +517,7 @@
       "drillLinesTitle": "Gioca attraverso le linee in questo repertorio",
       "reviewDue": "Revisione ({{count}})",
       "reviewNoDue": "Revisione (nessuna carta in scadenza)",
-      "reviewTitle": "Carte a ripetizione spaziata per allenare singole posizioni",
+      "reviewTitle": "Carte a ripetizione spaziata per singole posizioni",
       "delete": "Elimina",
       "confirmDelete": "Eliminare il repertorio \"{{name}}\"?",
       "linesInRotation": "{{active}} di {{total}} linee in rotazione"
@@ -532,11 +532,11 @@
       "toMove": "{{color}} muove. Gioca la tua preparazione.",
       "hint": "· Suggerimento: muovi il pezzo evidenziato",
       "wrongLine": "{{san}} non è la tua preparazione",
-      "notQuite": "Non è la tua preparazione — riprova da qui.",
-      "notQuiteSan": "{{san}} non è la tua preparazione — riprova da qui.",
+      "notQuite": "Non è la tua preparazione. Riprova da qui.",
+      "notQuiteSan": "{{san}} non è la tua preparazione. Riprova da qui.",
       "wrongCount_one": "{{count}} errata finora",
       "wrongCount_other": "{{count}} errate finora",
-      "correct": "Corretto — ",
+      "correct": "Corretto: ",
       "withWrong_one": "(con {{count}} tentativo sbagliato)",
       "withWrong_other": "(con {{count}} tentativi sbagliati)",
       "withHint": "(con un suggerimento)",
@@ -552,7 +552,7 @@
   },
   "practice": {
     "title": "Pratica",
-    "subtitle": "Scegli un repertorio da allenare. Le linee sono raggruppate per famiglia di apertura — selezionane una, alcune o tutte e scegli come praticarle.",
+    "subtitle": "Scegli un repertorio da allenare. Le linee sono raggruppate per famiglia di apertura. Seleziona quelle che vuoi e scegli come praticarle.",
     "loading": "Caricamento…",
     "noRepertoires": "Nessun repertorio ancora.",
     "browseOpenings": "Sfoglia aperture →",
@@ -590,7 +590,7 @@
     "opponentMoves": "L'avversario muove… ({{color}} muove)",
     "yourMove": "Tocca a te ({{move}})",
     "playYourPrep": "{{color}} muove. Gioca la tua preparazione.",
-    "notYourPrep": "Qui non è la tua preparazione — riprova.",
+    "notYourPrep": "Qui non è la tua preparazione. Riprova.",
     "lineGoes": "· La linea continua con ",
     "lineGoesPeriod": ".",
     "hint": "Suggerimento",
@@ -608,13 +608,13 @@
       "movesPlayed_other": "{{count}} mosse giocate",
       "thinking": "Stockfish sta pensando…",
       "yourMove": "Tocca a te.",
-      "lastMove": "Hai giocato {{san}} — {{label}}.",
+      "lastMove": "Hai giocato {{san}} ({{label}}).",
       "strengthLabel": "Forza:",
       "back": "Indietro",
       "forward": "Avanti",
       "backShortcut": "Indietro (freccia ←)",
       "forwardShortcut": "Avanti (freccia →)",
-      "reviewingPast": "Stai rivedendo una posizione precedente ({{ply}} / {{total}}) — fai una mossa per creare una variante, oppure premi → per tornare alla posizione attuale.",
+      "reviewingPast": "Stai guardando una posizione precedente ({{ply}} / {{total}}). Fai una mossa per creare una variante, oppure premi → per tornare all'ultima.",
       "resign": "Abbandona",
       "restart": "Ricomincia dalla fine della linea",
       "backToPractice": "Torna alla pratica",
@@ -706,9 +706,9 @@
     "learn": {
       "title": "Impara questa linea",
       "close": "Chiudi",
-      "complete": "Hai ripassato tutta la linea — allenala per fissarla.",
-      "notQuite": "Non è quella mossa — riprova o rivelala.",
-      "yourMovePrompt": "Tocca a te — gioca sulla scacchiera o rivela la mossa.",
+      "complete": "Hai visto tutta la linea. Ora allenala per fissarla.",
+      "notQuite": "Non è quella mossa. Riprova o rivelala.",
+      "yourMovePrompt": "Tocca a te. Gioca la mossa sulla scacchiera o rivelala.",
       "opponentReplies": "L'avversario risponde…",
       "revealMove": "Rivela mossa",
       "restart": "Ricomincia",
@@ -716,10 +716,10 @@
       "addToRepertoire": "Aggiungi al repertorio",
       "adding": "Aggiunta…",
       "drillThisLine": "Allena questa linea",
-      "shareForced": "{{san}} si gioca nel {{pct}}% dei casi — quasi forzata.",
-      "shareRare": "Solo il {{pct}}% gioca {{san}} qui — una scelta insolita da ricordare.",
+      "shareForced": "{{san}} si gioca nel {{pct}}% dei casi qui, quindi è quasi forzata.",
+      "shareRare": "Solo il {{pct}}% dei giocatori sceglie {{san}} qui, quindi vale la pena ricordarla.",
       "shareChoice": "{{san}} si gioca nel {{pct}}% dei casi qui.",
-      "noUserMoves": "Questa linea non contiene tue mosse — nulla da ricordare."
+      "noUserMoves": "Questa linea non contiene nessuna tua mossa, quindi non c'è niente da ricordare."
     },
     "focus": {
       "drillingOneLine": "Allenamento di una linea: {{name}}",
@@ -727,8 +727,8 @@
     }
   },
   "openings": {
-    "title": "Libreria aperture",
-    "subtitle": "Sfoglia {{count}} linee precaricate dal database aperture di Lichess. Scegli una linea per visualizzarla, poi aggiungila a un repertorio per allenarla con ripetizione spaziata.",
+    "title": "Libreria di aperture",
+    "subtitle": "Sfoglia {{count}} linee dal database aperture di Lichess. Scegline una per vederla in anteprima, poi aggiungila a un repertorio per allenarla con la ripetizione spaziata.",
     "searchPlaceholder": "Cerca famiglia o ECO (es. \"Najdorf\", \"B90\")",
     "bothSides": "Entrambi i colori",
     "asWhite": "Col Bianco",
@@ -754,7 +754,7 @@
     "seenShort_other": "{{count}} tue partite",
     "globalPick": "Popolare globalmente",
     "guidedTitle": "Inizia in piccolo",
-    "guidedDescription": "Comincia con cinque linee importanti scelte dalle partite globali e dalle tue. Aggiungine altre solo quando queste sono solide.",
+    "guidedDescription": "Inizia con cinque linee utili, scelte tra quelle più giocate e le tue partite. Aggiungine altre quando ti senti a tuo agio con queste.",
     "startGuided": "Inizia con {{count}} linee consigliate",
     "guidedActive": "{{count}} linee in rotazione",
     "guidedAdded": "{{family}} ora ha {{count}} linee pronte da allenare.",
@@ -770,21 +770,21 @@
     "linesCount_one": "{{count}} linea",
     "linesCount_other": "{{count}} linee",
     "youPlayWhite": "Giochi questa apertura col Bianco. Scegli una variante qui sotto per vedere come prosegue, poi aggiungila al tuo repertorio col Bianco.",
-    "youPlayBlack": "Giochi questa difesa col Nero — il Bianco inizia, e tu rispondi. Scegli una variante qui sotto per vedere come prosegue, poi aggiungila al tuo repertorio col Nero.",
-    "clickVariation": "Clicca una variante per visualizzarla, oppure popola un repertorio con tutte le linee qui sotto in un solo clic.",
+    "youPlayBlack": "Giochi questa difesa con il Nero. Il Bianco muove per primo e tu rispondi. Scegli una variante qui sotto per vedere come prosegue, poi aggiungila al tuo repertorio con il Nero.",
+    "clickVariation": "Clicca una variante per vederla in anteprima, oppure aggiungi tutte le linee qui sotto a un repertorio in una volta.",
     "mainLine": "Linea principale",
     "plyCount": "{{count}} ply",
-    "youAreWhite": "Sei il Bianco. Giochi questa apertura per attaccare con queste mosse.",
-    "youAreBlack": "Sei il Nero. Il Bianco inizia; tu rispondi con questa difesa.",
+    "youAreWhite": "Sei il Bianco. Giochi questa apertura con queste mosse.",
+    "youAreBlack": "Sei il Nero. Il Bianco muove per primo e tu rispondi con questa difesa.",
     "moves": "Mosse",
     "ply": "Ply {{idx}}/{{total}}",
     "addTo": "Aggiungi a {{family}}",
-    "addLineDesc": "Le linee sono raggruppate per famiglia — ogni linea Siciliana finisce nel tuo repertorio della Difesa Siciliana.",
+    "addLineDesc": "Le linee sono raggruppate per famiglia di apertura, quindi ogni linea della Siciliana finisce nel tuo repertorio della Difesa Siciliana.",
     "adding": "Aggiunta in corso…",
     "addLine": "Aggiungi linea",
     "addedNew_one": "Aggiunta {{count}} nuova mossa a \"{{family}}\".",
     "addedNew_other": "Aggiunte {{count}} nuove mosse a \"{{family}}\".",
-    "alreadyIn": "Già in \"{{family}}\" — niente da aggiungere.",
+    "alreadyIn": "Già in \"{{family}}\". Niente da aggiungere.",
     "practice": "Allena →",
     "addingProgress": "Aggiunta {{done}}/{{total}}…",
     "allLinesAdded": "Tutte le linee aggiunte",
@@ -813,8 +813,8 @@
     "retryAnalysis": "Riprova l'analisi",
     "analyzingTitle": "Stockfish sta analizzando questa partita",
     "queuedTitle": "In coda per l'analisi",
-    "analyzingSubtitle": "Lettura in tempo reale dal motore. Il grafico apparirà qui non appena l'analisi è pronta.",
-    "queuedSubtitle": "L'analizzatore prende prima le partite più recenti — dovrebbe partire a momenti.",
+    "analyzingSubtitle": "Output del motore in tempo reale. Il grafico della valutazione apparirà qui al termine dell'analisi.",
+    "queuedSubtitle": "Le partite più recenti vengono analizzate per prime, quindi dovrebbe partire a breve.",
     "moveListEmpty": "Nessuna mossa analizzata ancora.",
     "explorationEvalAfter": "Eval dopo: {{eval}}",
     "engineHadIt": "Il motore la considerava la mossa migliore.",
@@ -843,31 +843,31 @@
     "movePlayed": "{{color}} ha giocato"
   },
   "onboarding": {
-    "tagline": "Importiamo e analizziamo le tue partite.",
+    "tagline": "Importa le tue partite e falle analizzare.",
     "stepUsername": "Nome utente",
     "stepImport": "Scegli import",
     "stepImporting": "Importa",
     "username": {
       "title": "Qual è il tuo nome utente Chess.com?",
-      "subtitle": "Scaricheremo le tue partite tramite l'API pubblica di Chess.com. Niente verrà pubblicato a tuo nome.",
+      "subtitle": "Scaricheremo le tue partite tramite l'API pubblica di Chess.com. Non pubblichiamo mai nulla a tuo nome.",
       "looking": "Cerco corrispondenze probabili…",
       "isThisYou": "Sei tu?",
       "yesItsMe": "Sì, sono io",
       "confirming": "Conferma in corso…",
-      "couldntGuess": "Non sono riuscito a indovinare il tuo handle. Nessun problema — scrivilo qui sotto.",
+      "couldntGuess": "Nome utente non trovato. Scrivilo qui sotto.",
       "orEnter": "Oppure inserisci un nome utente diverso",
       "enter": "Inserisci il tuo nome utente Chess.com",
       "checking": "Controllo…",
       "notFound": "Nessun utente Chess.com trovato con questo nome.",
       "found": "Trovato \"{{username}}\"",
       "useThis": "Usa questo account",
-      "skip": "Salta — lo farò più tardi",
+      "skip": "Salta per ora",
       "step1of2": "Passo 1 di 2",
       "playerCardFallback": "Giocatore Chess.com"
     },
     "preset": {
       "title": "Quanto storico vuoi importare?",
-      "intro": "Importazione per <1>{{username}}</1>. Ogni partita viene analizzata in background dopo l'arrivo — puoi iniziare a usare l'app subito.",
+      "intro": "Importazione per <1>{{username}}</1>. Le partite vengono analizzate in background man mano che arrivano, quindi puoi iniziare a usare l'app subito.",
       "fetchError": "Non è stato possibile caricare gli archivi Chess.com: {{error}}",
       "lastMonth": "Ultimo mese",
       "last3Months": "Ultimi 3 mesi",
@@ -880,15 +880,15 @@
       "approxGameCount_one": "≈{{games}} partita",
       "approxGameCount_other": "≈{{games}} partite",
       "analysisLabel": "Analisi: {{label}}",
-      "calibrating": "Calibrazione velocità del motore in background — le stime potrebbero affinarsi tra un attimo.",
+      "calibrating": "Misurazione della velocità del motore in background. Le stime potrebbero cambiare tra poco.",
       "skipImport": "Salta l'import per ora",
       "startImport": "Avvia import",
       "starting": "Avvio…"
     },
     "importing": {
-      "imported": "Importate!",
+      "imported": "Importazione completata",
       "title": "Sto importando le tue partite…",
-      "intro": "Sto scaricando le partite di <1>{{username}}</1> da Chess.com. L'analisi partirà in background al termine.",
+      "intro": "Sto scaricando le partite di <1>{{username}}</1> da Chess.com. Al termine l'analisi parte in background.",
       "usuallyTakes": "Di solito ci vogliono pochi secondi.",
       "added": "Aggiunte <good>{{added}}</good>",
       "skipped": ", saltati <neutral>{{skipped}}</neutral> duplicati",
@@ -899,21 +899,21 @@
     "back": "← Torna a Chess Coach",
     "title": "Informativa sulla privacy",
     "lastUpdated": "Ultimo aggiornamento: maggio 2026",
-    "intro": "Chess Coach è uno strumento personale di analisi di scacchi che gira nel tuo browser. Abbiamo scelto di tenere questa informativa breve di proposito: non c'è nessun backend di Chess Coach che memorizza i tuoi dati, niente analytics, nessun tracciamento pubblicitario, nessuna condivisione con terze parti.",
+    "intro": "Chess Coach è uno strumento di analisi scacchistica che funziona nel tuo browser. In breve: non c'è nessun server di Chess Coach che memorizza i tuoi dati, niente analytics, nessun tracciamento pubblicitario e nessuna condivisione con terze parti.",
     "webStores": "Cosa salva l'app web",
-    "localData": "<bold>Localmente nel tuo browser (IndexedDB):</bold> le partite che importi, le valutazioni del motore, i tuoi alberi di repertorio e quali problemi della libreria hai risolto. Sulla maggior parte degli account questi dati restano sul dispositivo che li ha prodotti. La libreria di problemi è un dataset pubblico distribuito con l'app — scaricarla non dice nulla su di te.",
+    "localData": "<bold>Localmente nel tuo browser (IndexedDB):</bold> le partite che importi, le valutazioni del motore che Chess Coach calcola per esse, i tuoi alberi di repertorio e quali problemi della libreria hai risolto. Sulla maggior parte degli account questi dati restano sul dispositivo che li ha creati. La libreria di problemi è un dataset pubblico distribuito con l'app, quindi scaricarla non ci dice nulla su di te.",
     "auth": "<bold>Autenticazione:</bold> usiamo Clerk per il login. Clerk conserva il tuo indirizzo e-mail e gli identificatori OAuth (Google, GitHub) che scegli di collegare. Vedi <link>l'informativa di Clerk</link> per cosa archivia su di te.",
-    "profileSync": "<bold>Sync del profilo (Supabase):</bold> rispecchiamo una piccola \"riga di profilo\" (il tuo id utente Clerk e il tuo nome utente Chess.com) su Supabase, così dispositivi diversi riconoscono lo stesso account. Le partite e le analisi <em>non</em> vengono sincronizzate — vivono nell'IndexedDB del dispositivo che le ha prodotte.",
-    "cloudSync": "<bold>Sincronizzazione cloud (Supabase), disattivata per impostazione predefinita:</bold> per gli account espressamente abilitati, Chess Coach replica anche le partite importate, le loro analisi e i risultati dei problemi su Supabase, così sopravvivono alla cancellazione del browser e raggiungono i tuoi altri dispositivi. <em>Non</em> è attiva su un account se non è stato aggiunto a una lista di autorizzazioni nel database, e altrimenti il database rifiuta le scritture. Quando è attiva, la pagina Impostazioni mostra una scheda di sincronizzazione con l'ultima esecuzione e un pulsante manuale. In nessun caso i dati sono condivisi con terzi.",
+    "profileSync": "<bold>Sync del profilo (Supabase):</bold> copiamo una piccola \"riga di profilo\" (il tuo id utente Clerk e il tuo nome utente Chess.com) su Supabase, così i tuoi dispositivi riconoscono lo stesso account. Le partite e le analisi <em>non</em> vengono sincronizzate in questo modo. Restano nell'IndexedDB del dispositivo che le ha create.",
+    "cloudSync": "<bold>Sincronizzazione cloud (Supabase), disattivata per impostazione predefinita:</bold> per gli account in cui è abilitata, Chess Coach copia anche le partite importate, le loro analisi del motore e i risultati dei problemi su Supabase, così sopravvivono alla cancellazione dei dati del browser e arrivano sui tuoi altri dispositivi. <em>Non</em> è attiva a meno che l'account non sia stato aggiunto a una lista di autorizzazioni nel database, e altrimenti il database rifiuta le scritture. Quando è attiva, la pagina Impostazioni mostra una scheda Sincronizzazione cloud con l'ultima esecuzione e un pulsante per sincronizzare manualmente. In ogni caso non viene condiviso niente con nessuno.",
     "extStores": "Cosa salva l'estensione Chrome",
     "extSyncStorage": "<bold>In <code>chrome.storage.sync</code>:</bold> il tuo nome utente Chess.com, l'URL della tua app Chess Coach e un toggle booleano per mostrare o meno il prompt di fine partita. Nient'altro.",
-    "extSees": "<bold>Cosa vede l'estensione:</bold> solo l'URL e il DOM delle schede <code>chess.com</code> (per impostazione predefinita non ha permesso su nessun altro sito). Quando clicchi \"Test connessione\" nella pagina opzioni, chiede un permesso una tantum per recuperare l'URL di Chess Coach configurato — concesso per host con il tuo consenso esplicito.",
-    "extSends": "<bold>Cosa invia l'estensione:</bold> niente, da nessuna parte, mai. Il deep link che costruisce è una navigazione URL nel tuo browser; nessun dato lascia la tua macchina tramite l'estensione.",
+    "extSees": "<bold>Cosa vede l'estensione:</bold> solo l'URL e il contenuto delle schede <code>chess.com</code> (per impostazione predefinita non ha permessi su nessun altro sito). Quando clicchi \"Test connessione\" nella pagina delle opzioni, ti chiede il permesso di accedere all'URL di Chess Coach che hai impostato. Quel permesso vale solo per quel sito.",
+    "extSends": "<bold>Cosa invia l'estensione:</bold> niente. Il link che crea apre solo una pagina nel tuo browser, quindi nessun dato lascia il tuo computer tramite l'estensione.",
     "wontDo": "Cosa non facciamo",
     "noAnalytics": "Niente analytics, pixel di tracciamento o strumenti di session replay.",
     "noAds": "Niente pubblicità. Niente data broker.",
     "noSelling": "Niente vendita, affitto o condivisione delle tue informazioni con terze parti.",
-    "noChessReading": "Nessuna lettura del tuo account <code>chess.com</code> oltre l'archivio pubblico delle partite a cui aderisci tramite nome utente — Chess Coach usa l'API pubblica di Chess.com e non chiede mai la tua password.",
+    "noChessReading": "Nessuna lettura del tuo account <code>chess.com</code> oltre all'archivio pubblico delle partite del nome utente che inserisci. Chess Coach usa l'API pubblica di Chess.com e non chiede mai la tua password.",
     "delete": "Cancellazione dei dati",
     "deleteDesc": "Usa <bold>Impostazioni → Reset</bold> (o lo strumento \"Cancella dati del sito\" del browser) per cancellare l'IndexedDB. Per rimuovere la riga di profilo Supabase, esci da Clerk e scrivi all'indirizzo qui sotto. Le impostazioni archiviate dall'estensione si eliminano rimuovendo l'estensione da <code>chrome://extensions</code>.",
     "contact": "Contatti",
@@ -925,9 +925,9 @@
     "servedFromCache": "serviti dalla cache",
     "sentToStockfish": "inviati a Stockfish",
     "bookSkips": "salti book",
-    "crunchingOpening": "Sto elaborando l'apertura…",
+    "crunchingOpening": "Analisi dell'apertura…",
     "warmingEngine": "Riscaldamento del motore…",
-    "noNeed": "Stockfish non ha avuto bisogno di pensare — le tue partite precedenti gli hanno già insegnato queste posizioni.",
+    "noNeed": "Stockfish non ha ancora dovuto pensare. Queste posizioni erano già state analizzate nelle tue partite precedenti.",
     "stat": {
       "eval": "Eval",
       "depth": "Profondità",
@@ -951,18 +951,18 @@
     "pauseTitle": "Metti in pausa la coda"
   },
   "bootBanner": {
-    "phaseHealing": "Recupero errori bloccati…",
+    "phaseHealing": "Correzione degli errori rimasti in sospeso…",
     "phaseRefreshingOpenings": "Aggiornamento metadati di apertura…",
     "phaseRecomputing": "Ricalcolo classificazioni e accuratezza…",
     "phaseCachingTime": "Caching statistiche di tempo…"
   },
   "profileSync": {
     "differentAccount": "Account diverso rilevato",
-    "differentAccountDesc": "Questo browser è legato a un account precedente ({{boundUserId}}), ma hai effettuato l'accesso come {{attemptedUserId}}. Le tue partite e analisi locali non sono state toccate. Esci per usare l'account originale, oppure apri un profilo browser nuovo / finestra privata per quello nuovo.",
+    "differentAccountDesc": "Questo browser è collegato a un account precedente ({{boundUserId}}), ma hai effettuato l'accesso come {{attemptedUserId}}. Le tue partite e analisi locali non sono state toccate. Esci per usare l'account originale, oppure usa un nuovo profilo del browser o una finestra privata per quello nuovo.",
     "signOut": "Esci"
   },
   "signIn": {
-    "tagline": "Accedi per importare le tue partite, monitorare i tuoi punti deboli e costruire un repertorio che si fissa davvero."
+    "tagline": "Accedi per importare le tue partite, trovare i tuoi punti deboli e allenare le tue aperture."
   },
   "timeClass": {
     "all": "Tutti",
@@ -983,17 +983,6 @@
     "miss": "Mancata",
     "mistake": "Errore",
     "blunder": "Gaffe"
-  },
-  "solutionControls": {
-    "title": "Riproduzione della soluzione",
-    "noMoves": "Nessuna mossa di soluzione da riprodurre.",
-    "firstMove": "Prima mossa (Home)",
-    "prev": "◀ Prec",
-    "prevTitle": "Mossa precedente (←)",
-    "next": "Succ ▶",
-    "nextTitle": "Mossa successiva (→)",
-    "lastMove": "Ultima mossa (End)",
-    "close": "Chiudi"
   },
   "motif": {
     "label": {
@@ -1016,23 +1005,23 @@
       "other": "Altro"
     },
     "explain": {
-      "missedMate": "C'era un matto forzato disponibile — il motore vede una sequenza vincente che chiude la partita.",
-      "allowedMate": "Questa mossa concede un matto forzato — l'avversario ora ha una sequenza che chiude la partita.",
+      "missedMate": "Qui c'era un matto forzato.",
+      "allowedMate": "Questa mossa concede un matto forzato. Ora l'avversario può forzare lo scacco matto.",
       "missedFork": "Era disponibile una mossa che attacca due pezzi importanti contemporaneamente, così l'avversario non può salvarli entrambi.",
       "missedPin": "Un pezzo poteva essere inchiodato a uno più importante, bloccandolo sul posto.",
       "missedSkewer": "Un attacco in linea su un pezzo importante l'avrebbe forzato a muoversi, esponendo il pezzo dietro.",
-      "missedBackRank": "L'ottava avversaria era debole — un pezzo pesante poteva dare matto (o minacciarlo) lungo la prima/ottava traversa.",
+      "missedBackRank": "L'ultima traversa dell'avversario era debole. Una torre o la donna potevano dare matto, o minacciarlo, sull'ultima traversa.",
       "fork": "La risposta avversaria attacca due tuoi pezzi insieme, e non puoi salvarli entrambi.",
-      "pin": "Il tuo pezzo è ora inchiodato a uno più importante dietro — non può muoversi senza perdere materiale.",
+      "pin": "Il tuo pezzo ora è inchiodato a un pezzo di valore maggiore che sta dietro, quindi non può muoversi senza perdere materiale.",
       "skewer": "Un attacco in linea ora forza un tuo pezzo importante a muoversi, perdendo il pezzo dietro.",
-      "backRank": "Il tuo re è bloccato sull'ottava senza case di fuga — i pezzi pesanti possono dare matto lungo la prima/ottava traversa.",
+      "backRank": "Il tuo re è bloccato sull'ultima traversa senza case di fuga, quindi una torre o la donna possono dargli matto lì.",
       "hangingPiece": "Un pezzo è lasciato indifeso, attaccato da più pezzi di quanti lo difendano. L'avversario può prenderlo gratis.",
-      "trappedPiece": "Un pezzo non ha case sicure dove muoversi — sarà perso alla prossima mossa.",
-      "overloadedDefender": "Un difensore deve fare troppi lavori contemporaneamente — proteggerlo da un fronte ne lascia un altro scoperto.",
+      "trappedPiece": "Un pezzo non ha più case sicure e sarà perso alla prossima mossa.",
+      "overloadedDefender": "Un difensore ha troppi compiti. Se ne copre uno, ne lascia scoperto un altro.",
       "discoveredAttack": "Muovere un pezzo scopre un attacco da un pezzo dietro di esso.",
-      "weakKing": "Il tuo re ha perso la copertura di pedoni e diversi attaccanti convergono — la posizione è insicura.",
-      "lostMaterial": "La linea finisce con te in svantaggio di materiale — pezzi cadono senza compensazione sufficiente.",
-      "other": "Un calo di valutazione significativo senza un nome tattico chiaro associato."
+      "weakKing": "Il tuo re ha perso la copertura dei pedoni e diversi pezzi lo stanno attaccando.",
+      "lostMaterial": "La linea finisce con te sotto di materiale, senza alcun compenso.",
+      "other": "Un forte calo della valutazione che non corrisponde a nessuna tattica nota."
     }
   },
   "practiceMode": {
@@ -1042,10 +1031,21 @@
       "repeat-until-perfect": "Ripeti finché perfetta"
     },
     "description": {
-      "sequential": "Riproduce le linee selezionate dall'alto in basso, senza saltarne alcuna.",
-      "random": "Sceglie una linea a caso ogni volta, comprese quelle già fatte.",
-      "repeat-until-perfect": "Continua a ciclare le linee finché ognuna non è stata giocata perfettamente almeno una volta."
+      "sequential": "Gioca le linee selezionate in ordine, dall'alto in basso.",
+      "random": "Sceglie ogni volta una linea a caso, comprese quelle che hai già giocato.",
+      "repeat-until-perfect": "Ripete le linee a ciclo finché non le hai giocate tutte perfettamente almeno una volta."
     }
+  },
+  "solutionControls": {
+    "title": "Riproduzione della soluzione",
+    "noMoves": "Nessuna mossa di soluzione da riprodurre.",
+    "firstMove": "Prima mossa (Home)",
+    "prev": "◀ Prec",
+    "prevTitle": "Mossa precedente (←)",
+    "next": "Succ ▶",
+    "nextTitle": "Mossa successiva (→)",
+    "lastMove": "Ultima mossa (End)",
+    "close": "Chiudi"
   },
   "sync": {
     "cloud": {
@@ -1054,12 +1054,12 @@
       "nnue": "{{nnue}} NNUE",
       "allNnue": "tutte NNUE",
       "classicalPending": "{{n}} ancora con il valutatore classico.",
-      "empty": "Niente caricato ancora — avvia una sincronizzazione.",
+      "empty": "Ancora niente caricato. Avvia una sincronizzazione.",
       "refresh": "Aggiorna",
       "refreshing": "Lettura…",
       "updatedAt": "Aggiornato alle {{at}}",
       "failed": "Impossibile leggere i totali del cloud.",
-      "hint": "Solo conteggi, poche centinaia di byte per lettura. Avanza mentre il worker di analisi sul server lavora; si aggiorna da sé circa una volta al minuto finché la libreria non è tutta analizzata con NNUE."
+      "hint": "Vengono letti solo i conteggi, poche centinaia di byte ogni volta. I numeri salgono mentre il server analizza le tue partite e si aggiornano circa una volta al minuto finché tutto non è analizzato con NNUE."
     },
     "title": "Sincronizzazione cloud",
     "description": "Salva le partite analizzate, le analisi del motore e i tuoi progressi sui problemi su Supabase, così sopravvivono alla cancellazione del browser e ti seguono su un altro dispositivo.",
@@ -1074,7 +1074,7 @@
     "puzzles": "{{up}} risultati dei problemi caricati, {{down}} scaricati",
     "repertoires": "{{up}} repertori caricati, {{down}} scaricati",
     "sessionTotal": "Questa sessione: {{up}} caricati, {{down}} scaricati.",
-    "archiveNote": "La copia nel cloud può solo crescere — cancellare una partita qui non la rimuove là, e una sincronizzazione successiva la riporta. È questo che la rende un backup; se serve, rimuovi dal pannello Supabase.",
+    "archiveNote": "La copia nel cloud può solo crescere. Se elimini una partita qui, non viene rimossa dal cloud, e la sincronizzazione successiva la riporta. Per rimuovere partite dal backup, usa la dashboard di Supabase.",
     "phase": {
       "manifest": "Confronto…",
       "games": "Partite",
