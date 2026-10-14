@@ -45,8 +45,18 @@ export interface EngineBackend {
    * game at the same depth.
    */
   id(): string;
-  /** Same shape as `EnginePool.analyze` and `cachedAnalyze`. */
-  analyze(fen: string, depth: number): Promise<AnalysisResult>;
+  /**
+   * Same shape as `EnginePool.analyze` and `cachedAnalyze`. `signal` is the
+   * game's abort flag: a backend that queues work may drop positions that have
+   * not started once it trips (the browser pool does — see
+   * `EnginePool.analyze`), rejecting them. A backend that never aborts can
+   * ignore it.
+   */
+  analyze(
+    fen: string,
+    depth: number,
+    signal?: { aborted: boolean },
+  ): Promise<AnalysisResult>;
   /** UCI `ucinewgame`, to clear the transposition table between games. */
   newGame(): Promise<void>;
   /** Optional bookkeeping hook for a position skipped as opening book. */
@@ -58,7 +68,7 @@ async function defaultBackend(): Promise<EngineBackend> {
   const [cache, pool] = await Promise.all([import('./cache'), import('./pool')]);
   return {
     id: () => pool.analysisPool().evaluatorId(),
-    analyze: (fen, depth) => cache.cachedAnalyze(fen, depth),
+    analyze: (fen, depth, signal) => cache.cachedAnalyze(fen, depth, signal),
     newGame: () => pool.analysisPool().newGame(),
     noteBookSkip: () => {
       cache.cacheStats.bookSkips++;
@@ -207,7 +217,9 @@ export async function analyzeGamePgn(
   const evalByFen = new Map<string, Promise<AnalysisResult>>();
   const enqueue = (fen: string) => {
     if (evalByFen.has(fen)) return;
-    const p = backend.analyze(fen, depth);
+    // The signal goes down with every position so a preempted game's queued
+    // backlog is dropped, not run ahead of the game that preempted it.
+    const p = backend.analyze(fen, depth, signal);
     p.then(() => {
       tasksDone++;
       if (totalTasks > 0) {

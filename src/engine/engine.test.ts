@@ -12,6 +12,7 @@ vi.mock('./nnue', () => ({
 }));
 
 import { EngineWorker } from './engine';
+import { EnginePool } from './pool';
 
 /**
  * A stand-in for the Stockfish Web Worker that keeps the two UCI properties the
@@ -193,5 +194,51 @@ describe('EngineWorker.analyze — score bookkeeping', () => {
     expect(r.scoreMate).toBeNull();
     expect(r.scoreCp).toBe(120);
     expect(r.depth).toBe(12);
+  });
+});
+
+describe('EnginePool.analyze — an aborted game\'s queued positions are dropped', () => {
+  /**
+   * The analyzer enqueues a whole game up front. Preempting it used to stop
+   * only the per-ply loop, so the abandoned game's backlog still ran ahead of
+   * the game the user had just asked for.
+   */
+  it('rejects tasks that had not started and never sends them to a worker', async () => {
+    const pool = new EnginePool(1);
+    const signal = { aborted: false };
+    const A1 = pool.analyze(START, 8, signal);
+    const A2 = pool.analyze(KRK, 8, signal).then(
+      () => 'ran',
+      (e: Error) => e.message,
+    );
+    const A3 = pool.analyze(MATE_THEN_CP, 8, signal).then(
+      () => 'ran',
+      (e: Error) => e.message,
+    );
+    signal.aborted = true;
+    const B = pool.analyze(KRK, 8);
+
+    // The one already dispatched runs to completion.
+    expect((await A1).bestMoveUci).toBe('e2e4');
+    expect(await A2).toBe('aborted');
+    expect(await A3).toBe('aborted');
+    expect((await B).bestMoveUci).toBe('h1h8');
+
+    const sent = FakeStockfish.instances.flatMap((f) => f.positions);
+    expect(sent).toEqual([START, KRK]);
+    expect(sent).not.toContain(MATE_THEN_CP);
+    expect(pool.isIdle()).toBe(true);
+    pool.terminate();
+  });
+
+  it('leaves tasks without a signal, or with a clear one, alone', async () => {
+    const pool = new EnginePool(1);
+    const signal = { aborted: false };
+    const results = await Promise.all([
+      pool.analyze(START, 8, signal),
+      pool.analyze(KRK, 8),
+    ]);
+    expect(results.map((r) => r.bestMoveUci)).toEqual(['e2e4', 'h1h8']);
+    pool.terminate();
   });
 });

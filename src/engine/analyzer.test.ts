@@ -363,3 +363,20 @@ describe('analyzeGamePgn on a game set up from a position', () => {
     expect(a.moves).toHaveLength(7);
   });
 });
+
+describe('analyzeGamePgn hands its abort signal to the backend', () => {
+  /** What lets the pool drop a preempted game's queued positions. */
+  it('passes the same signal with every position', async () => {
+    const seen: Array<{ aborted: boolean } | undefined> = [];
+    const { backend } = stubBackend();
+    const inner = backend.analyze;
+    backend.analyze = (fen, depth, signal) => {
+      seen.push(signal);
+      return inner(fen, depth, signal);
+    };
+    const signal = { aborted: false };
+    await analyzeGamePgn('sig', SCHOLARS_MATE, 16, undefined, signal, { backend });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((s) => s === signal)).toBe(true);
+  });
+});
