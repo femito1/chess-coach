@@ -1197,9 +1197,9 @@ export async function backfillBrilliantCounts(opts?: {
   // Only stamp when there was something to consider. Stamping on an empty DB
   // marks the work done before the data arrives, so a first boot followed by an
   // import silently skips the backfill forever — the pass is gated by version,
-  // not by row count. Passes 3, 4 and 5 already hold this rule; this one didn't,
-  // which ARCHITECTURE.md flagged as a latent bug for exactly the
-  // fresh-install-then-import path that cloud restore now makes routine.
+  // not by row count — and the fresh-install-then-import path is routine, since
+  // that is what a cloud restore is. Every boot pass holds this rule
+  // (ARCHITECTURE.md § Boot-time passes and version stamps).
   if (doneIds.length > 0) {
     await updateSettings({
       lastBrilliantBackfillVersion: BRILLIANT_BACKFILL_VERSION,

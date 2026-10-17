@@ -24,7 +24,7 @@ detail.
 | Games | `/games` | The library, filtered/paged; accuracy and brilliancy badges. |
 | Review | `/review/:id` | Eval graph, per-move classification (blunder / mistake / inaccuracy / miss / good / best / brilliant / book), motifs, clock use, play-it-out vs Stockfish. |
 | Dashboard | `/dashboard` | Rating + accuracy trends, win rate by opening family, **prep gaps** (openings you lose in that aren't in a repertoire), study cards. |
-| Puzzles | `/puzzles` | 191,250 vetted puzzles from the Lichess open DB (CC0). Tabs: Recommended / Easy / Medium / Hard / All. |
+| Puzzles | `/puzzles` | 191,250 vetted puzzles from the Lichess open DB (CC0). Views: **Train** (new puzzles by theme, or from your own games' mistakes, pitched relative to your puzzle rating) / **Review** (missed puzzles on a spaced schedule) / **Progress**. |
 | Openings | `/openings` | ~3,700 named lines (Lichess `chess-openings`, MIT). Browse by family, preview, add lines or a whole family to a repertoire. |
 | Repertoire | `/repertoire` | Family-bound repertoires; SM-2 spaced repetition (`/repertoire/:id/train`). |
 | Drill | `/repertoire/:id/drill` | Repertoire ∪ library lines in one picker, tiered Easy / Medium / Hard (family-relative), with a **Learn** active-recall step that hands straight into drilling that same line. |
@@ -38,8 +38,9 @@ Two things run outside the page:
 - **Off-laptop worker** (`scripts/worker/`) — an hourly Cloud Run job that
   imports new Chess.com games and analyzes them with native Stockfish at depth 18,
   delivering both through cloud sync, so a game is reviewed within the hour
-  without you opening the app. It runs the last image pushed: **redeploy after changing any
-  `src/` code it reuses**. See `scripts/worker/README.md`.
+  without you opening the app. It runs the last image pushed: **redeploy after
+  changing any `src/` code it reuses**, with the command in
+  `scripts/worker/README.md` § Redeploying.
 
 ## Stack
 
@@ -101,7 +102,7 @@ Keyboard: `←`/`→` step through moves, `Home`/`End` jump to start/end.
 | `npm run openings:build` | Regenerate `src/data/openings.generated.ts` from the committed TSVs. |
 | `npm run openings:snapshot` | Re-measure line popularity from the Lichess explorer (slow, rate-limited). |
 | `npm run worker:build` / `worker:verify` / `worker:run` | Off-laptop analysis worker. **Always `worker:verify` before a bulk run.** |
-| `npm run worker:deploy` | Deploy the worker as a scheduled Cloud Run job so analysis happens automatically and off your laptop. `-- --dry-run` shows every command. See `scripts/worker/README.md`. |
+| `npm run worker:deploy` | Deploy (or redeploy) the worker as a scheduled Cloud Run job so analysis happens automatically and off your laptop. `-- --dry-run` shows every command. A bare redeploy can target the wrong project, user or timezone — use the command in `scripts/worker/README.md` § Redeploying. |
 | `npm run extension:build` | Build the Chrome extension zip. |
 | `npm run extension:screenshots` | Regenerate the extension's store screenshots. |
 | `npm run preview` | Serve a built `dist/`. |
@@ -116,56 +117,41 @@ each case.
   `public/stockfish/` and it is served same-origin. The net is gitignored; `npm
   install` supplies it.
 - **In production**, Cloudflare Pages refuses any single asset over 25 MiB, so
-  the net cannot live in `dist/` on that host — permanently, not as a
-  misconfiguration to be fixed. It is served from an R2 bucket instead, with
-  `VITE_NNUE_NET_URL` in `.env.production` pointing the app there. Setting that
-  variable also makes `prebuild` **skip** staging, so the deployed `public/`
-  stays under the cap.
+  the net is served from an R2 bucket, with `VITE_NNUE_NET_URL` in
+  `.env.production` pointing the app there. Setting that variable also makes
+  `prebuild` **skip** staging, so the deployed `public/` stays under the cap.
+  DEPLOY.md § "The NNUE network and the 25 MiB asset cap" owns the hosting
+  setup, verification (`npm run nnue:upload -- --verify-only`) and the
+  failure modes — including why preview deploys run classical.
 
-**Phones are the exception, deliberately.** NNUE's untouched default is off
-there, and the worker pool clamps to one, because ~340 MB of WASM heap per worker
-killed a real iPhone. Both are per-device localStorage toggles, so a phone that
-opts in keeps NNUE. ARCHITECTURE.md § NNUE has the detection and § Memory on
-mobile has what is still unfixed.
-
-Two things that look like faults and are not:
-
-- In production, `/stockfish/nn-*.nnue` on the app's own origin answers with
-  SPA-fallback HTML. The net is deliberately not there.
-- **Preview deploys run the classical evaluator.** The bucket's CORS policy
-  allows only the production hostname and `http://localhost:5173`, while preview
-  builds get per-branch hostnames. Pass `--origin=` to `npm run nnue:setup` to
-  add one.
-
-If the net fails to load for any other reason, a `HEAD` probe catches it and the
-engine falls back to classical with a console warning instead of dying —
-Stockfish 16 `exit()`s at the first `go` when `Use NNUE` is on and no net
-arrived, so that probe is load-bearing. Analyses record which evaluator produced
-them (`stockfish-16-nnue` / `stockfish-16-classical`), and cloud sync ranks the
+If the net fails to load, a `HEAD` probe catches it and the engine falls back to
+classical with a console warning instead of dying — Stockfish 16 `exit()`s at the
+first `go` when `Use NNUE` is on and no net arrived, so that probe is
+load-bearing. Analyses record which evaluator produced them
+(`stockfish-16-nnue` / `stockfish-16-classical`), and cloud sync ranks the
 evaluator **above** depth: a deeper classical search is a weaker judge looking
 further, not a better analysis.
 
 The real cost of NNUE is memory, not bandwidth — ~340 MB RSS per engine worker
 against ~125 MB classical — so the pool shrinks on low-memory devices and
-Settings carries a per-device toggle.
-
-`npm run nnue:upload -- --verify-only` checks the live bucket end to end. Run it
-after any bucket change and after any Stockfish upgrade, since the net's
-filename carries its own hash and a stale object then 404s under the new name.
-DEPLOY.md § "The NNUE network and the 25 MiB asset cap" and ARCHITECTURE.md
-§ NNUE have the rest.
+Settings carries a per-device toggle. **Phones are the exception, deliberately**:
+that heap is enough for Safari to kill the tab on an iPhone, so NNUE's untouched
+default is off there and the worker pool clamps to one. Both are per-device
+localStorage toggles, so a phone that opts in keeps NNUE. ARCHITECTURE.md § NNUE
+has the detection and § Memory on mobile has what is still unfixed.
 
 ## Cloud sync
 
 Optional, and gated **per account by a row in the Supabase
-`cloud_sync_allowlist` table, enforced in RLS**. There is no in-app enrolment;
-enrol from the Supabase dashboard (`SETUP_AUTH.md` §5). Unenrolled accounts
-run fully local and the Settings card stays hidden.
+`cloud_sync_allowlist` table, enforced in RLS**. There is no in-app enrolment:
+an account is enrolled by its literal Clerk user id in `supabase/cloud-sync.sql`,
+run from the Supabase SQL editor (`SETUP_AUTH.md` §5). Unenrolled accounts run
+fully local and the Settings card stays hidden.
 
 It mirrors games, analyses, puzzle attempts and opening repertoires (tree, SRS
 cards and line stats) as an accumulating archive.
 Read ARCHITECTURE.md § Cloud sync before changing anything in
-`src/features/sync/` — three ordering rules there are load-bearing.
+`src/features/sync/` — its three invariants are load-bearing.
 
 ## Docs
 
@@ -185,7 +171,7 @@ missing.
 ## Self-hosting
 
 `npm run build` produces a static `dist/`. Serve it with any static file
-server, but two response-header groups are load-bearing and shipped as
+server, but three response-header groups are load-bearing and shipped as
 `public/_headers` (Cloudflare Pages format; Netlify reads the same file,
 Vercel needs a `vercel.json`):
 
@@ -195,9 +181,9 @@ Cross-Origin-Embedder-Policy: require-corp
 ```
 
 Without cross-origin isolation there is no `SharedArrayBuffer`, and the engine
-falls back to the single-threaded Stockfish build — **~11× slower at NNUE**
-(measured 9.7 s vs 110 s on the same game at depth 18), not a mild degradation.
-Settings surfaces a warning when that happens.
+falls back to the single-threaded Stockfish build — **~11× slower at NNUE**,
+a cliff rather than a mild degradation. Settings surfaces a warning when that
+happens.
 
 The second group is `Cache-Control: immutable` on `/stockfish/*` and
 `/puzzles/*`, which makes the 38.3 MiB NNUE net and the 18 MB puzzle corpus a
@@ -207,12 +193,14 @@ host that only no-stores `/` will serve stale bundles on `/games`, `/settings`
 and the rest. `src/app/routeHeaders.test.ts` guards the list.
 
 Self-hosting somewhere without a per-asset size cap is the one case where the
-NNUE net can just live in `dist/`: leave `VITE_NNUE_NET_URL` unset and
-`prebuild` stages it. Cloudflare Pages caps assets at 25 MiB and therefore
-cannot — see DEPLOY.md § The NNUE network.
+NNUE net can just live in `dist/`: remove the `VITE_NNUE_NET_URL` line from the
+committed `.env.production` and `prebuild` stages it. (An empty environment
+variable does not override the file — the build scripts treat it as unset and
+fall through to `.env.production`.) Cloudflare Pages caps assets at 25 MiB and
+therefore cannot — see DEPLOY.md § The NNUE network.
 
-`public/_redirects` provides the SPA fallback. Read the comments in all three
-files before editing them.
+`public/_redirects` provides the SPA fallback. Read the comments in both files
+before editing them.
 
 ## Regenerating committed data
 
@@ -223,5 +211,6 @@ the build", not "fix the test".
 - **Openings** — `npm run openings:build` rebuilds `src/data/openings.generated.ts`
   from `data/openings/*.tsv`. `.github/workflows/openings-refresh.yml` does this
   monthly and pushes to `main`. ARCHITECTURE.md § Openings data refresh.
-- **Puzzles** — `npm run puzzles:build` rebuilds `public/puzzles/<buildId>/`
-  and `src/data/puzzles.meta.generated.ts`. ARCHITECTURE.md § Puzzles.
+- **Puzzles** — `npm run puzzles:build` rebuilds `public/puzzles/<buildId>/`,
+  `src/data/puzzles.meta.generated.ts` and
+  `src/data/puzzleThemeCounts.generated.ts`. ARCHITECTURE.md § Puzzles.

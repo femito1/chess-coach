@@ -11,7 +11,8 @@ Contents: [Data model](#data-model) ·
 [Openings](#openings) · [Openings data refresh](#openings-data-refresh) ·
 [Storage durability](#storage-durability) · [Cloud sync](#cloud-sync) ·
 [Off-laptop analysis worker](#off-laptop-analysis-worker) ·
-[UI conventions](#ui-conventions) · [Deployment](#deployment)
+[UI conventions](#ui-conventions) · [Deployment](#deployment) ·
+[Open items](#open-items)
 
 ## Data model
 
@@ -33,11 +34,10 @@ Everything is client-side: Dexie over IndexedDB (`src/db/schema.ts`, DB name
 Two schema rules:
 
 - **A version bump is only needed to change stores or indexes.** Adding a field
-  to `Settings` or `Game` needs no bump — many current fields shipped without
-  one, `Game.requeuedAt` most recently. Bump only for a new store, a new index,
-  or an `upgrade()` hook. (`v11` bumped for an optional `Settings` field anyway,
-  purely so the addition showed up in the schema history. Don't read that as the
-  rule; it isn't.)
+  to `Settings` or `Game` needs no bump (`Game.requeuedAt` is one such field).
+  Bump only for a new store, a new index, or an `upgrade()` hook. `v11` bumped
+  for an optional `Settings` field purely so it showed in the schema history;
+  don't read that as the rule.
 - **Never drop a store to tidy up.** Dexie destroys its rows irreversibly. The
   two dead stores above are kept for exactly that reason. `v10` is the worked
   example of a deliberate wipe: its `upgrade()` clears the four repertoire
@@ -46,9 +46,9 @@ Two schema rules:
 **Write `settings` only through `updateSettings`.** It is one row patched by many
 independent writers — every boot pass stamps a version marker into it — and
 `updateSettings` does its read and write in one rw transaction. A hand-rolled
-`getSettings()` then `db.settings.put()` loses concurrent patches (11 of 12, in
-`settings-concurrent-update.mjs`), which shows up as a toggle the user flipped
-quietly reverting.
+`getSettings()` then `db.settings.put()` loses concurrent patches, which shows up
+as a toggle the user flipped quietly reverting. Pinned by
+`settings-concurrent-update.mjs`.
 
 **`games` carries denormalized fields derived from `analyses`.** Move
 classifications live in `analyses`, keyed by game id. The Games table and
@@ -59,7 +59,7 @@ PGN and per-move data. So these are cached on the `Game` row:
 |---|---|
 | `accuracy` | queue on analysis · recompute pass · `backfillAccuracies` · cloud sync on every pulled analysis |
 | `userTimeSec` / `userPlyCount` | queue on analysis · `backfillUserTimeStats` |
-| `brilliantCount` | queue on analysis · recompute pass · `backfillBrilliantCounts` |
+| `brilliantCount` | queue on analysis · recompute pass · `backfillBrilliantCounts` · cloud sync on every pulled analysis |
 
 Adding another cached field means touching all of its writers, plus a backfill
 for already-analyzed games. Distinguish `undefined` ("never computed") from `0`
@@ -76,7 +76,8 @@ analyzer write, which both re-renders and busts downstream `useMemo`s.
 `startAnalysisQueue()` (`src/engine/queue.ts`) runs housekeeping on
 `AppLayout` mount, once per document. Each pass is wrapped in `bootStep()` so
 one failure logs and continues, and each yields to the browser between chunks
-of 60 games.
+of 60 games (20 on a phone for the recompute, brilliant-count and accuracy
+passes, via `recomputeChunkSize`).
 
 | order | pass | gate | constant (value) |
 |---|---|---|---|
@@ -92,34 +93,29 @@ of 60 games.
 Every constant lives in `src/db/queries.ts` except `RECOMPUTE_VERSION`, which is
 defined in `src/db/analysisVintage.ts` and re-exported by `queries.ts`:
 `analysisVintage.ts` has no Dexie import, so `analyzer.ts` — and through it the
-Node worker — can stamp rows with it. Its last bump (to 4) was for a
-`detectMotifs` output change, which is exactly what the expensive pass is for.
+Node worker — can stamp rows with it. A `detectMotifs` / `classifyMove` output
+change is what a bump is for.
 
 The analyzer run loop starts *before* passes 2-8, so a fresh import is never
 held up by housekeeping. `BootBanner` only renders if the passes are still
-running 400 ms in, so a warm boot shows nothing.
+running 400 ms in (`BOOT_BANNER_DELAY_MS`), so a warm boot shows nothing.
 
 **Never bump `RECOMPUTE_VERSION` just to stamp a new field.** Pass 4 re-runs
 `classifyMove` + `detectMotifs` + `detectPhase` over every move of every
-analyzed game and rewrites `analyses`. That is seconds-to-minutes of blocking
-main-thread work; bumping it to add a cheap counter froze the app on reload. A
-field derivable from data already in `analyses` gets its own pass with its own
+analyzed game and rewrites `analyses`. That is seconds-to-minutes of
+main-thread work, enough to make the app look frozen on reload. A field
+derivable from data already in `analyses` gets its own pass with its own
 stamp — `backfillBrilliantCounts` (~10 ms for 40 games) is the worked example.
 The expensive pass may *refresh* such a field as a rider, but must never be the
 reason it runs.
 
 **The pass is resumable, and has to be.** It stamps `lastRecomputeVersion` only
-after walking the *whole* library, so for a large library a reload part-way
-through used to start again at the first game. That is a trap with teeth: the
-pass takes minutes on a couple of thousand games and blocks the main thread
-between chunks, so the app looks frozen, and the natural response — reload —
-was precisely what guaranteed it could never finish. One user sat through
-20–30 minutes of it after a cloud restore.
-
-So each chunk now writes `recomputeCursor` / `recomputeCursorVersion` to
-settings, and a run resumes after the cursor instead of from zero; a reload
-costs at most one chunk of redone work. Three rules the cursor carries, all
-pinned in `recompute-skip.mjs` phases 6–8:
+after walking the *whole* library, and on a couple of thousand games it takes
+minutes during which the app looks frozen — so the natural response, reload,
+would otherwise guarantee it never finishes. Each chunk writes
+`recomputeCursor` / `recomputeCursorVersion` to settings, and a run resumes
+after the cursor; a reload costs at most one chunk of redone work. Three rules
+the cursor carries, all pinned in `recompute-skip.mjs` phases 6–8:
 
 - **It is only honoured for the version that wrote it.** After a rules change
   the old prefix was classified under the old rules and must be redone — which
@@ -131,8 +127,8 @@ pinned in `recompute-skip.mjs` phases 6–8:
   contract should not rest on that staying true.
 
 A game imported *after* a partial run that sorts before the cursor is skipped —
-but that was already true without resumption, because `doneIds` is snapshotted
-at the start and the completion stamp suppresses later boots. Freshly analyzed
+but that is true without resumption too, because `doneIds` is snapshotted at
+the start and the completion stamp suppresses later boots. Freshly analyzed
 games get their classification from the analyzer; this pass exists only to
 re-derive *old* rows under new rules.
 
@@ -140,10 +136,9 @@ re-derive *old* rows under new rules.
 cheap.** `Analysis.recomputeVersion` records the rules vintage of a row's
 derived fields, and the pass reprocesses only rows below the current version.
 This matters because the mirror stores whole `Analysis` blobs: pulled rows
-already carry correct `classification` / `motifs` / `accuracy`, yet an evicted
-device loses its settings row too, so the DB-wide stamp is gone and without the
-per-row check the pass re-derived a library that was already right — minutes of
-blocked main thread for no change at all.
+already carry correct `classification` / `motifs`, yet an evicted device loses
+its settings row too, so the DB-wide stamp is gone and without the per-row check
+the pass would re-derive a library that is already right.
 
 Three parts make that work, and all three are needed:
 
@@ -152,10 +147,10 @@ Three parts make that work, and all three are needed:
   it sets `recomputeVersion` on the row it returns; `saveAnalysis` stamps again,
   to keep any other producer honest. The stamp has to be on the producer
   because the off-laptop worker writes straight to `cloud_analyses` and never
-  calls `saveAnalysis` — its unstamped rows read as vintage 0, so every restore
-  reclassified and re-pushed the whole server-analyzed library. Cloud *pulls*
-  write `db.analyses` directly and must never stamp — they carry whatever
-  vintage the producing device recorded.
+  calls `saveAnalysis`; an unstamped row reads as vintage 0 and every restore
+  would reclassify and re-push it. Cloud *pulls* write `db.analyses` directly
+  and must never stamp — they carry whatever vintage the producing device
+  recorded.
 - **The pass stamps even when nothing changed.** A restored row recomputes to
   identical values, so a changed-only write would leave every one of them
   unstamped and the next restore would redo the library again. Recording "these
@@ -183,17 +178,15 @@ Pinned by `recompute-skip.mjs` phase 5.
 
 **A pass that found nothing to do must not stamp.** Otherwise a first boot on
 an empty DB marks the work done and the pass never runs on the data that
-arrives afterwards. All of passes 3-8 hold this now; `backfillBrilliantCounts`
-used to stamp unconditionally, which cloud restore turned from a latent bug into
-a live one — a wiped device boots empty, stamps, and then never counts
-brilliancies on the library that arrives seconds later.
+arrives afterwards — which cloud restore makes the routine case: a wiped device
+boots empty, then receives its library seconds later. Passes 3-8 all hold this.
 
 **A pass writes only the fields it derives, and never puts back a row it read
 earlier.** Every pass runs at boot beside the analyzer and cloud sync, and yields
 between chunks, so a row read at the top of a chunk may have been rewritten by
 the time the chunk writes: the analyzer sets `analysisStatus`, "Re-analyze all"
 deletes the analysis and sets the game `pending`, a pull replaces an analysis
-with a better one. A `bulkPut` of the rows as read silently reverted all of
+with a better one. A `bulkPut` of the rows as read silently reverts all of
 those. So game-row passes patch with `bulkUpdate`, and
 `backfillRecomputeVersion` uses `modify`, whose check and write see the same row
 in one transaction. The recompute pass cannot patch — it rewrites the whole
@@ -203,15 +196,16 @@ writes only those still the same search it reclassified (`isSameSearch` in
 search; the derived fields are what the pass rewrites, so they cannot be part of
 it). A row replaced or deleted meanwhile is skipped, along with its game patch.
 
-**The recompute pass OWNS `MoveEval.classification`, `.motifs`, `.accuracy`, and
-the after-move fields of a terminal position.** It re-derives them from each
-move's *stored FENs* on every boot where the stamp is behind — it is not a
-one-time backfill. The terminal-position repair
-(`repairTerminalMoveEval`) is the one place it rewrites an *engine-derived*
-field: `winrateAfter` / `evalCpAfter` / `mateInAfter` for a `fenAfter` with no
-legal move. It can, because the truth there follows from the FEN alone, and it
-must, because otherwise a library analyzed before that fix could only be
-corrected by re-running Stockfish over all of it. Consequences:
+**The recompute pass OWNS `MoveEval.classification`, `.motifs`, and the
+after-move fields of a terminal position.** It re-derives them from each move's
+*stored FENs* and winrates on every boot where the stamp is behind — it is not a
+one-time backfill — refreshes the game's cached `accuracy` / `brilliantCount`
+from the result, and fills `phase` / `clockAfter` / `timeSpent` where absent. The terminal-position repair
+(`repairTerminalMoveEval`, last move only) is the one place it rewrites an
+*engine-derived* field: `winrateAfter` / `evalCpAfter` / `mateInAfter` for a
+`fenAfter` with no legal move. It can, because the truth there follows from the
+FEN alone, and it must, because otherwise a library analyzed without that rule
+could only be corrected by re-running Stockfish over all of it. Consequences:
 
 - A test or script that seeds synthetic `analyses` rows will have its motifs
   overwritten (placeholder FENs reclassify to something else, and a move that
@@ -230,10 +224,10 @@ corrected by re-running Stockfish over all of it. Consequences:
 ## Engine
 
 `EngineWorker` (`src/engine/engine.ts`) wraps one Stockfish WASM worker;
-`EnginePool` runs several. The singleton `engine` export is for single-position
-consumers (live eval) and is refcounted by `useLiveEval`; `analysisPool()` is
-for whole-game analysis. Free-play uses its own separate worker so the opponent
-search doesn't fight live eval.
+`EnginePool` (`src/engine/pool.ts`) runs several. The singleton `engine` export
+is for single-position consumers (live eval) and is refcounted by `useLiveEval`;
+`analysisPool()` is for whole-game analysis. Free-play uses its own separate
+worker (`freePlayEngine.ts`) so the opponent search doesn't fight live eval.
 
 **Pool slots are released by worker identity, never by captured index.**
 `setMaxWorkers()` splices `workers`/`busy` (the visibility throttle calls it
@@ -260,33 +254,38 @@ dozen scored plies, enough to take a 74 game to 45. The move list still says
 feels wrong, on roughly a third of a blitz library. `mateToCp(0)` returns the
 mated side's floor for the same reason: `mate 0` means "already mated".
 
+**Ask `terminalOutcome` once per game, of the final position only.** An earlier
+position with no legal move would have ended the game, and the check costs a full
+legal-move generation — ~74× what classifying a quiet ply costs, so per ply it
+adds minutes to the recompute pass on a large library. Keep it as the
+`isCheckmate()` / `isStalemate()` pair: `moves().length === 0` reads simpler and
+measured 3× slower, because public `moves()` builds a SAN string per move.
+
 **A stopped search's output still arrives, so lines are attributed by count,
 never by who is listening.** `stop` is answered with the stopped search's own
 `bestmove`, and any `info` lines posted before the worker saw the `stop` are
-still in the channel — both land *after* the next job has attached its listener.
-Measured against native Stockfish 16: `go depth 40`, `stop`, a new position and
-`go depth 8` prints the old search's `info … pv e2e4` and `bestmove e2e4` first.
-Taking "whatever arrives now" handed every call the *previous* call's result,
-permanently one behind, and `rememberLiveEval` cached it under the new FEN. UCI
-guarantees exactly one `bestmove` per `go` and Stockfish starts a search only
-after printing the last one's, so `EngineWorker` counts `go`s sent and
-`bestmove`s seen (`searchesStarted` / `searchesFinished`, counted in `noteLine`
-so a cancelled job's `bestmove` is seen too) and a job accepts only the lines
-after the (N−1)th `bestmove` — exact, with no round trip before each search.
-Within a job, an `info` line carrying a score replaces **both** `scoreCp` and
-`scoreMate`: a plain spread kept the stale half, so a mate seen at depth 12
-survived a depth-18 `score cp`, and every caller reads `scoreMate` first. The
-Node worker has the mirror problem after a timeout — see § Off-laptop analysis
-worker.
+still in the channel — both land *after* the next job has attached its listener
+(measured against native Stockfish 16: `go depth 40`, `stop`, a new position and
+`go depth 8` prints the old search's `info … pv e2e4` and `bestmove e2e4` first).
+Taking "whatever arrives now" would hand every call the *previous* call's result,
+and `rememberLiveEval` would cache it under the new FEN. UCI guarantees exactly
+one `bestmove` per `go` and Stockfish starts a search only after printing the
+last one's, so `EngineWorker` counts `go`s sent and `bestmove`s seen
+(`searchesStarted` / `searchesFinished`, counted in `noteLine` so a cancelled
+job's `bestmove` is seen too) and a job accepts only the lines after the (N−1)th
+`bestmove` — exact, with no round trip before each search. Within a job, an
+`info` line carrying a score replaces **both** `scoreCp` and `scoreMate`: a plain
+spread would keep the stale half, so a mate seen at depth 12 would survive a
+depth-18 `score cp`, and every caller reads `scoreMate` first. The Node worker
+has the mirror problem after a timeout — see § Off-laptop analysis worker.
 
 **A stored mate is from the side to move in its FEN — not the mover, not
 White.** `mateInBefore` is the mover's (side to move in `fenBefore`);
 `mateInAfter` is the *opponent's* (side to move in `fenAfter`): positive means the
 opponent mates, so the move allowed it, and `0` means the mover just delivered
 mate. That is Stockfish's own convention, and stored rows, the eval bar and the
-terminal repair already rely on it, so it is converted at the reader, never in
-storage: `allowedMate` tests for a **positive** `mateInAfter` (it used to want a
-negative one, so a blunder into mate was never tagged), and display goes through
+terminal repair rely on it, so it is converted at the reader, never in storage:
+`allowedMate` tests for a **positive** `mateInAfter`, and display goes through
 `mateForWhite` so the move list's mate reads from White's side like the
 centipawn figure beside it.
 
@@ -295,25 +294,26 @@ centipawn figure beside it.
 - *"Walked into"* motifs (`fork`, `pin`, `skewer`, `backRank`) play the
   **opponent's best reply** on `fenAfter` (`replyUci`), never `bestUci` — that
   is the mover's move from the position before, and playing it on `fenAfter`
-  moves the wrong side's piece, so chess.js threw and none was ever tagged.
-  `replyUci` is the next ply's `bestMoveUci`, passed only when that ply's
-  `fenBefore` equals this `fenAfter` (and, in the analyzer, that ply is not a book
-  ply), because that is all the recompute pass can read back — tagging
-  differently in the two would make a game's motifs depend on whether it was
-  ever recomputed.
+  moves the wrong side's piece. `replyUci` is the next ply's `bestMoveUci`,
+  passed only when that ply's `fenBefore` equals this `fenAfter` (and, in the
+  analyzer, that ply is not a book ply), because that is all the recompute pass
+  can read back — tagging differently in the two would make a game's motifs
+  depend on whether it was ever recomputed.
 - *Back rank* means a real rook/queen mate on that rank, threatened or
   delivered, against the **side to move's** king boxed in by its own pieces —
-  not "a king behind pawns", which was true of nearly every castled position.
+  not "a king behind pawns", which is true of nearly every castled position.
 - *Pins and skewers* count only lines that did not exist before the move, so a
   pin standing since move 6 does not tag every later mistake.
 - *Fork* targets are undefended only if `chess.js` `attackers()` finds no
-  defender; a move list never lands on its own side's piece, so counting moves
-  found every target undefended.
+  defender; no legal move lands on its own side's piece, so a move-list test
+  finds every target undefended.
+
+Known gaps are listed under § Open items.
 
 **A game must start from a position the analysis can represent.**
 `analyzeGamePgn` replays from the game's own first position
-(`history[0].before`, which honours a `[SetUp "1"] [FEN …]` header) — replaying
-from `new Chess()` failed every set-up game on its first move. A **White-to-move**
+(`history[0].before`, which honours a `[SetUp "1"] [FEN …]` header); replaying
+from `new Chess()` fails every set-up game on its first move. A **White-to-move**
 set-up start is analysed normally. Two cases are refused with a sentence in
 `analysisError` (deterministic, so it must not match `requeueStaleErrors`'
 transient patterns): a non-Standard `[Variant]`, because chess.js and Stockfish
@@ -327,29 +327,22 @@ deep link, which names the variant in its error rather than claiming the game
 was not found. The analyzer check catches rows imported before the filter, and
 any other source.
 
-**Ask `terminalOutcome` once per game, of the final position only.** An earlier
-position with no legal move would have ended the game, and the check costs a full
-legal-move generation — ~80× what classifying a quiet ply costs. Per ply, it made
-the boot recompute pass minutes slower on a large library. Keep it as the
-`isCheckmate()` / `isStalemate()` pair: `moves().length === 0` reads simpler and
-measured 3× slower, because public `moves()` builds a SAN string per move.
-
-**Game accuracy is calibrated against Chess.com's own figures** (2026-10-14).
-`CURRENT_ACCURACY_MODEL` is the harmonic mean of per-move accuracies — Lichess's
-curve with a steeper decay (0.074) — each floored at 24, book plies counted as
-perfect. Fitted on 938 colour-scores from this user's games (~700-1000 rated,
-all Stockfish 16 NNUE depth 18) that carry Chess.com `accuracies`: 5-fold
-cross-validated MAE 4.24 (was 9.18; bias −6.8 → +0.9), 95% within ±10, and 4.4
-on Aug-Oct when fitted on Jan-Jul only. The old ×1.5 gap stretch, fitted on
-Carlsen/Nakamura, refits to ×1.0 once the decay is free. Residual: ~5 high where
-Chess.com scores below 60. The fitting data: Chess.com publishes `accuracies` on
-~20% of this user's games, unauthenticated, at
+**Game accuracy is calibrated against Chess.com's own figures.**
+`CURRENT_ACCURACY_MODEL` (`analyzer.ts`) is the harmonic mean of per-move
+accuracies — Lichess's curve with a steeper decay (0.074) — each floored at 24,
+book plies counted as perfect, no gap stretch. Fitted on 938 colour-scores from
+this user's games (~700-1000 rated, all Stockfish 16 NNUE depth 18) that carry
+Chess.com `accuracies`: 5-fold cross-validated MAE 4.24 (9.18 for the previous
+model; bias −6.8 → +0.9), 95% within ±10, and 4.4 on Aug-Oct when fitted on
+Jan-Jul only. A gap stretch (a ×1.5 one fitted on Carlsen/Nakamura) refits to
+×1.0 once the decay is free. Residual: § Open items. The fitting data: Chess.com
+publishes `accuracies` on ~20% of this user's games, unauthenticated, at
 `api.chess.com/pub/player/<user>/games/YYYY/MM`; the matching move lists are in
 `cloud_analyses`. **A model change is an `ACCURACY_BACKFILL_VERSION` bump** (the
 cheap `backfillAccuracies` pass — stored winrates only), **not** a
 `RECOMPUTE_VERSION` bump. The Cloud Run worker computes accuracy with its own
-bundled copy, but only into `cloud_games`, which clients never trust for it (they
-re-derive on every pulled analysis) — so redeploying it keeps that cached copy
+bundled copy, but only into `cloud_games`, which clients never trust for it
+(§ Cloud sync) — so redeploying it after a model change keeps that cached copy
 tidy rather than fixing anything users see.
 
 **`cancelAnalysis()` on the shared singleton kills whatever is running, whoever
@@ -360,30 +353,6 @@ so one idle consumer can't kill another's search.
 sits at the top of the run loop, so the current analysis finishes and only the
 *next* game is withheld. The store still reports `running: true` with a
 `currentGameId` while paused.
-
-**A cloud analysis for a game this device never analyzed must still pull.** The
-requeue guard in `diffAnalyses` originally suppressed any pull while the local game
-was `pending` or `running`, because `requeueGame` deletes the local analysis and
-sets `pending` — and pulling would undo that. That was sound while every writer
-analyzed its own games. The off-laptop worker broke it completely: a
-never-analyzed game is *also* `pending`, and once a server analyzes games the
-laptop never touched that is the normal case. Observed in production — 1 785 games
-analyzed at depth 18 in the cloud, all `pending` locally, **zero** analyses pulled,
-while the laptop re-analyzed the whole library. `Game.requeuedAt` is the
-discriminator: no stamp means nothing to protect, a stamp older than the remote
-analysis means someone did the work better elsewhere.
-
-**Pulling an analysis also settles the game row.** Writing the analysis alone left
-`analysisStatus: 'pending'`, so the local queue re-analyzed a game whose analysis
-had just arrived and clobbered depth-18 NNUE with a shallower local pass — which
-the next sync then pulled back. `accuracy` and `brilliantCount` are recomputed from
-**every** pulled analysis whose game is local — not only the ones being settled —
-and never trusted from `cloud_games`. That row is only fetched when the *game* is a
-pull candidate, and its cached numbers go stale: a restore pulls games already
-`done`, so re-deriving only for settled games left a restored library with
-whatever the cloud row last carried (225 of 469 checked games held the mating
-side's pre-`repairTerminalMoveEval` score, ~10 low). Pinned by `cloud-sync.mjs`
-§ 3 (a stale cloud accuracy must not survive a restore) and § 5b.
 
 **Opening a review preempts the queue.** `requestAnalysisNow(gameId)` in
 `queue.ts` puts a game at the front and aborts whatever is running; the review
@@ -399,9 +368,9 @@ loss is one position per worker.
 
 **Preemption also drops the abandoned game's queued positions.** `analyzeGamePgn`
 enqueues every position of a game up front, so aborting only its per-ply loop
-left the rest in the pool's FIFO, ahead of the game the user asked for — most of
-a 60-ply game on four workers, which is exactly the wait preemption exists to
-remove. So the game's `{ aborted }` flag travels with each position
+would leave the rest in the pool's FIFO, ahead of the game the user asked for —
+most of a 60-ply game on four workers, which is exactly the wait preemption
+exists to remove. So the game's `{ aborted }` flag travels with each position
 (`EngineBackend.analyze` → `cachedAnalyze` → `EnginePool.analyze`) and `pump`
 rejects a tripped task instead of dispatching it. Only *waiting* tasks are
 dropped; one a worker already started runs to the end and is cached. That makes
@@ -423,11 +392,11 @@ Invariants that are easy to break:
   which `requeueStaleErrors` would then have to undo.
 - **The chooser asks about the analysis row, not just the status**
   (`priorityGameWantsAnalysis`). An `error` game is dropped from the priority
-  list: re-choosing it, with no sleep between, was a tight loop (~380 status
-  writes in 300 ms) that starved the rest of the library, and the review page's
-  Retry re-requests it anyway. A `done` game with **no** analysis row (a partial
-  sync, a deleted row) is analysed: the page requests that case on purpose, and
-  dropping every `done` id left it saying "queued" forever.
+  list: re-choosing it, with no sleep between, is a tight loop that starves the
+  rest of the library, and the review page's Retry re-requests it anyway. A
+  `done` game with **no** analysis row (a partial sync, a deleted row) is
+  analysed: the page requests that case on purpose, and dropping every `done` id
+  would leave it saying "queued" forever.
 
 All pinned by `analysis-priority.mjs`.
 
@@ -469,9 +438,10 @@ in Node and breaks the worker.
 
 ### NNUE
 
-NNUE is **on by default** in the browser, and the difference is not cosmetic:
-classical and NNUE agree on forced tactics but diverge badly in quiet and
-endgame positions — which is where a coaching app draws its conclusions.
+NNUE is **on by default** in the browser (except on a phone-shaped device, below),
+and the difference is not cosmetic: classical and NNUE agree on forced tactics but
+diverge badly in quiet and endgame positions — which is where a coaching app
+draws its conclusions.
 
 | piece | where |
 |---|---|
@@ -485,7 +455,7 @@ endgame positions — which is where a coaching app draws its conclusions.
 
 **The 40 MB net is gitignored and staged at build time.** It ships inside the
 `stockfish` npm package, so `npm ci` always supplies it; committing it would add
-40 MB to every clone forever. `copy-nnue.mjs` parses `NNUE_NET_FILE` out of
+40 MB to every clone forever. `copy-nnue.mjs` reads `NNUE_NET_FILE` out of
 `src/engine/nnue.ts` rather than repeating it, and **exits non-zero if the
 installed package ships a different net** — otherwise a Stockfish upgrade would
 leave the app asking for a file nobody copies and every eval would quietly go
@@ -500,7 +470,7 @@ origin at all:
 | `VITE_NNUE_NET_URL` | where the net comes from | `EvalFile` value |
 |---|---|---|
 | unset (dev default) | `public/stockfish/`, staged by `copy-nnue.mjs` | bare filename |
-| set (production) | that URL + the net filename | absolute URL |
+| set (production) | that URL + the net filename; `copy-nnue.mjs` stages nothing and deletes any staged copy | absolute URL |
 
 The production value lives in a **committed `.env.production`**, not in the Pages
 dashboard: it is not a secret (every `VITE_*` is inlined into the client bundle),
@@ -512,9 +482,11 @@ per-environment overrides remain possible.
 and *not* for `npm run dev`, which is what keeps dev on the locally staged net —
 offline-capable and free. Every build-side consumer therefore takes an explicit
 mode (`predev` → `development`, `prebuild` → `production`, and the Vite plugin gets
-Vite's own `mode`). Get it wrong in one direction and dev pulls 38.3 MiB per engine
-start; wrong in the other and a production build ships an over-cap asset.
-`engine-nnue` asserts dev resolves the net same-origin, so a leak goes red.
+Vite's own `mode`); a bare `npm run nnue:stage` defaults to `development` so it
+never deletes the net it was asked to stage. Get it wrong in one direction and
+dev pulls 38.3 MiB per engine start; wrong in the other and a production build
+ships an over-cap asset. `engine-nnue` asserts dev resolves the net same-origin,
+so a leak goes red.
 
 The rules live in exactly two places, and the split is deliberate:
 
@@ -530,32 +502,30 @@ The rules live in exactly two places, and the split is deliberate:
 Runtime forgiving, build time strict. They are not shared because the build side
 runs in Node before Vite exists and cannot import a TS module that reaches
 `@/lib/usePersistedState` — but everything build-side goes through the one module,
-so `dist/` and the bundle's baked-in URL cannot disagree. That mattered
-concretely: reading `process.env` alone missed `VITE_NNUE_NET_URL` set in
-`.env.local` (npm doesn't load dotenv), which produced a bundle pointing at R2
-while `dist/` still carried the 38.3 MiB net.
+so `dist/` and the bundle's baked-in URL cannot disagree. Reading `process.env`
+alone would miss a `VITE_NNUE_NET_URL` set in `.env.local` (npm doesn't load
+dotenv) and produce a bundle pointing at R2 while `dist/` still carries the
+38.3 MiB net.
 
-**A cross-origin net needs CORS and nothing else.** The instinct is that
-`COEP: require-corp` also demands
-`Cross-Origin-Resource-Policy: cross-origin` on the net's host. Measured, it does
-not: both the probe and Stockfish's own download are CORS-mode requests, and a
-CORS response satisfies COEP by itself — a host sending CORP but no CORS fails,
-CORS but no CORP works. This is load-bearing for the deployment (it is why a plain
-public R2 bucket suffices) and is pinned by
+**A cross-origin net needs CORS and nothing else** — not
+`Cross-Origin-Resource-Policy`, despite `COEP: require-corp`: the probe and
+Stockfish's own download are CORS-mode requests, and a CORS response satisfies
+COEP by itself. It is why a plain public R2 bucket suffices; pinned by
 `scripts/test/integration/nnue-remote-net.mjs` across all four header
-combinations. Do not "fix" it by adding CORP requirements to the docs.
-
-Stockfish accepts an absolute URL for `EvalFile` because it loads the net through
-`emscripten_fetch`, which passes the value to XHR verbatim. Measured: same
-+377 cp on the rook endgame from either origin.
+combinations, explained in DEPLOY.md § The only header that matters is CORS. Do
+not "fix" it by adding CORP requirements to the docs. Stockfish accepts an
+absolute URL for `EvalFile` because it loads the net through `emscripten_fetch`,
+which passes the value to XHR verbatim (same +377 cp on the rook endgame from
+either origin).
 
 **A missing net is fatal, not degrading.** Stockfish 16 calls
 `exit(EXIT_FAILURE)` at the first `go` if `Use NNUE` is on and the net did not
 load, so analysis dies rather than getting worse. `nnueNetAvailable()` therefore
-HEAD-probes the net first and requires `content-length > 1_000_000`: the size
-check is the load-bearing half, because Vite's SPA fallback answers a missing
-path with `index.html` at HTTP 200. On failure it warns and the handshake omits
-both NNUE options, falling back to classical.
+HEAD-probes the net first and requires `content-length > 1_000_000` (or no
+length and a non-HTML type): the size check is the load-bearing half, because
+Vite's SPA fallback answers a missing path with `index.html` at HTTP 200. On
+failure it warns and the handshake omits both NNUE options, falling back to
+classical.
 
 **Set `nnueEnabled` explicitly when you send the option; never infer it.** A
 worker that is about to run NNUE still emits
@@ -575,37 +545,37 @@ production, where no same-origin copy exists. `nnue-remote-net.mjs` catches it b
 asserting the foreign host's access log shows the engine's `GET`, not just the
 probe's `HEAD`.
 
-**The eval cache key includes the evaluator.** `evalCacheRowKey()` gives NNUE
-rows `${fen}|${depth}|nnue` and leaves classical on the legacy `${fen}|${depth}`
-(so no migration). Without this a warm classical cache feeds NNUE-*labelled*
-analyses.
+**The eval cache key includes the evaluator.** `evalCacheRowKey()`
+(`engine/cache.ts`) gives NNUE rows `${fen}|${depth}|nnue` and leaves classical on
+the legacy `${fen}|${depth}` (so no migration). Without this a warm classical
+cache feeds NNUE-*labelled* analyses.
 
 **Memory, not bandwidth, is the real cost:** ~340 MB RSS per worker with NNUE
 against ~125 MB classical, so a 4-worker pool goes ~0.5 GB → ~1.4 GB. Fine on
-desktop, fatal on a phone. `defaultPoolSize({cores, memoryGb, nnue, phone})` reads
-`navigator.hardwareConcurrency` and `navigator.deviceMemory`, and clamps to
-1 worker at ≤2 GB and 2 at ≤4 GB — **but only when NNUE is on**.
+desktop, fatal on a phone. `defaultPoolSize({cores, memoryGb, nnue, phone})`
+(`engine/pool.ts`) reads `navigator.hardwareConcurrency` and
+`navigator.deviceMemory`, and clamps to 1 worker at ≤2 GB and 2 at ≤4 GB — **but
+only when NNUE is on**.
 
-**iOS Safari exposes no `deviceMemory`, and that gap crashed a real phone.**
-`hardwareConcurrency` of 4 gave an iPhone three NNUE workers, ~1.0 GB, while the
-boot reclassification pass and a cloud restore ran alongside; Safari killed the
-tab repeatedly. Treating the Settings toggle as that platform's answer asked the
-user to find a switch *before* the crash that would tell them they needed it. So
-when there is no memory reading, `looksLikePhone()` (`engine/device.ts`) is
-consulted: a coarse **primary** pointer plus a short screen edge ≤500 px means
-one NNUE worker, or two classical. NNUE's untouched default also flips off there
-(`nnueDefaultForDevice`), which is the larger lever — 340 MB per worker becomes
-125 MB.
+**iOS Safari exposes no `deviceMemory`,** so on core count alone an iPhone gets
+three NNUE workers, ~1.0 GB, beside the boot reclassification pass and a cloud
+restore — enough for Safari to kill the tab. A Settings toggle is not that
+platform's answer: the user would have to find it *before* the crash that tells
+them they need it. So when there is no memory reading, `looksLikePhone()`
+(`engine/device.ts`, pure form `isPhoneShaped`) is consulted: a coarse
+**primary** pointer plus a short screen edge ≤500 px (`PHONE_MAX_SHORT_EDGE`)
+means one NNUE worker, or two classical. NNUE's untouched default also flips off
+there (`nnueDefaultForDevice`), which is the larger lever — 340 MB per worker
+becomes 125 MB.
 
 That is a capability query about the *device*, not user-agent sniffing, and it
 deliberately does not widen to "no memory API" in general: desktop Safari and
-Firefox report a fine pointer and keep the full pool, which was the original
-objection to guessing and still stands. Tablets are also left alone — an iPad's
-short edge is 744 and it was not the device that died. `engine-nnue.mjs` pins
-both directions, including that a phone which *does* report memory uses the
-reading rather than the screen measurement. The toggle lives in localStorage
-(`chess-coach:engine.nnue:v1`, default on) rather than the synced `Settings`
-row precisely because it is a per-device bandwidth/memory question.
+Firefox report a fine pointer and keep the full pool. Tablets are also left alone
+— an iPad's short edge is 744. `engine-nnue.mjs` pins both directions, including
+that a phone which *does* report memory uses the reading rather than the screen
+measurement. The toggle lives in localStorage (`chess-coach:engine.nnue:v1`,
+default `nnueDefaultForDevice()`) rather than the synced `Settings` row
+precisely because it is a per-device bandwidth/memory question.
 
 `Analysis.engine` is typed plain `string`. `isNnueAnalysis()` (in
 `src/features/sync/diff.ts`) is the single reader: a substring test for
@@ -615,153 +585,113 @@ from a build running `Use NNUE` off.
 
 ## Memory on mobile
 
-An iPhone was killed by Safari on `/review/:id` (2026-09-02). The crash was
-**overdetermined**: the engine was the dominant term — see § NNUE for
-`isPhoneShaped` — but a set of whole-table or multiple-copy loads sat behind it
-(four found at the time, a fifth since), and nothing serialises them: `queue.ts:162` starts the engine pump, `:168` starts the
-boot passes, and cloud sync runs from its own `AppLayout` effect, so whatever
-each of them costs, they can cost it at the same instant. All four are now fixed.
-The lack of serialisation is not, which is why each one's peak had to come down
-on its own rather than being scheduled around.
+On a phone the engine is the dominant memory term (§ NNUE), but nothing
+serialises the other big consumers against it: `startAnalysisQueue` starts the
+engine run loop and then the boot passes, and cloud sync runs from its own
+`AppLayout` effect, so whatever each costs, they can cost it at the same instant.
+That is why every whole-table read has to keep its own peak down rather than
+being scheduled around the others.
 
 Sizes here are **estimates from row shapes**, not device measurements — the
-30 KB-per-analysis figure comes from SETUP_AUTH.md. Nothing below was measured on
-a phone, so treat the numbers as the reason a change was made, never as evidence
-of what it achieved.
+30 KB-per-analysis figure comes from SETUP_AUTH.md. Treat the numbers as the
+reason for a design, never as evidence of what it achieves.
 
-### The rule the first four broke
+### Projections stream, they never collect
 
 A projection that exists so callers need not hold every PGN or every move list
 must not itself hold them. `await table.toArray()` followed by `.map(strip)`
 holds the table **twice** at its peak — every full row, because `toArray`
 resolves all of them before `map` runs, plus the stripped copy being built
-alongside — which is strictly worse than the unprojected read it replaced. Two of
-the four were exactly this.
+alongside — which is strictly worse than the unprojected read it replaces.
 
-The fix in each case is a **cursor**: `Table.each` / `Collection.each` visits one
-row at a time and the full row is garbage the moment the callback returns, so the
-peak is one row plus the light array the caller asked for. `streamLight`
-(`db/queries.ts`) is the shared spelling; `nextPendingGame` was already using the
-technique. Output — rows, order, contents — is identical, which is what makes the
-swap safe. Dexie still has no native "select-without-field" projection, so the
-field is dropped in JS either way; what changed is how many rows are alive when it
-happens.
+Use a **cursor**: `Table.each` / `Collection.each` visits one row at a time and
+the full row is garbage the moment the callback returns, so the peak is one row
+plus the light array the caller asked for. `streamLight` (`db/queries.ts`) is the
+shared spelling. Dexie has no native "select-without-field" projection, so the
+field is dropped in JS either way; what matters is how many rows are alive when
+it happens.
 
-| # | Sink | Was | Now |
-|---|---|---|---|
-| 1 | `listAnalysesLight()` | `db.analyses.toArray()` then `.map(stripMoves)` — full array *and* stripped copy live at once. ~1 200 analyses ≈ 36 MB JSON, plausibly 100–180 MB as live objects. | `streamLight` over a cursor. Peak: one analysis. |
-| 2 | `listAllGamesLight()` / `listGamesLight()` | Same shape over `games`, so every PGN. Called twice per sync, and from a *throttled live query* in Settings that re-materialised every PGN every 1.5 s during analysis. | `streamLight` over a cursor. Settings no longer reads rows at all — see below. |
-| 3 | Recompute pass gate | `bulkGet` of 60 **full** analyses per chunk, held for the whole chunk, to read two fields off each: the vintage stamp and whether there are any moves. On the case the gate exists for — a restored library, every row current — that was the pass's entire cost. | Gate runs on `bulkGetAnalysisLight`; full rows are read only for the ids that actually need reprocessing, matching what the pass already did for games. Chunk is 20 rather than 60 on a phone. |
-| 4 | `backfillBrilliantCounts` | `bulkGet` of 60 PGN-bearing games **and** 60 full analyses, to read `a.moves` classifications and `g.userColor` / `g.brilliantCount`. The PGN was paid for and never touched. Wrote whole merged rows back. | Cursors both tables, keeping two fields per game and one move list at a time. Writes via `bulkUpdate`. |
+| # | Sink | How it stays bounded |
+|---|---|---|
+| 1 | `listAnalysesLight()` | `streamLight` over a cursor. Peak: one analysis (vs ~1 200 analyses ≈ 36 MB JSON, plausibly 100–180 MB as live objects). |
+| 2 | `listAllGamesLight()` / `listGamesLight()` | `streamLight` over a cursor. Called twice per sync. Settings reads no rows at all — see below. |
+| 3 | Recompute pass gate | Decides on `bulkGetAnalysisLight` (vintage stamp + move count); full rows are read only for the ids that actually need reprocessing. On a restored library, every row current, that gate is the pass's entire cost. Chunk is 20 rather than 60 on a phone. |
+| 4 | `backfillBrilliantCounts` | Cursors both tables, keeping two fields per game (`userColor`, `brilliantCount`) and one move list at a time — the PGN is never needed. Writes via `bulkUpdate`. |
+| 5 | `PuzzlesPage` recommendation read | Folded per analysis — see below. |
 
-`bulkGetAnalysisLight` also became a cursor, and the recompute gate is its first
-production caller. It walks `anyOf`, which visits the primary-key index in **key**
-order rather than argument order, so it re-emits from a map to keep its contract:
-argument order, unknown ids dropped, a repeated id repeated. That re-emit is the
-one thing in this change a type checker cannot see, and
+`bulkGetAnalysisLight` is a cursor too. It walks `anyOf`, which visits the
+primary-key index in **key** order rather than argument order, so it re-emits
+from a map to keep its contract: argument order, unknown ids dropped, a repeated
+id repeated. That re-emit is invisible to a type checker, and
 `integration/light-projections` requests ids in descending order specifically to
 catch its loss.
 
-### Two things worth keeping straight
-
-**Settings needed an aggregate, not rows.** It read every game in the library
-every 1.5 s to populate a filter chip bar whose only input is the *set* of time
-classes present. `listTimeClasses` answers that from the `timeClass` index via
-`uniqueKeys` — no rows read at all, cost proportional to the five-ish distinct
-classes rather than to the library. Reach for this before reaching for a
-projection: a light row is affordable, an aggregate is free. `countByStatus` is
-the same move, made earlier. The Games page still reads rows, correctly — it
+**Prefer an aggregate to rows.** Settings needs only the *set* of time classes
+present to draw its filter chips, so `listTimeClasses` answers from the
+`timeClass` index via `uniqueKeys` — no rows read, cost proportional to the
+five-ish distinct classes rather than to the library. Reach for this before
+reaching for a projection: a light row is affordable, an aggregate is free.
+`countByStatus` is the same move. The Games page reads rows, correctly — it
 lists them.
 
-**Sink 4's write got safer, not just smaller.** It used to `bulkPut` whole game
-rows read seconds earlier. This pass runs at boot alongside the analyzer, which
-writes `analysisStatus` to those same rows, so putting back a stale row could
-revert whatever landed in between. `bulkUpdate` patches the one field it owns.
-
-Chunk size is not a correctness parameter, which is why 3 could be made
+Chunk size is not a correctness parameter, which is why sink 3 can be
 phone-aware cheaply: the cursor records the last id of whichever chunk finished
 and resumption seeks past it, so a device that answers `looksLikePhone()`
 differently between boots still resumes correctly, just at a different
 granularity.
 
-### The fifth: streaming what a projection cannot help
+### Streaming what a projection cannot help
 
-**`PuzzlesPage`'s recommendation read** was the same whole-table shape as sink 1 —
-`bulkGet` of the **full** analysis, every move of every analyzed game matching the
-time-class filter, all resident to score motifs. On a ~1 200-analysis library that
-is the same 100–180 MB estimate.
-
-A projection is no use here: motif scoring reads a classification and a motif list
-off every move, so the move list *is* the input. What makes it fixable anyway is
-that each analysis is consumed **independently** — nothing in one game's mistakes
-depends on another's — so it can be folded on arrival instead of collected:
+Motif scoring for "From your games" reads a classification and a motif list off
+every move, so the move list *is* the input and a projection is no use. What
+makes it boundable anyway is that each analysis is consumed **independently** —
+nothing in one game's mistakes depends on another's — so it is folded on arrival
+instead of collected:
 
 - `mistakeRowsForGame(game, analysis)` (`puzzles/mistakes.ts`) is the per-game
-  half, split out of `buildMistakes`. Pure, and that module must stay pure: it has
-  no Dexie import, which is what lets its consumers run in the unit tier.
+  half of `buildMistakes`. Pure, and that module must stay pure: it has no Dexie
+  import, which is what lets its consumers run in the unit tier.
 - `forEachAnalysis(gameIds, visit)` (`db/queries.ts`) is the cursor. One analysis
   resident at a time. The visitor must be synchronous — awaiting inside a Dexie
   cursor closes its transaction — so fold, don't fetch.
 
-What stays resident afterwards is `MistakeRow[]`: only the user's own blundery
-moves survive the fold, so a few thousand small rows instead of ~1 200 move lists.
-Rows are **not** free — each carries a FEN and a handful of strings, so call it
-single-digit MB on that library — but they are one to two orders off what they
-replaced. `buildMistakes` still exists and still takes every analysis at once;
-that is correct for `aggregateMistakes` and the tests, which already hold them.
+What stays resident is `MistakeRow[]`: only the user's own blundery moves survive
+the fold, so a few thousand small rows instead of ~1 200 move lists — single-digit
+MB on that library, one to two orders below the move lists. `buildMistakes` still
+takes every analysis at once; that is correct for `aggregateMistakes` and the
+tests, which already hold them.
 
-Order changed and does not matter: the cursor delivers in game-id order rather
-than the order the filtered game list is in. `scoreMotifs` sums into a map keyed by
-motif and sorts its own output, and `estimateUserRating` re-sorts by date, so the
-plan is identical either way. `integration/light-projections` builds the rows both
-ways in one run and asserts they are field-for-field identical, against a fixture
-seeded with real mistakes — two empty lists would otherwise compare equal, and
-"the tab silently has nothing to recommend" is exactly the regression to catch.
+The cursor delivers in game-id order rather than the filtered game list's order,
+and that does not matter: `scoreMotifs` sums into a map keyed by motif and sorts
+its own output, and `estimateUserRating` re-sorts by date. `light-projections`
+builds the rows both ways in one run and asserts they are field-for-field
+identical, against a fixture seeded with real mistakes — two empty lists would
+otherwise compare equal, and "the tab silently has nothing to recommend" is
+exactly the regression to catch.
 
-`MistakeRow` itself was then cut from 22 fields to 9. It carried `fenBefore`,
-`evalCpBefore`, `bestMoveUci`, `bestMoveSan`, `san` and `uci` to draw inline
-mini-boards on the **Weaknesses page, which no longer exists** — and because rows
-outlive the analyses they are folded from, each of those was a string held off a
-move list that would otherwise be garbage, once per mistake in the library.
-`fenBefore` alone was ~70 characters a row. The unread game-derived fields
-(`gameUrl`, `opponent`, `result`, `userColor`) went with them for tidiness rather
-than bytes: they were reference copies of strings the caller's game rows already
-keep alive, so they cost ~nothing, but unread is unread and each is a `gameId`
-lookup away. `opening` and `eco` are game-derived in the same way and stayed only
-because `aggregateMistakes` reads them.
+**A `MistakeRow` field belongs when a consumer reads it, not when one might.**
+Rows outlive the analyses they are folded from, so every string field copied off
+a `MoveEval` is held once per mistake in the library (a `fenBefore` is ~70
+characters). Game-derived fields cost ~nothing — they reference strings the
+caller's game rows keep alive — but are a `gameId` lookup away, so `opening` and
+`eco` are there only because `aggregateMistakes` reads them. Widening is cheap:
+`mistakeRowsForGame` has the `MoveEval` in hand, so it is one line in the type
+and one in the fold. `recommend.test.ts`'s row factory builds the full shape so
+that a contract change fails there first.
 
-The rule for adding one back, stated on the type: **a field belongs when a
-consumer reads it, not when one might.** That is the rule the removed six broke —
-they were kept against a page that had already been deleted. Widening is cheap
-now: `mistakeRowsForGame` has the `MoveEval` in hand, so it is one line in the
-type and one in the fold.
+### `Settings.autoAnalyze`
 
-Nothing in `src/` read any removed field, which `tsc` confirms rather than a grep:
-the only two errors from deleting them were an unused import and
-`recommend.test.ts`'s row factory, which builds the full shape precisely so that a
-contract change fails there first. `phase2.mjs` reads only counts off
-`aggregateMistakes`, never `byMotif[].examples`, so the one path by which arbitrary
-row fields could escape to a consumer has none.
+Read by `nextGameToAnalyze` (`engine/queue.ts`), it is the lever for quieting the
+analyzer on a constrained device. **It gates the unattended backfill only.** The
+chooser is priority-first: the priority list is the review page saying "I am
+showing this game and it has no analysis", which is the user asking directly, and
+it keeps working whatever the toggle says. Only the `nextPendingGame()` fallback
+beneath it — the newest-first background sweep, which is what the toggle's own
+label describes — is gated. Gating the whole chooser would mean a user who turned
+background analysis off could open an unanalyzed game and wait on a spinner
+forever.
 
-### The lever, now that it exists
-
-`Settings.autoAnalyze` was written by the Settings UI and **read by nothing** for
-the app's whole life. The queue never consulted it, so "Automatically analyze
-imported games in the background" changed no behaviour at all — it could not be
-used to quiet the analyzer on a constrained device, and silently misled anyone
-who flipped it. It is now read by `nextGameToAnalyze` (`engine/queue.ts`).
-
-**It gates the unattended backfill only.** That chooser is priority-first: the
-priority list is the review page saying "I am showing this game and it has no
-analysis", which is the user asking directly, and it keeps working whatever the
-toggle says. Only the `nextPendingGame()` fallback beneath it — the newest-first
-background sweep, which is what the toggle's own label describes — is gated.
-Gating the whole chooser would mean a user who turned background analysis off
-could open an unanalyzed game and wait on a spinner forever: a worse bug than the
-inert toggle it replaces.
-
-Two consequences of reading it *between games* rather than at the top of
-`runLoop`, both deliberate:
+It is read *between games* rather than at the top of `runLoop`, deliberately:
 
 - Turning it off does not abort the game in flight. Stopping new work is what was
   asked; abandoning the current analysis would drop the in-flight position and put
@@ -792,7 +722,7 @@ positions mined from the user's own games.
 |---|---|
 | Puzzles shipped | `PUZZLE_TOTAL = 191250` |
 | Shards | 50 TSV files, ~18 MB total, committed under `public/puzzles/<PUZZLE_BUILD_ID>/` |
-| Manifest module | `src/data/puzzles.meta.generated.ts` (totals, per-shard ranges, `PUZZLE_THEMES` vocabulary, tier bounds) |
+| Manifest module | `src/data/puzzles.meta.generated.ts` (totals, per-shard ranges, `PUZZLE_THEMES` vocabulary) |
 | Runtime loader | `src/features/puzzles/corpus.ts` |
 | Rebuild | `npm run puzzles:build` → `scripts/build-puzzles.mjs` |
 
@@ -827,8 +757,7 @@ paths hardcoded relative to the repo root (no env vars):
 
 | knob | value | note |
 |---|---|---|
-| `PER_BAND_CAP` | 8000 | Capped **per 100-point rating band** (`BAND_WIDTH`), not globally. Lichess ratings cluster near 1500, so a global top-N starves Easy and Hard. |
-| `TIERS` | easy `<1300`, medium `<1900`, hard rest | **Vestigial.** Only the build's band report and the manifest's `PUZZLE_TIERS` use it; the page stopped serving tiers in 2026-10. Drop it next time the script is touched. |
+| `PER_BAND_CAP` | 8000 | Capped **per 100-point rating band** (`BAND_WIDTH`), not globally. Lichess ratings cluster near 1500, so a global top-N starves the low and high ends. |
 | `MIN_NB_PLAYS` / `MIN_POPULARITY` / `MAX_RATING_DEVIATION` | 100 / 85 / 90 | The quality gate. Loosen it and the corpus grows with worse puzzles. |
 | `SHARD_ROWS` | 4000 | Rows per shard. |
 
@@ -848,10 +777,9 @@ fills. `puzzleThemeCounts.test.ts` fails if its build id drifts from
 
 **Three views.** *Train* serves new puzzles: a theme (mixed, one Lichess
 theme, or "From your games") at a difficulty **relative to the user's puzzle
-rating** — presets −400…+400, or an exact rating. *Review* brings back missed
-puzzles on a schedule. *Progress* is stats plus a grid of every puzzle done,
-each re-playable. This replaced five tabs of fixed tiers (400-1299, 1300-1899,
-1900+), each ~600 points wide.
+rating** — presets −400…+400 (`DIFFICULTY_OFFSETS`), or an exact rating.
+*Review* brings back missed puzzles on a schedule. *Progress* is stats plus a
+grid of every puzzle done, each re-playable.
 
 **Product rules, not accidents:**
 
@@ -874,7 +802,7 @@ each re-playable. This replaced five tabs of fixed tiers (400-1299, 1300-1899,
   lands.
 - **The solver asks for the promotion piece.** `applyPuzzleMove` compares the
   whole UCI, promotion included, because some lines hinge on an underpromotion
-  and crediting an auto-queen stalled them on an illegal scripted reply. The
+  and crediting an auto-queen stalls them on an illegal scripted reply. The
   piece picker is `Board`'s opt-in `choosePromotion` prop; every other board
   still auto-queens.
 
@@ -890,10 +818,10 @@ through `TRAIN_HALF_WINDOWS` only until the per-band theme index says it holds
 `TRAIN_BATCH × 6`. Puzzles are drawn in a seeded shuffle, not ascending: inside
 ±60 an easiest-first ladder would just mean always the same corner.
 
-**Review** (`stats.ts` § Review): miss → due in 20 h; first clean retry → 3 days;
-second → learned; any miss restarts. Two steps, not an open SM-2 ladder — fresh
-puzzles of the same pattern are always available, so the goal is to fix the
-miss, not keep one position alive for months.
+**Review** (`stats.ts` § Review, `REVIEW_INTERVALS_MS`): miss → due in 20 h;
+first clean retry → 3 days; second → learned; any miss restarts. Two steps, not
+an open SM-2 ladder — fresh puzzles of the same pattern are always available, so
+the goal is to fix the miss, not keep one position alive for months.
 
 **Per-theme strengths** (`themeStats`) rank by *clean − expected*, where
 expected is the rating's pre-result prediction for each puzzle. Raw success
@@ -903,9 +831,10 @@ other); `other` holds descriptors (`crushing`, `superGM`) and is excluded from
 ranking. `themeCatalog.test.ts` fails if a corpus refresh adds an ungrouped
 theme.
 
-**"From your games"** (`src/features/puzzles/recommend.ts`, the Recommended tab
-until 2026-10) scores the user's own mistake motifs — `buildMistakes` in `src/features/puzzles/mistakes.ts` — and
-fills a run of 20 from the corpus:
+**"From your games"** (`src/features/puzzles/recommend.ts`) scores the user's own
+mistake motifs — `buildMistakes` / `mistakeRowsForGame` in
+`src/features/puzzles/mistakes.ts` (§ Memory on mobile) — and fills a run of 20
+from the corpus:
 
 | constant | value | meaning |
 |---|---|---|
@@ -922,13 +851,13 @@ for the same don't-rebuild-mid-run reason.
 
 **The plan shapes the next batch, never the puzzle on screen.** It is recomputed
 on every refire of the games table, which the analysis queue writes constantly;
-as a dependency of the batch loader it swapped the puzzle mid-solve. So
-`PuzzlesPage` reads it through a ref, like the rating, and the run's first batch
-instead waits for `recommendation.loaded` (and for the attempt rows, without
-which the rating reads as the 1500 default). That makes `loaded` load-bearing:
-every input to the plan is `undefined` until known, so `loaded` means "the plan
-is real" — an inactive query answering `[]` used to make it true, with an empty
-plan, the instant the theme was picked.
+as a dependency of the batch loader it would swap the puzzle mid-solve. So
+`PuzzlesPage` reads it through a ref (`planRef`), like the rating, and the run's
+first batch instead waits for `recommendation.loaded` (and for the attempt rows,
+without which the rating reads as the 1500 default). That makes `loaded`
+load-bearing: every input to the plan is `undefined` until known, so `loaded`
+means "the plan is real" — an inactive query answering `[]` must not make it
+true with an empty plan.
 
 **`motifThemes.ts` maps our `Motif` union to Lichess theme strings, and
 `motifThemes.test.ts` fails if any mapped theme is absent from
@@ -940,32 +869,32 @@ test forbids mapping onto descriptor themes (`short`, `crushing`, `master`,
 
 `puzzleAttempts` deliberately stores **raw attempt facts**, and the rating,
 Review schedule and stats are all derived from them at read time, so any of
-those can be retuned with no migration. Since 2026-10 each row also carries
-`history` (one `{at, outcome, ms, good, bad}` per attempt, capped at
-`MAX_ATTEMPT_HISTORY` = 25 in `puzzles/events.ts`, Dexie-free so the sync merge
-can share it) and a snapshot of its puzzle
-(`fen`, `solution`, `themes`, ~200 bytes) so the history grid and Review need no
-shard. All of it lives in the synced `data` jsonb, so it needed **no DDL**.
-Older rows have neither: `eventsOf` reconstructs only what their aggregates
-prove (first attempt always; last attempt when `solvedClean` after 2+), and
-`backfillAttemptContent` fetches their content once when Progress opens.
+those can be retuned with no migration. Each row carries `history` (one
+`{at, outcome, ms, good, bad}` per attempt, capped at `MAX_ATTEMPT_HISTORY` = 25
+in `puzzles/events.ts`, Dexie-free so the sync merge can share it) and a snapshot
+of its puzzle (`fen`, `solution`, `themes`, ~200 bytes) so the history grid and
+Review need no shard. All of it lives in the synced `data` jsonb, so it needs
+**no DDL**. Legacy rows have neither: `eventsOf` reconstructs only what their
+aggregates prove (first attempt always; last attempt when `solvedClean` after
+2+), and `backfillAttemptContent` fetches their content once when Progress opens.
 
 **The first attempt must survive everything that rewrites `history`**, because
 it is the one the rating, first-try stats and band stats read
 (`eventsOf(row)[0]`). So `capHistory` keeps the first event plus the newest 24
-rather than the newest 25 — a plain slice re-keyed all of those to attempt #2 on
-the 26th try. And `recordAttempt` (via `withEvent`) and `mergeAttempt` build from
-`eventsOf`, not `.history`: appending to a legacy row's empty history made the
-retry its only event, so `eventsOf` stopped synthesizing the old first attempt
-and a clean retry of an old miss re-scored as a clean first try. The synthesized
-first attempt thereby becomes a stored event on the first retry or merge, with
-the same `at`+`outcome` key, so a shared attempt still appears once.
-`solvedClean` is deliberately **not** indexed: IndexedDB cannot key on a boolean
-and Dexie *silently skips* such rows, so `attempts.ts` scans and filters in JS.
+rather than the newest 25 — a plain slice would re-key all of those to
+attempt #2 on the 26th try. And `recordAttempt` (via `withEvent`) and `mergeAttempt`
+build from `eventsOf`, not `.history`: appending to a legacy row's empty history
+would make the retry its only event, so `eventsOf` would stop synthesizing the
+old first attempt and a clean retry of an old miss would re-score as a clean
+first try. The synthesized first attempt thereby becomes a stored event on the
+first retry or merge, with the same `at`+`outcome` key, so a shared attempt still
+appears once. `solvedClean` is deliberately **not** indexed: IndexedDB cannot key
+on a boolean and Dexie *silently skips* such rows, so `attempts.ts` scans and
+filters in JS.
 
 ## Openings
 
-The library (~3 700 lines, 148 families) is generated from the Lichess
+The library (3 690 lines, 148 families) is generated from the Lichess
 `chess-openings` TSVs into `src/data/openings.generated.ts`.
 
 **Two naming systems, reconciled by `resolveOpeningFamily`.** Library names
@@ -984,17 +913,17 @@ Defense").
 
 Anything linking a chart row or a game to the library must pass through it and
 link with the **canonical** name, or the openings page can't select a family.
-Invariants pinned in `library.test.ts`: every one of the 3 690 lines resolves,
-none onto an unrelated opening, and every family resolves to itself.
+Invariants pinned in `library.test.ts`: every library line resolves, none onto
+an unrelated opening, and every family resolves to itself.
 
 **But punctuation is not the only disagreement, and `resolveOpeningFamily`
 cannot fix the other one.** All three of its stages are prefix-based, so they
 only bridge names that *contain* one another. The datasets also use flatly
 different names for the same opening: Chess.com calls 1.g3 "King's Fianchetto
 Opening" where the bundled Lichess data calls it "Hungarian Opening". Those share
-no prefix, `resolveOpeningFamily` returns null, and a dashboard chart row with no
-canonical name rendered with **no link at all** — which reads as "this opening
-isn't in the library" when it is.
+no prefix, `resolveOpeningFamily` returns null, and a chart row with no canonical
+name would render with **no link at all** — which reads as "this opening isn't in
+the library" when it is.
 
 So a caller that fails to resolve by name falls back to resolving by *moves*:
 `familyFromGameMoves` in `features/openings/identifyFromGame.ts` runs
@@ -1010,7 +939,7 @@ target rather than merely on a link existing.
 alone** (`dashboard/progress.ts`). `openingFamily()` splits the stored name on
 the first colon, and the importer inserts one only at the first
 `Variation|Defense|Attack|Gambit|System|Opening` token, so where it lands
-depends on the slug's tail and one opening arrived as up to a dozen chart rows.
+depends on the slug's tail and one opening can arrive as up to a dozen chart rows.
 `chartOpeningFamily` strips any move text (`stripOpeningMoves` — after a colon,
 after a space, or fused: "Scotch Game 3...d6", "Pirc Defense...4.c3"), then
 resolves through `resolveOpeningFamily`, which is also the canonical name the
@@ -1022,7 +951,7 @@ and its link comes from moves, as above.
 **A family's side comes from its name where explicit, else from its defining
 move** (`familyColor`, `openings/library.ts`). It is the colour a family
 repertoire is created with, so a wrong answer makes every drill card quiz the
-opponent's moves. Neither source works alone: a name list missed every Black
+opponent's moves. Neither source works alone: a name list misses every Black
 gambit not spelled "Defense" (Latvian, Elephant, Benko Gambit Accepted), and the
 moves alone mislabel ~20 families (the King's Indian's defining line ends on
 3.Nc3). So naming rules first — `Defense`/`Countergambit` is Black, a trailing
@@ -1075,14 +1004,13 @@ lookup must go by `fenKey`; a full-FEN lookup misses the shared node and
 silently drops every line behind it. A shared node's stored `moveUci`/`moveSan`
 describe only its first way in; `edgeMove` re-derives the move along any other
 edge. Position-keying alone cannot say which continuations belong to which move
-order, and following every edge cross-multiplied them (bulk-adding the Queen's
-Gambit Declined drilled 605 lines, ~500 never added). So each node records
-`paths`, the root-to-node UCI sequences it was added along
-(`RepertoireNode.paths`, optional and unindexed — no schema bump), and the walk
-follows an edge only when the extended sequence is one of them. Rows predating
-`paths` heal at read time: along their creation tree edges are followed as
-before, and past a transposition only when the sequence is a library-line prefix
-(`isLibraryLinePrefix`) — every line added since the v10 wipe came from the
+order, and following every edge cross-multiplies them into hundreds of lines
+nobody added. So each node records `paths`, the root-to-node UCI sequences it was
+added along (`RepertoireNode.paths`, optional and unindexed — no schema bump), and
+the walk follows an edge only when the extended sequence is one of them. Rows
+predating `paths` heal at read time: along their creation tree edges are followed
+as before, and past a transposition only when the sequence is a library-line
+prefix (`isLibraryLinePrefix`) — every line added since the v10 wipe came from the
 library. The first write to such a repertoire upgrades it, writing exactly the
 paths the fallback showed (`upgradeLegacyPaths`), since recording only the new
 move order on a legacy node would hide every old line through it. Sync merges
@@ -1125,20 +1053,23 @@ write pull the user out of "Include all lines".
 
 **A frequency is only trusted within `MEASURED_PARENT_DEPTH`.** The snapshot
 (`scripts/snapshot-opening-popularity.mjs`) queries the explorer down to a
-parent depth recorded in the TSV header (`measuredParentDepth=`); beyond it, a
-line's `globalGames`/`globalShare` is the nearest measured ancestor scaled by a
-`0.82^n` decay. That estimate falls monotonically with ply, so it is *not* a
-rarity measurement — treating it as one would count depth twice and rebuild the
-very ply-sorted ordering the difficulty tiers exist to replace. The build
-propagates that depth into the bundle as `MEASURED_PARENT_DEPTH` +
-`isMeasuredLine(line)`; `difficulty.ts` drops the rarity term (and the
-forced/rare chip) for an estimated line, and the Learn panel refuses to quote a
-frequency for one (`trustworthyShare`). A `globalGames` of zero means "no
-signal" (the explorer only lists a position's top moves), never "maximally
-rare". Because `MEASURED_PARENT_DEPTH` changes with each data refresh, code that
-branches on it takes an injectable predicate in tests
-(`scoreLine(line, stats, isMeasured)`) rather than hard-coding the current
-depth.
+parent depth recorded in the TSV header (`measuredParentDepth=`, `full` for no
+cap); beyond it, a line's `globalGames`/`globalShare` is the nearest measured
+ancestor scaled by a `0.82^n` decay. That estimate falls monotonically with ply,
+so it is *not* a rarity measurement — treating it as one would count depth twice
+and rebuild the very ply-sorted ordering the difficulty tiers exist to replace.
+The build propagates that depth into the bundle as `MEASURED_PARENT_DEPTH`
+(`Infinity` for `full`, which the committed snapshot is) + `isMeasuredLine(line)`;
+`difficulty.ts` drops the rarity term (and the forced/rare chip) for an estimated
+line, and the Learn panel refuses to quote a frequency for one
+(`trustworthyShare`). A `globalGames` of zero means "no signal" (the explorer
+only lists a position's top moves), never "maximally rare". Because
+`MEASURED_PARENT_DEPTH` changes with each data refresh, code that branches on it
+takes an injectable predicate in tests (`scoreLine(line, stats, isMeasured)`)
+rather than hard-coding the current depth.
+
+A game that starts from a set-up position is analysed correctly (§ Engine), but
+several openings readers still assume the standard start — see § Open items.
 
 ### Prep gaps
 
@@ -1156,9 +1087,9 @@ carried a trailing move sequence — the same opening arrives as both
 under two different families and fragments the very record that makes a gap
 visible. `openingGroupKey` instead drops the move tail wherever it sits
 (`stripOpeningMoves` — not only after a colon or comma: once a colon is placed,
-moves arrive after a space or fused to the name, and each distinct tail was its
-own group too small to reach `MIN_GAMES_FOR_GAP`), neutralises the punctuation
-and groups on the whole remaining name. The result is a grouping
+moves arrive after a space or fused to the name, and each distinct tail would be
+its own group too small to reach `MIN_GAMES_FOR_GAP`), neutralises the
+punctuation and groups on the whole remaining name. The result is a grouping
 key only: it is variation-grained but is not a library name (note the lost
 hyphen), so it must never reach the UI as a label.
 
@@ -1193,12 +1124,13 @@ changed (both artifacts carry generated timestamps, so a byte diff would churn
 every run). Verify-before-push is load-bearing: Cloudflare Pages deploys from
 `main` on its own webhook, not through Actions, so anything that lands ships.
 The snapshot script and the loop share an **exit-code contract** — `0` wrote the
-TSV, `3` means the cache is still incomplete (resume), anything else is a hard
-failure — so "incomplete" is never mistaken for "complete but unchanged". The
-explorer cache is persisted across runs with `actions/cache/save@v4` under
-`if: always()` (the default `@v4` post-step only saves on success, which would
-discard every rate-limited run's progress). It gates on unit rather than e2e so
-a single known-failing e2e test cannot freeze data refreshes.
+TSV, `3` means the cache is still incomplete (resume), anything else is a failed
+attempt (retried; the job fails if no attempt completes) — so "incomplete" is
+never mistaken for "complete but unchanged". The explorer cache is persisted
+across runs with `actions/cache/save@v4` under `if: always()` (the default `@v4`
+post-step only saves on success, which would discard every rate-limited run's
+progress). It gates on unit rather than e2e so a single known-failing e2e test
+cannot freeze data refreshes.
 
 To refresh by hand, expect it to take a while: the unauthenticated proxy
 throttles at roughly 24 requests/minute and a full-depth snapshot needs ~2 300
@@ -1212,11 +1144,10 @@ entirely.
 
 Everything the app owns lives in IndexedDB, and IndexedDB is **best-effort
 storage**: until an origin asks otherwise, the browser may evict all of it to
-reclaim space, and some browsers evict on an inactivity timer too. For most of
-this app's life it never asked, so the README's local-first promise rested on
-luck. `lib/storagePersistence.ts` asks — once per page load, from `AppLayout`'s
-boot effect — and `features/settings/StorageDurabilityCard.tsx` reports the
-answer.
+reclaim space, and some browsers evict on an inactivity timer too.
+`lib/storagePersistence.ts` asks — once per page load, from `AppLayout`'s boot
+effect (`ensureDurableStorage`) — and `features/settings/StorageDurabilityCard.tsx`
+reports the answer.
 
 **An eviction does not look like an eviction.** It takes the Clerk session with
 it, so the app comes back signed out *and* empty, which reads as data loss or as
@@ -1231,14 +1162,12 @@ What the grant does and does not buy, because it is easy to over-trust:
 - **Nothing on the client survives the user's own browser settings.** "Clear
   cookies and site data when you close all windows", or a manual clear, takes
   the data whatever was granted.
-- **A full disk defeats the grant outright, and this is the failure that
-  actually happened.** Chromium keeps two floors on free disk space:
-  `should_remain_available` (min(1 GiB, 10%)) below which it evicts storage
-  buckets, and `must_remain_available` (min(2 GiB, 1%)) below which it *refuses
-  writes*. Durability exempts an origin from quota eviction; it does not exempt
-  it from those floors. Measured on the machine this app is developed on: a disk
-  at 13.9 MB free wiped six origins including this one, and WhatsApp Web lost its
-  session with `durable_storage: 1` **granted**. So `persist()` is worth
+- **A full disk defeats the grant outright.** Chromium keeps two floors on free
+  disk space: `should_remain_available` (min(1 GiB, 10%)) below which it evicts
+  storage buckets, and `must_remain_available` (min(2 GiB, 1%)) below which it
+  *refuses writes*. Durability exempts an origin from quota eviction; it does not
+  exempt it from those floors (measured: a disk at 13.9 MB free wiped origins
+  including ones holding `durable_storage: 1`). So `persist()` is worth
   requesting but must never be described as protection against disk exhaustion.
   ext4's 5% root reserve is what makes this hard to spot — root stays healthy and
   only unprivileged writers starve, so it presents as "one app is misbehaving".
@@ -1249,30 +1178,30 @@ What the grant does and does not buy, because it is easy to over-trust:
   from free space; that is the signal worth surfacing.
 
 **So the app warns on headroom, not on the grant.** `assessStoragePressure`
-reads `estimate()` and bands the *remaining* quota: below ~250 MB is `low` (a
-Settings line), below ~50 MB is `critical` (an app-wide banner, mounted above
-every other banner in `AppLayout`). Headroom rather than an absolute quota
-figure, because a small quota on a small device is normal while small *remaining*
-quota means writes are about to fail whatever the device — and a `quota` of 0 is
-read as no room, never as unlimited, since that is precisely what a browser
-promising nothing looks like.
+reads `estimate()` and bands the *remaining* quota: below ~250 MB
+(`LOW_REMAINING_BYTES`) is `low` (a Settings line), below ~50 MB
+(`CRITICAL_REMAINING_BYTES`) is `critical` (an app-wide banner,
+`StoragePressureBanner`, mounted above every other banner in `AppLayout`).
+Headroom rather than an absolute quota figure, because a small quota on a small
+device is normal while small *remaining* quota means writes are about to fail
+whatever the device — and a `quota` of 0 is read as no room, never as unlimited,
+since that is precisely what a browser promising nothing looks like.
 
 Only `critical` interrupts. A banner that fires on "low" would be trained into
 invisibility, and this one has to be believed the single time it matters.
 `storage-durability.mjs` stubs `estimate()` to a nearly-full-disk shape and
 asserts the banner appears, because the warning's whole value is being *told* —
-a readout you have to go and look at would not have helped the two-day incident
-that prompted it.
+a readout you have to go and look at does not help.
 
 Which is why the mitigation that matters is not the grant but **cheap recovery**:
 cloud sync restores the library, and § Boot-time passes' per-row rules vintage is
 what keeps that restore from costing a reclassification of everything.
 
 `requestDurability` checks `persisted()` before calling `persist()`, because
-re-asking can re-prompt where browsers prompt, and the result is memoised so the
-boot call and the Settings readout share one answer. Everything is wrapped: some
-contexts (private windows, blocked site data) throw rather than resolve, and a
-storage question must never break boot.
+re-asking can re-prompt where browsers prompt, and `ensureDurableStorage`
+memoises the result so the boot call and the Settings readout share one answer.
+Everything is wrapped: some contexts (private windows, blocked site data) throw
+rather than resolve, and a storage question must never break boot.
 
 `scripts/test/integration/storage-durability.mjs` instruments
 `navigator.storage` *before* the app's scripts run, because "the card renders"
@@ -1280,7 +1209,7 @@ would pass just as happily over a `persist()` call that never happens.
 
 ## Cloud sync
 
-`src/features/sync/` mirrors three Dexie tables to Supabase.
+`src/features/sync/` mirrors four kinds of local data to Supabase.
 `supabase/cloud-sync.sql` is the whole server side and is idempotent — re-run it
 in the SQL editor after any change. Setup walkthrough: `SETUP_AUTH.md` §5.
 
@@ -1289,6 +1218,7 @@ in the SQL editor after any change. Setup walkthrough: `SETUP_AUTH.md` §5.
 | `cloud_games` | `games` |
 | `cloud_analyses` | `analyses` |
 | `cloud_puzzle_attempts` | `puzzleAttempts` |
+| `cloud_repertoires` | `repertoires` + `repertoireNodes` + `repertoireCards` + `repertoireLineStats`, one snapshot row per repertoire (below) |
 
 **Gating is in RLS, never the client.** Writes require a row in
 `cloud_sync_allowlist`, checked by `public.cloud_sync_enabled()` inside every
@@ -1301,7 +1231,7 @@ affordance, not a boundary. Two deliberate shapes:
   but can never enrol itself. Enrolment is a dashboard action, and is by
   **literal Clerk user id** in `cloud-sync.sql` — never a lookup on `profiles`,
   whose rows (username included) each user writes for themselves, so a lookup by
-  username enrolled anyone who claimed it.
+  username would enrol anyone who claimed it.
 - It is a separate table rather than a `profiles` column because column-level
   `REVOKE` does not subtract from a table-level `GRANT` — a column flag would
   still be settable by a crafted insert.
@@ -1322,11 +1252,11 @@ unordered scan has no stable page boundaries: an upsert between two pages
 (another device, the worker) can move a row, which then lands on two pages or on
 none. The repertoire manifest pages the same way.
 
-**Sync refuses a local library bound to another account.** When user B signs in
-on a browser bound to user A, the profile handshake refuses to merge — but sync
-is a separate trigger and used not to ask, so it pushed A's library into B's
-mirror (permanently: no DELETE policy) and pulled B's into A's local DB. Every
-entry point — `runCloudSync`, `syncPuzzleAttempts`, `syncRepertoires` — now calls
+**Sync refuses a local library bound to another account.** The profile handshake
+refuses to merge a browser bound to user A when user B signs in, but sync is a
+separate trigger; without its own check it would push A's library into B's
+mirror (permanently: no DELETE policy) and pull B's into A's local DB. Every
+entry point — `runCloudSync`, `syncPuzzleAttempts`, `syncRepertoires` — calls
 `assertLocalDataBelongsTo` (`sync/bindingGuard.ts`) before any request, which
 reuses the handshake's own rule (`isBoundToOtherUser` in `auth/profileBind.ts`)
 rather than a parallel one. An unbound device passes: the handshake binds it to
@@ -1338,21 +1268,22 @@ must use the bypass user's own id (TESTING.md).
 **Every decision column must actually be written.** The diff reads columns, not
 payloads, so a column left NULL makes the row read as something it isn't — and
 the diff stops being a fixed point, so every sync re-pushes everything.
-`toCloudAnalysis` carrying `engine` is the live example; `diff.test.ts` pins the
-round trip. **Every writer goes through the serializer**, the off-laptop worker
-included: its hand-built `cloud_analyses` row once omitted `recompute_version`,
-so every server analysis read as vintage 0 and each restore reclassified and
-re-pushed the library.
+`toCloudAnalysis` carrying `engine` and `recompute_version` is the live example;
+`diff.test.ts` pins the round trip. **Every writer goes through the serializer**
+(`toCloudAnalysis` / `toCloudGame`), the off-laptop worker included: a hand-built
+row that omits `recompute_version` reads as vintage 0, and each restore would
+reclassify and re-push it.
 
 Conflict rules, all in `diff.ts`:
 
 | table | rule |
 |---|---|
-| analyses | `isBetter`: **NNUE beats classical above depth**, then deeper, then newer. A classical search at depth 20 is a weaker judge searching further, not a better analysis — ranking depth first would let a laptop's classical re-analysis overwrite the server's NNUE work. |
+| analyses | `isBetter`: **NNUE beats classical above depth**, then deeper, then newer rules vintage (`recompute_version`, § Boot-time passes), then newer. A classical search at depth 20 is a weaker judge searching further, not a better analysis — ranking depth first would let a laptop's classical re-analysis overwrite the server's NNUE work. |
 | games | Whichever side is analyzed wins, **except** that a local `pending`/`running` is left alone. |
 | puzzle attempts | Field-by-field merge: max `attempts`, OR the sticky `solvedClean`/`hintUsed`, min `firstSeenAt`, max `lastAttemptedAt`, `rating`/`msTaken` from the more recent side, `history` unioned by `at`+`outcome` over each side's `eventsOf` (so a legacy side's synthesized first attempt is not lost; copies of one event merged field-wise, so it stays commutative), capped first + newest by `capHistory`, content from whichever side has it. |
+| repertoires | Three-way against `repertoireSyncBases` (below). |
 
-Attempts are the only genuinely concurrent table, and their merge is
+Attempts are the only genuinely concurrent row-level table, and their merge is
 **commutative and idempotent** (both pinned in `diff.test.ts`) so two devices
 converge without coordinating. Keep it that way: any new field needs an
 operation with those two properties.
@@ -1375,29 +1306,51 @@ Three invariants a change must not break:
    status `diffAnalyses`'s requeue guard keys off, and the requeue is silently
    undone. `error` still pulls — that is a failure, not an intent.
 
+**The requeue guard keys on `Game.requeuedAt`, not on status alone.**
+`requeueGame` deletes the local analysis and sets `pending`, and pulling the
+cloud's copy would undo that — but a game this device has simply never analyzed
+is *also* `pending`, and once the worker analyzes games the laptop never touched
+that is the normal case; a status-only guard would pull none of them while the
+laptop re-analyzes the whole library. So no stamp means nothing to protect and
+the cloud analysis pulls; a stamp at or after the remote `analyzed_at` means it is
+the discarded row; a stamp older than the remote analysis means someone did the
+work better elsewhere, and it pulls.
+
+**Pulling an analysis also settles the game row.** Writing the analysis alone
+would leave `analysisStatus: 'pending'`, so the local queue would re-analyze a
+game whose analysis had just arrived and clobber depth-18 NNUE with a shallower
+local pass — which the next sync would pull back. `accuracy` and
+`brilliantCount` are recomputed from **every** pulled analysis whose game is
+local — not only the ones being settled — and never trusted from `cloud_games`.
+That row is only fetched when the *game* is a pull candidate, and its cached
+numbers go stale (the worker writes them with whatever model and rules its image
+had), so re-deriving only for settled games would leave a restored library with
+stale accuracy. Pinned by `cloud-sync.mjs` step 3 (a stale cloud accuracy must
+not survive a restore) and 5b.
+
 **Triggers**, in `useCloudSync.ts`: on sign-in (after the allowlist probe), on
 the analysis queue going idle (`running` true→false), and the manual "Sync now"
 button in Settings. There is deliberately **no polling timer** for sync itself;
-the 45 s interval in `useCloudProgress` is a read-only progress readout and a
+the 45 s interval (`PROGRESS_POLL_MS`) is a read-only progress readout and a
 different thing. The store is pinned on `globalThis` so a duplicate module (HMR,
 dynamic import) cannot split the state.
 
 **Puzzle attempts upload on their own, ~10 s after each one and on tab hide**
-(`requestAttemptSync` → `syncPuzzleAttempts`). None of the three triggers above
-fires because of a puzzle, and the queue-idle one rarely fires at all now that
-the worker delivers games already analyzed — so without this, a session's
-progress waits on the device for the next app open, and any loss of local data in
-that window (§ Storage durability) takes it. **Anything new the user produces
-locally needs the same treatment**: a full-sync trigger will not cover it. The
-attempt-only path reads and writes **only** `cloud_puzzle_attempts` — the game and
-analysis manifests are thousands of rows, fine once per app open, wasteful once
-per puzzle — and waits behind an in-flight full sync rather than racing it, since
-both diff the same rows. Its plan comes from a read a network round trip old, so
-it **re-merges inside its write transaction** (`rebaseAttemptWrite`): a puzzle
-solved meanwhile has committed a newer row that writing the plan verbatim would
-erase. Exact rather than heuristic, because the merge is commutative and
-idempotent — with no race it is the planned row unchanged. Pinned by step 8 of
-`cloud-sync.mjs`.
+(`requestAttemptSync` → `syncPuzzleAttempts`, `ATTEMPT_SYNC_DELAY_MS`). None of
+the three triggers above fires because of a puzzle, and the queue-idle one rarely
+fires at all when the worker delivers games already analyzed — so without this, a
+session's progress waits on the device for the next app open, and any loss of
+local data in that window (§ Storage durability) takes it. **Anything new the user
+produces locally needs the same treatment**: a full-sync trigger will not cover
+it. The attempt-only path reads and writes **only** `cloud_puzzle_attempts` — the
+game and analysis manifests are thousands of rows, fine once per app open,
+wasteful once per puzzle — and waits behind an in-flight full sync rather than
+racing it, since both diff the same rows. Its plan comes from a read a network
+round trip old, so it **re-merges inside its write transaction**
+(`rebaseAttemptWrite`): a puzzle solved meanwhile has committed a newer row that
+writing the plan verbatim would erase. Exact rather than heuristic, because the
+merge is commutative and idempotent — with no race it is the planned row
+unchanged. Pinned by step 8 of `cloud-sync.mjs`.
 
 Its runner — `createCoalescingRunner`, which the repertoire upload uses too —
 has one rule that matters on tab hide:
@@ -1445,11 +1398,10 @@ Rules that must hold:
 **`startSync` coalesces concurrent triggers, but never onto an aborted pass.**
 De-duping onto a pass whose signal is already aborted *drops the request
 invisibly*: the aborted pass resolves, `isAbort` maps it to `phase: 'ready'` —
-which is indistinguishable from a clean no-op sync — and nothing transferred.
-This is not theoretical. Clerk resolves `isLoaded` / `userId` in stages, so the
-first effect run starts a sync and the second aborts it and retries; a retry that
-adopted the dying promise never synced at all, and whether that happened depended
-on network timing. Two rules follow:
+which is indistinguishable from a clean no-op sync — and nothing transfers.
+Clerk resolves `isLoaded` / `userId` in stages, so the first effect run starts a
+sync and the second aborts it and retries; a retry that adopted the dying promise
+would never sync, depending on network timing. Two rules follow:
 
 - a request arriving while the running pass is aborted **queues behind it**
   instead of adopting it;
@@ -1510,10 +1462,11 @@ between them leaves an adequate analysis beside an un-`done` game that
 `selectCandidates` would then skip forever. Each run settles those first
 (`selectUnsettled`), with no engine. Both rows go through `toCloudAnalysis` /
 `toCloudGame` (§ Cloud sync, "every decision column"). A run stopped by the
-50-failure budget **exits non-zero** so the Cloud Run execution reads as
-failed, and a search that times out is stopped and its `bestmove` drained — or,
-if wedged, the engine replaced — so the next position never receives the old
-search's answer. Details in the worker README § Resuming, and stopping.
+failure budget (more than 50 failures, outnumbering successes) **exits non-zero**
+so the Cloud Run execution reads as failed, and a search that times out is
+stopped and its `bestmove` drained — or, if wedged, the engine replaced — so the
+next position never receives the old search's answer. Details in the worker
+README § Resuming, and stopping.
 
 Auth is the Supabase **service_role** key, which bypasses RLS entirely — hence
 `USER_ID` is mandatory and every query filters on it. A classical analysis counts
@@ -1538,29 +1491,28 @@ re-analyzed; `DRY_RUN=1` prints the split.
 - **A wide table's horizontal scrollbar belongs on screen, not at the bottom of
   the table.** `overflow-x-auto` puts it at the bottom of the scrolled element,
   so on a table that is both wider than the window and several screens tall it
-  sits below the fold — the games table's was ~1 800 px down. `StickyXScroll`
-  draws it in a strip that is `position: sticky` to the bottom instead. It draws
-  the thumb rather than mirroring a native scrollbar into a second scroll
-  container, because a native thumb is invisible wherever the platform uses
-  overlay scrollbars — the strip would be an empty band until you were already
-  scrolling, which is the one thing a "you can scroll sideways here" affordance
-  must not be. It also means the thumb shows up in a screenshot, so
-  `games-sticky-scroll` can assert on it. `sticky` is defeated by a clipping or
-  scrolling ancestor, so the component renders its own wrapper — pass the surface
-  class (`card`) to it rather than nesting it inside one.
+  sits below the fold. `StickyXScroll` draws it in a strip that is
+  `position: sticky` to the bottom instead. It draws the thumb rather than
+  mirroring a native scrollbar into a second scroll container, because a native
+  thumb is invisible wherever the platform uses overlay scrollbars — the strip
+  would be an empty band until you were already scrolling, which is the one thing
+  a "you can scroll sideways here" affordance must not be. It also means the
+  thumb shows up in a screenshot, so `games-sticky-scroll` can assert on it.
+  `sticky` is defeated by a clipping or scrolling ancestor, so the component
+  renders its own wrapper — pass the surface class (`card`) to it rather than
+  nesting it inside one.
 - **A phone-width flex row shrinks whatever has an `auto` basis, and a `flex-1`
   child has a basis of 0.** So the item you meant to be flexible absorbs none of
-  the shortfall and the fixed-size ones absorb all of it: the onboarding account
-  card lost its avatar to it, a 48 px circle rendering 32×48 at 320 px while the
-  username clipped to a third of its width. Two habits follow — give an
+  the shortfall and the fixed-size ones absorb all of it (a 48 px avatar renders
+  32×48 at 320 px while the name beside it clips). Two habits follow — give an
   intrinsically-sized child (avatar, icon, badge) `shrink-0` so it cannot pay for
   a shortfall that is not its to pay, and stack the row on phones
   (`flex-col sm:flex-row`, full-width action) so there is no shortfall to
-  distribute. `NewGamesBanner` and `PlayerCard` are both this shape.
-  **`mobile-audit` cannot catch this class of bug**: shrinking is how flex
-  *avoids* overflow, so document width never exceeds window width and the audit
-  reports zero. Distortion needs its own assertion — `onboarding-mobile` checks
-  the avatar is still square and the name still unclipped.
+  distribute. `NewGamesBanner` and `PlayerCard` (`OnboardingPage.tsx`) are both
+  this shape. **`mobile-audit` cannot catch this class of bug**: shrinking is how
+  flex *avoids* overflow, so document width never exceeds window width and the
+  audit reports zero. Distortion needs its own assertion — `onboarding-mobile`
+  checks the avatar is still square and the name still unclipped.
 - `NAV_ITEMS` is exported from `AppLayout.tsx` and is the single definition of
   the nav; the mobile-drawer test derives its expected count from it rather than
   hard-coding one.
@@ -1574,13 +1526,13 @@ re-analyzed; `DRY_RUN=1` prints the split.
   sounds, so nothing is scheduled late except the `brilliant` flourish, which is
   deliberately a three-note arpeggio. Castling and promotion are plain moves;
   `brilliant` comes from `lastMoveClassification`, and precedence runs
-  mate > brilliant > check > capture > move. `Board` drives them off
-  `(fen, lastMoveUci)` rather than the user's drag, so one hook covers user
-  moves, engine replies, autoplay and history stepping; it's opt-in per board
-  (`sounds`) because the same component draws silent preview thumbnails. The
-  on/off preference lives in localStorage, not the synced `Settings` row,
-  because it's read synchronously inside a move handler and is a per-device
-  question.
+  mate (any game end) > brilliant > check > capture > move
+  (`classifyMoveSound`). `Board` drives them off `(fen, lastMoveUci)` rather than
+  the user's drag, so one hook covers user moves, engine replies, autoplay and
+  history stepping; it's opt-in per board (`sounds`) because the same component
+  draws silent preview thumbnails. The on/off preference lives in localStorage,
+  not the synced `Settings` row, because it's read synchronously inside a move
+  handler and is a per-device question.
 
 ## Deployment
 
@@ -1588,19 +1540,18 @@ Cloudflare Pages builds from `main` via its own GitHub integration, so deploys
 do **not** depend on GitHub Actions and nothing gates them. See `DEPLOY.md`.
 
 **The build command must be `npm run build`, never a bare `vite build`.** The
-`prebuild` hook is what stages the 40 MB NNUE net into `public/`, and Vite
-copies `public/` into `dist/` verbatim. Skip it and `dist/stockfish/nn-*.nnue`
-is absent, the runtime probe fails, and every analysis silently drops to the
-classical evaluator. Verify with:
-
-```bash
-npm run build && ls -l dist/stockfish/nn-*.nnue   # ~40 MB
-```
-
-That check passes locally and the deploy still ships without the net, because
-Cloudflare Pages rejects the 38.3 MiB asset outright — see § NNUE and
-DEPLOY.md. Both facts matter: the staging step has to keep working for dev and
-for any future host that accepts the file.
+`prebuild` hook (`copy-nnue.mjs --mode=production`) is where the NNUE rules of
+§ NNUE are enforced: it fails the build on a malformed `VITE_NNUE_NET_URL`, and
+on a Cloudflare Pages build (`CF_PAGES`) with no URL set, since a 38.3 MiB net
+would exceed the 25 MiB asset cap. With the committed `.env.production` the net
+is served from R2, so `prebuild` stages nothing and deletes any copy left in
+`public/stockfish/` by an earlier `npm run dev` — Vite copies `public/` into
+`dist/` verbatim, and a leftover would breach the cap. Only a same-origin build
+(URL unset, a host without that cap) stages the net. Skipping `prebuild` leaves
+just `nnueNetBuildGuard`, which strips a stray net from `dist/` in remote mode
+and only *warns* otherwise. To verify a production build, `dist/stockfish/` must
+hold **no** `nn-*.nnue`, and `npm run nnue:upload -- --verify-only` checks the
+remote net is reachable with CORS.
 
 Two verification gotchas: Vite content hashes are not reproducible across
 builds, so comparing a local `dist/` hash to the live one proves nothing — grep
@@ -1615,16 +1566,17 @@ per-route block** (Cloudflare *appends* per-route headers to the wildcard, and a
 duplicated `Cross-Origin-Embedder-Policy` makes `new Worker(url)` fail with an
 empty `ErrorEvent`), and the `Cache-Control: immutable` lines on `/stockfish/*`
 and `/puzzles/*` are load-bearing rather than an optimisation — they are what
-make a 40 MB net and an 18 MB corpus one-time costs. The CORP lines on those two
-routes are defensive: a same-origin `fetch` passes the check either way.
-`vite.config.ts` mirrors these headers in dev.
+make the engine files (and, on a same-origin host, the 40 MB net) and the 18 MB
+corpus one-time costs. The CORP lines on those routes are defensive: a
+same-origin `fetch` passes the check either way. `vite.config.ts` mirrors these
+headers in dev.
 
 The Chrome extension ships separately:
 `npm run extension:build -- --coach-origin=https://<host>` stamps the production
 origin into `options.js` only (`content.js` keeps its localhost dev default on
 purpose). The options page seeds that origin into `chrome.storage` on first
-load, because `storage.sync.get` defaults are read-only and nothing was
-persisted until the user pressed Save.
+load, because `storage.sync.get` defaults are read-only and never persisted
+until the user presses Save.
 
 Its deep link's `endTime` is the **click time**, a hint rather than the game's
 end (the page exposes none), so `importGameByUrl` scans the hinted, current and
@@ -1632,5 +1584,46 @@ previous months and, only when all miss, up to `MAX_WIDENED_MONTHS` (24) older
 months from the player's archive index — an old game opened from the archive
 would otherwise never be found. Daily games keep the `/game/daily/<id>` shape
 end to end: their ids are a separate number space, so rewriting one to
-`/game/live/<id>` named a live game that may not exist. See
+`/game/live/<id>` names a live game that may not exist. See
 `extension/README.md`.
+
+## Open items
+
+Known, unfixed, and worth picking up. Remove an entry when it is done.
+
+- **Extension 0.3.1 is not published.** The manifest (name "Chess Coach: Review
+  After Game"; Review counts as handling the game; daily URLs kept) is ahead of the
+  Web Store listing. Rebuild the zip and submit: DEPLOY.md § 9 (9b/9c),
+  `extension/README.md`.
+- **`cloud_analyses` rows the worker wrote before it used `toCloudAnalysis` have
+  NULL `recompute_version`.** They heal without intervention: NULL reads as
+  vintage 0, so any sync from a device whose local copy is stamped outranks it in
+  `isBetter` and pushes the column; after a restore the recompute pass stamps any
+  pulled row below 4, and the same push follows. No backfill is worthwhile: one
+  restricted to images with `RECOMPUTE_VERSION ≥ 3` could only claim 3 (column
+  and `data->recomputeVersion` together), still below the current 4, so those
+  rows would be reclassified and re-pushed anyway.
+- **Repertoires created in the wrong colour before `familyColor`'s current rules
+  are not migrated.** Nothing re-derives a stored repertoire's colour.
+- **Motif detection gaps** (`engine/motifs.ts`): `isKingUnsafe` (`weakKing`)
+  counts attacked king-adjacent squares via `attackersOf`, a move list, so a pawn
+  push onto an empty square counts as an attack (and a pawn's diagonal does not);
+  `pinSkewerLines` ignores a skewer with the king in front (`first.type !== 'k'`).
+- **Openings readers replay a set-up-position game as if from the standard
+  start**: `buildPersonalOpeningStats` (`openings/recommendations.ts`) and
+  `uciFromPgn` (`openings/identifyFromGame.ts`) key the set-up game's moves as
+  standard-start prefixes, and `EngineCockpit`'s fallback board replays them on
+  `new Chess()`.
+- **Accuracy model residual**: reads ~5 high where Chess.com scores below 60
+  (§ Engine, calibration).
+- **Each worker deploy adds a Secret Manager version of the `service_role` key**
+  (five at last count; six active versions are free). Old versions can be
+  destroyed: `scripts/worker/README.md` § Cost, and a guard.
+- **`public/_headers` sets no `Content-Security-Policy`.** A hardening gap; a
+  policy has to admit the R2 net origin and the Clerk and Supabase endpoints.
+- **`TIERS` in `scripts/build-puzzles.mjs` and `PUZZLE_TIERS` in the manifest are
+  vestigial** (only the build's band report reads them; the page serves no tiers).
+  Drop them on the next corpus rebuild.
+- **Puzzle solver eval-bar tooltip**: while solving, the deliberately neutral bar
+  still titles itself "Engine thinking…" (`EvalBar`'s no-label fallback), which
+  implies an engine is running.

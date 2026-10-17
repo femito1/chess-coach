@@ -56,7 +56,7 @@ What it talks to
 • chess.com tabs, to see when a game ends.
 • Your Chess Coach app, to open the finished game there.
 
-Nothing else. The extension sends your data nowhere else and has no analytics. It only stores your chess.com username and the address of your Chess Coach app, in chrome.storage.sync.
+Nothing else. The extension sends your data nowhere else and has no analytics. It only stores your chess.com username, the address of your Chess Coach app and whether the card is switched on, in chrome.storage.sync.
 
 Setup
 1. Install.
@@ -86,7 +86,9 @@ https://github.com/femito1/chess-coach
 ```
 
 (The repo `origin`. If it's private, leave this field blank and rely
-on the Support email instead — the reviewer will follow the link.)
+on the Support email instead — the reviewer will follow the link. A blank
+homepage also means deleting the "Source code" paragraph from the
+description, which points at it.)
 
 ### Support email
 The Google account email tied to your developer console is fine.
@@ -110,7 +112,7 @@ The Google account email tied to your developer console is fine.
 npm run extension:screenshots
 ```
 
-Writes both required PNGs to `dist-extension/screenshots/` at exactly
+Writes both PNGs to `dist-extension/screenshots/` at exactly
 1280×800, 24-bit with no alpha channel — the dev console rejects PNGs
 that carry alpha. Shot 1 is the after-game prompt on a synthetic
 chess.com page; shot 2 is the options page in its "Connected ✓" state.
@@ -156,7 +158,7 @@ Persists the user's Chess.com username, their Chess Coach app URL, and a boolean
 
 #### `host_permissions: https://www.chess.com/*`
 ```
-The content script runs on chess.com pages to detect when a game ends (via DOM observation of the post-game UI) and to read the game's URL so the deep link can carry it to Chess Coach. No data is sent off the user's machine — the deep link is a tab navigation in the user's own browser.
+The content script runs on chess.com pages to detect when a game ends (via DOM observation of the post-game UI) and to read the game's URL so the deep link can carry it to Chess Coach. No data is sent off the user's machine. The deep link is a tab navigation in the user's own browser.
 ```
 
 #### `optional_host_permissions: http://*/* and https://*/*`
@@ -180,10 +182,12 @@ The form gives you a checkbox grid like *"Personally identifiable
 information"*, *"Authentication information"*, *"Personal
 communications"*, etc., and asks which ones the extension
 **collects, uses, or transmits**. The honest answer for this
-extension is **none of them** — it stores a username and a URL in
-local sync storage and does not transmit anything. Tick **none**.
+extension is **none of them** — it stores a username, a URL and an
+on/off toggle in `chrome.storage.sync`, and transmits no user data (its
+only request is **Test connection**, a credential-less fetch of the
+user's own Chess Coach URL). Tick **none**.
 
-The two affirmative declarations the form requires:
+The three affirmative declarations the form requires:
 
 - ☑ "I do not sell or transfer user data to third parties, apart
   from approved use cases."
@@ -239,15 +243,15 @@ If rejected, the email lists the exact reason. Fix it, click
 
 ## Releasing an update
 
-For every release:
+For every release (the same steps as `DEPLOY.md § 9c`):
 
 1. Bump `version` in `extension/manifest.json` (Chrome rejects
    re-uploads of an existing version).
 2. `npm run extension:build -- --coach-origin=https://chess-coach-bip.pages.dev`
 3. Dev console → your item → **Package** → **Upload new package**.
 4. **Submit for review**.
-5. Approval typically lands within an hour. Chrome auto-pushes
-   the update to installed users within ~24h after that.
+5. Approval of an update usually lands within 24 hours. Chrome
+   auto-pushes it to installed users within ~24h after that.
 
 The `version` field follows Chrome's `x.y.z.w` numeric scheme
 (each segment 0–65535). Semver works fine — `0.3.1`, `0.4.0`, etc.

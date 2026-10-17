@@ -14,14 +14,15 @@ just another device — one that imports and analyzes, and never needs you there
     laptop  ◀──sync───────────┘               results come back
 ```
 
-**Import is what makes it unattended.** Before it existed the worker only saw
-games the laptop had already imported, and by then the laptop had usually
-analyzed them too — so the scheduled run found nothing to do, every time, and
-"succeeded". It reads from one month before the newest game already in the cloud
-through the newest archive (`selectImportArchives`), so a missed run heals
-itself, and inserts only rows that are absent, so it never overwrites a game the
-laptop pushed. It never makes a *first* import: with no games in the cloud there
-is no anchor, and how much history to pull is the onboarding wizard's question.
+**Import is what makes it unattended.** Without it the worker sees only games
+the laptop has already imported, and by then the laptop has usually analyzed
+them too — so a scheduled run finds nothing to do, every time, and "succeeds".
+It reads from one month before the newest game already in the cloud through the
+newest archive (`selectImportArchives`), so a missed run heals itself, and
+inserts only rows that are absent, so it never overwrites a game the laptop
+pushed. It never makes a *first* import: with no games in the cloud there is no
+anchor, and how much history to pull is the onboarding wizard's question. A
+failed import is logged and the run goes on to analyze what is already there.
 `IMPORT=0` turns it off; `CHESSCOM_USERNAME` overrides the account, which
 otherwise comes from the newest game.
 
@@ -34,11 +35,11 @@ summary back onto `cloud_games` (`analysis_status: 'done'`, `accuracy`,
 `brilliantCount`). The second is what lets a laptop that never analyzed the game
 see it as analyzed after a sync. Both go through the browser's own serializers
 (`toCloudAnalysis`, `toCloudGame` in `src/features/sync/diff.ts`), so every
-decision column cloud sync reads is written. A hand-built analysis row here once
-omitted `recompute_version`: every server analysis then read as rules vintage 0,
-and each restore reclassified and re-pushed the whole library. The analysis
-itself carries `recomputeVersion` because `analyzeGamePgn` stamps it — the
-worker never calls `saveAnalysis`.
+decision column cloud sync reads is written. Do not hand-build a row here: one
+missing `recompute_version`, for example, reads as rules vintage 0, and each
+restore then reclassifies and re-pushes the whole library. The analysis itself
+carries `recomputeVersion` because `analyzeGamePgn` stamps it — the worker never
+calls `saveAnalysis`.
 
 Chess.com variants (`rules` other than `chess`) are skipped at import, as in the
 browser: nothing downstream plays them by their own rules.
@@ -55,7 +56,7 @@ things the browser cannot do:
   imports only when you click the new-games banner. The hourly job does both, so
   a game you played is imported and reviewed within the hour, before you look.
 - **Serve devices that cannot run the pool.** A phone runs one classical worker;
-  the server runs seven NNUE engines at depth 18.
+  the server runs native NNUE engines at depth 18, one per core less one.
 
 Analyses record which evaluator produced them (`Analysis.engine`), and cloud sync
 prefers NNUE over classical for the same game **even at lower depth**, so a
@@ -86,11 +87,9 @@ phone's classical analysis can never overwrite the server's NNUE one.
 
 ### 2. Get your games into the cloud — once
 
-The worker imports *new* games itself, anchored on the newest game already in
-the cloud, but never makes a first import: how much history to pull is the
-onboarding wizard's question. So on a fresh account, import in the app and sync
-once (**Settings → Cloud sync → Sync now**). With no games in the cloud the
-worker says so and exits.
+The worker never makes a first import (see above), so on a fresh account,
+import in the app and sync once (**Settings → Cloud sync → Sync now**). With no
+games in the cloud the worker says so and exits 0.
 
 ### 3. Configure
 
@@ -141,9 +140,10 @@ npm run worker:verify
 
 This is not a formality. It checks three things:
 
-1. **With `Use NNUE false`, does this binary reproduce the browser?** If yes, a
-   classical-configured worker can extend the existing library seamlessly. On
-   the reference machine both positions matched to the centipawn (delta 0).
+1. **With `Use NNUE false`, does this binary reproduce the browser?** Two quiet
+   positions must land within 15 cp of the values measured from the app's own
+   engine, and a forced mate must be found. If yes, a classical-configured
+   worker can extend the existing library seamlessly.
 2. **With `Use NNUE true`, do the numbers actually change?** This catches a
    binary silently failing to load its network and falling back to classical.
 3. **Does `analyzeGamePgn` run end to end under Node?** It analyzes a short
@@ -194,8 +194,8 @@ NNUE analyses alone.
 
 Every analysis is written the moment it finishes, so the job is resumable by
 construction — Ctrl-C or kill it and re-run, and it continues from where it got
-to. `SIGINT`/`SIGTERM` finish the in-flight game first. There is no lease or
-checkpoint state to corrupt.
+to. `SIGINT`/`SIGTERM` finish the in-flight game first; a second signal exits
+at once. There is no lease or checkpoint state to corrupt.
 
 **The two writes per game are not atomic** — PostgREST gives the worker no
 transaction across them — so a run killed between them (the 55-minute task
@@ -211,15 +211,14 @@ A single failing game (unparseable PGN, say) is logged and skipped rather than
 ending the run; the next invocation retries it. A run that is failing more than
 it is succeeding does stop, though: past 50 failures, once failures outnumber
 completions, it breaks out rather than burning the rest of the compute, and
-**exits non-zero** so the Cloud Run execution reads as failed — exiting 0 made a
-broken setup look like a run that simply finished early. Settle failures count
-against the same budget.
+**exits non-zero** so the Cloud Run execution reads as failed rather than like a
+run that simply finished early. Settle failures count against the same budget.
 
 **A timed-out search is stopped, not abandoned.** Each position gets 300 s to
 answer `bestmove`. A timeout only stops *waiting* — Stockfish keeps searching —
-and an engine handed back to the pool in that state answered its next position
-with the old search's `bestmove` and `info` lines: a wrong evaluation for a
-different position, silently. So on a timeout the engine is sent `stop` and its
+and an engine handed back to the pool in that state would answer its next
+position with the old search's `bestmove` and `info` lines: a wrong evaluation
+for a different position, silently. So on a timeout the engine is sent `stop` and its
 `bestmove` drained before it is reused; if even that does not arrive within
 10 s the process is wedged, and it is killed and replaced with a fresh engine so
 the pool keeps its size.
@@ -260,8 +259,7 @@ One command stands the whole thing up. Then the loop needs no human in it:
 The workload is a burst: CPU-bound, no inbound ports, resumable, idle most of the
 time. Cloud Run jobs scale to zero and bill **allocated** CPU and memory by the
 second — including the ~15–50 s of container start every run pays even when there
-is nothing to do. Analysis itself costs roughly **35 vCPU-seconds per game**. The
-free tier is ~180 000 vCPU-s and ~360 000 GiB-s a month. There is also no VM to
+is nothing to do (numbers under § Cost, and a guard). There is also no VM to
 remember to destroy, which is the usual way the "just rent a box for an hour"
 approach turns into a monthly bill.
 
@@ -286,7 +284,7 @@ Reads `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `USER_ID` from the same
 
 ```bash
 npm run worker:deploy -- --region=us-central1
-npm run worker:deploy -- --schedule="17 4 * * *"   # e.g. back to nightly
+npm run worker:deploy -- --schedule="17 4 * * *"   # e.g. nightly
 npm run worker:deploy -- --cpu=8 --memory=16Gi     # e.g. for a big re-analysis
 npm run worker:deploy -- --no-schedule             # job only, no trigger
 ```
@@ -296,11 +294,12 @@ npm run worker:deploy -- --no-schedule             # job only, no trigger
 **Hourly, at 2 vCPU / 4 GiB.** Sized for the steady state, a handful of games an
 hour, not for a backlog. The size matters more than it looks because an idle run
 is billed for its whole allocation: at 8 vCPU / 16 GiB, 720 mostly idle runs a
-month came to ~230 000 vCPU-s and ~460 000 GiB-s, over the free tier. At 2 / 4 it
+month come to ~230 000 vCPU-s and ~460 000 GiB-s, over the free tier. At 2 / 4 it
 is about a third of it. A big re-analysis still completes, an hour at a time —
 redeploy with `--cpu=8 --memory=16Gi` first only if it must finish faster, and
-then size back down. The trigger is still named `chess-coach-analysis-nightly`
-from when it ran nightly; renaming it means deleting and recreating it.
+then size back down. The trigger is named `chess-coach-analysis-nightly` although
+it runs hourly; renaming it means deleting and recreating it, so the commands
+below use that name.
 
 **`--tasks=1`, always.** The worker has no lease or claiming — it selects every
 candidate game itself — so *N* parallel tasks would each analyze the same games
@@ -310,7 +309,8 @@ the task, via `CONCURRENCY` engine processes.
 **`CONCURRENCY` is pinned, not inferred.** The worker defaults it to
 `os.cpus().length - 1`, and inside a container `os.cpus()` reports the **host's**
 core count rather than the cgroup limit. Left to guess, an 8-vCPU job could spawn
-dozens of Stockfish processes and thrash. The script sets it to `cpu - 1`.
+dozens of Stockfish processes and thrash. The script sets it to `cpu - 1`
+(minimum 1), so the default 2 vCPU job runs one engine.
 
 **`--task-timeout=55m`, `--max-retries=0`: shorter than the schedule.** Cloud Run
 does not serialize executions of a job, and with no lease two overlapping runs
@@ -327,8 +327,8 @@ backlog overnight, and the whole point of `worker:verify` is that a wrong binary
 produces numbers which are not comparable with the rest of your library. Resume it
 once you have verified.
 
-**The verify job gets no credentials.** Verified by running it: the verifier reads
-only `STOCKFISH_PATH` and never touches the database, so binding an
+**The verify job gets no credentials.** The verifier reads only
+`STOCKFISH_PATH` and never touches the database, so binding an
 RLS-bypassing key to it would be gratuitous. It is a separate job rather than an
 execution override because `gcloud run jobs execute` can override env vars and
 args but *not* the container command.
@@ -378,7 +378,7 @@ An existing trigger is updated in place from the script's `--schedule` default
 and keeps its enabled or paused state — so the script's defaults are production's,
 and a redeploy re-asserts them. (A dry run cannot show that branch; it prints a
 create-then-pause.) Each deploy also adds a Secret Manager version of the key; see
-§ Cost. So:
+§ Cost, and a guard. So:
 
 ```bash
 USER_ID=user_… npm run worker:deploy -- \
@@ -402,9 +402,11 @@ the fans.
 
 ### Cost, and a guard
 
-Hourly at 2 vCPU / 4 GiB is roughly a third of the free tier in a normal month,
-almost all of it container start-up. A full-library re-analysis (~2 000 games ×
-~35 vCPU-s) adds ~70 000 vCPU-s, so one in a month still fits. Measure real cost
+The free tier is ~180 000 vCPU-s and ~360 000 GiB-s a month. Hourly at 2 vCPU /
+4 GiB uses roughly a third of it in a normal month, almost all of it container
+start-up. Analysis itself costs roughly **35 vCPU-seconds per game**, so a
+full-library re-analysis (~2 000 games) adds ~70 000 vCPU-s, and one in a month
+still fits. Measure real cost
 from execution durations (`gcloud run jobs executions list`), not from this
 paragraph.
 

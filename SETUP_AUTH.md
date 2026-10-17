@@ -208,12 +208,12 @@ It is deliberately opt-in **per account**, enforced in the database:
 1. Open the **SQL Editor** in the Supabase dashboard.
 2. Paste the whole of [`supabase/cloud-sync.sql`](supabase/cloud-sync.sql) and
    click **Run**. It is idempotent — re-running it changes nothing. **Re-run it
-   after pulling changes to that file**: it adds columns with
-   `add column if not exists`, and a column the code writes but the table lacks
-   makes every push fail. The most recent addition is the
-   `cloud_repertoires` table (2026-10-07). Until it exists the app skips
-   repertoire backup with a console warning rather than failing the rest of
-   sync — so repertoires are **not** backed up until you re-run this file.
+   after pulling changes to that file**, before deploying the code that needs
+   them: it adds tables and columns with `if not exists`, and a column the code
+   writes but the table lacks makes every push fail. A missing
+   `cloud_repertoires` table is the one soft case: the app skips repertoire
+   backup with a console warning rather than failing the rest of sync, so
+   repertoires are silently **not** backed up until the file has been run.
    To check a table from a script, use a plain `select(…).limit(1)` and look
    for `error.code === 'PGRST205'`. Not a head-only count: on a missing table
    `select('*', { count: 'exact', head: true })` returns `error: null,
@@ -224,14 +224,13 @@ It is deliberately opt-in **per account**, enforced in the database:
    that id before running — find it with
    `select id, display_name, chesscom_username from public.profiles;` and
    confirm it in the Clerk dashboard (**Users**), never against what the profile
-   row says about itself. The file used to look the id up by
-   `chesscom_username`, but every user writes their own profile row, username
-   included, so each re-run enrolled anyone who had typed that username into
-   onboarding. A Clerk id is issued by Clerk and cannot be claimed.
+   row says about itself. Never enrol by a `profiles` lookup such as
+   `chesscom_username`: every user writes their own profile row, so a username
+   match enrols anyone who typed that username into onboarding. A Clerk id is
+   issued by Clerk and cannot be claimed.
 3. The last statement prints the allowlist. You should see exactly one row, for
    the account you want to sync. **Check every row it prints**: any other is an
-   account enrolled by hand or by the old username lookup, and if it is not
-   meant to sync, delete it
+   account enrolled outside this file, and if it is not meant to sync, delete it
    (`delete from public.cloud_sync_allowlist where user_id = '<id>';`).
 4. Reload the app and open **Settings**. A **Cloud sync** card appears, with the
    last run and a **Sync now** button. It appears *only* for enrolled accounts.
@@ -277,7 +276,7 @@ stay enabled**: Clerk refuses to let you disable both, so there is no
 "never expires" — the goal is the largest maximum lifetime the Dashboard accepts,
 with the inactivity timeout off.
 
-**2. Which Clerk *instance* production runs.** As of 2026-09-03 it is a
+**2. Which Clerk *instance* production runs.** It is a
 **development** instance: the deployed bundle embeds
 `pk_test_…` decoding to `close-falcon-62.clerk.accounts.dev`. That is the ceiling
 on how durable a session can be, whatever the lifetime says, because dev and
@@ -294,16 +293,14 @@ production instances carry the session by different mechanisms:
 
 So on the current instance, raising the lifetime helps on desktop Chrome/Firefox
 and does much less on a phone. Moving to a production instance is the real fix and
-is **deliberately deferred** (decided 2026-09-03). It needs a custom domain, which
-this project does not have yet — the assigned `chess-coach-bip.pages.dev` hostname
-cannot carry the required CNAME records. Note before planning it: **Clerk does not
+is **deliberately deferred**. It needs a custom domain (DEPLOY.md §5), which this
+project does not have — the assigned `chess-coach-bip.pages.dev` hostname cannot
+carry the required CNAME records. Note before planning it: **Clerk does not
 transfer user data between instances**, so existing accounts would have to sign up
 again.
 
-Unrelated to both, and already handled: the browser evicting the origin's storage
-takes the session *and* the library together. `navigator.storage.persist()` is
-requested at boot and the state is shown in Settings — see ARCHITECTURE.md
-§ Storage durability, which also records why that grant is not a guarantee.
+Unrelated to both: the browser evicting the origin's storage takes the session
+*and* the library together. See ARCHITECTURE.md § Storage durability.
 
 ## Production checklist
 
@@ -316,9 +313,8 @@ None of these matter for local dev. They all matter for the deployed app
       deploys, so OAuth redirects work there.
 - [ ] Clerk → **API Keys**: use a `pk_live_…` key for production
       (separate Clerk app, or the "Production" instance of the same one).
-      **Still outstanding as of 2026-09-03** — production runs a `pk_test_`
-      development instance, which is the ceiling on session durability. See
-      § How long a login lasts.
+      **Outstanding** — production runs a `pk_test_` development instance,
+      which is the ceiling on session durability. See § How long a login lasts.
 - [ ] Supabase → **Authentication → URL Configuration**: add the
       production hostname to the allowed redirect list.
 - [ ] Confirm RLS is enabled on `profiles`. The `enable row level
