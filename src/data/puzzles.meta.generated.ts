@@ -22,9 +22,6 @@ export const BAND_WIDTH = 100;
  *  against a newer vocabulary. */
 export const PUZZLE_THEMES: readonly string[] = ["advancedPawn","advantage","anastasiaMate","arabianMate","attackingF2F7","attraction","backRankMate","balestraMate","bishopEndgame","blindSwineMate","bodenMate","capturingDefender","castling","clearance","collinearMove","cornerMate","crushing","defensiveMove","deflection","discoveredAttack","discoveredCheck","doubleBishopMate","doubleCheck","dovetailMate","enPassant","endgame","epauletteMate","exposedKing","fork","hangingPiece","hookMate","interference","intermezzo","killBoxMate","kingsideAttack","knightEndgame","long","master","masterVsMaster","mate","mateIn1","mateIn2","mateIn3","mateIn4","mateIn5","middlegame","morphysMate","oneMove","opening","operaMate","pawnEndgame","pillsburysMate","pin","promotion","queenEndgame","queenRookEndgame","queensideAttack","quietMove","rookEndgame","sacrifice","short","skewer","smotheredMate","superGM","swallowstailMate","trappedPiece","triangleMate","underPromotion","veryLong","vukovicMate","xRayAttack","zugzwang"] as const;
 
-/** Difficulty tiers, by rating. `maxExclusive: null` = open-ended. */
-export const PUZZLE_TIERS: readonly { id: string; maxExclusive: number | null }[] = [{"id":"easy","maxExclusive":1300},{"id":"medium","maxExclusive":1900},{"id":"hard","maxExclusive":null}] as const;
-
 export interface PuzzleShardMeta {
   /** Rating band index: rating = RATING_MIN + band * BAND_WIDTH. */
   band: number;
