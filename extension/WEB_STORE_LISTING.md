@@ -45,33 +45,29 @@ When a chess.com game ends, one click opens it in Chess Coach for review. No cop
 
 ### Description (rich text, line breaks preserved)
 ```
-Chess Coach: Review After Game takes you from a finished game to its review in one click.
+When a chess.com game ends, this extension puts a small "Review in Chess Coach?" card in the corner of the page. Click Review and the game opens in Chess Coach, already imported, with the analysis under way.
 
 How it works
-• You finish a game on chess.com.
-• A small "Review in Chess Coach?" card appears in the corner of the page.
-• Click it. Chess Coach opens that game, imported and ready to analyse.
+• Finish a game on chess.com, live or daily.
+• The card shows up once. Close it if you don't want a review.
+• Click Review. Chess Coach opens on that game in a new tab.
 
-What it talks to
-• chess.com tabs, to see when a game ends.
-• Your Chess Coach app, to open the finished game there.
-
-Nothing else. The extension sends your data nowhere else and has no analytics. It only stores your chess.com username, the address of your Chess Coach app and whether the card is switched on, in chrome.storage.sync.
+It works on older games too. Open a game you finished earlier and the card appears.
 
 Setup
-1. Install.
-2. The options page opens on its own.
-3. Enter your chess.com username.
-4. The Chess Coach address is already filled in. You can click "Test connection" to check it.
-5. Save.
+1. Install the extension. Its settings page opens.
+2. Type your chess.com username.
+3. The Chess Coach address is already filled in. Click "Test connection" if you want to check it.
+4. Click Save.
 
-That's it. Finish a chess.com game and the card appears.
+If the card doesn't show up
+chess.com changes its end-of-game screen now and then, and the extension can miss the new one until it's updated. Click the extension's icon in the toolbar while you're on the finished game and the card appears anyway.
 
-If the card doesn't appear
-chess.com sometimes changes its end-of-game screen. If the card doesn't show up, click the extension's toolbar icon while you're on the finished game and you'll get the same card.
+Privacy
+The extension keeps three things in your browser's synced storage: your chess.com username, the address of your Chess Coach app, and whether the card is turned on. There is no tracking and no analytics. The only network request it makes is "Test connection", and only when you click it. Opening a review is just a new tab.
 
 Source code
-The extension is open source. See the homepage link on this listing.
+The code is open source. The homepage link on this listing goes to it.
 ```
 
 ### Category
