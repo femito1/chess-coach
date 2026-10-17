@@ -107,6 +107,14 @@ describe('detectMotifs — walked into (the opponent’s reply)', () => {
     expect(motifsOf(standing, 'h7h6', { replyUci: 'e1e2' })).not.toContain('pin');
   });
 
+  it('tags a skewer through a checked king, but not one with a pawn behind it', () => {
+    // ...g3 lets Ra7+ hit the king and, behind it on the same rank, the queen.
+    const queen = '8/3k3q/8/8/6p1/8/8/R5K1 b - - 0 1';
+    expect(motifsOf(queen, 'g4g3', { replyUci: 'a1a7' })).toContain('skewer');
+    const pawn = '8/3k3p/8/8/6p1/8/8/R5K1 b - - 0 1';
+    expect(motifsOf(pawn, 'g4g3', { replyUci: 'a1a7' })).not.toContain('skewer');
+  });
+
   it('tags backRank only when a heavy piece then has a back-rank mate', () => {
     // ...Ra2 abandons the eighth rank; after any White reply Rd8# is on.
     const fen = 'r5k1/5ppp/8/8/8/8/5PPP/3R2K1 b - - 0 1';
@@ -142,5 +150,23 @@ describe('detectMotifs — missed', () => {
   it('does not tag missedPin for a pin that stood before the move', () => {
     const fen = '4k3/7p/2n5/8/B7/8/8/4K3 w - - 0 1';
     expect(motifsOf(fen, 'a4b3', { bestUci: 'e1e2' })).not.toContain('missedPin');
+  });
+});
+
+describe('detectMotifs — weak king', () => {
+  it('judges the mover’s king, not the opponent’s', () => {
+    // White's king has no cover: the f8 rook and h4 queen hit f1, f2, h1, h2.
+    // Black's own king is untouched.
+    const fen = '5rk1/8/8/8/7q/8/8/B5K1 w - - 0 1';
+    expect(motifsOf(fen, 'a1b2')).toContain('weakKing');
+  });
+
+  it('counts pawn attacks, not pawn pushes', () => {
+    // f3 and g3 attack e2, g2, f2 and h2. As moves they reached only f2 and g2.
+    const attacks = '7k/8/8/8/8/5pp1/8/B5K1 w - - 0 1';
+    expect(motifsOf(attacks, 'a1b2')).toContain('weakKing');
+    // Pushes onto f2 and h2 plus a capture on g2 attack only g2.
+    const pushes = 'k7/8/8/8/8/5p1p/6P1/B5K1 w - - 0 1';
+    expect(motifsOf(pushes, 'a1b2')).not.toContain('weakKing');
   });
 });

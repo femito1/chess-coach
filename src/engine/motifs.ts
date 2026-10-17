@@ -33,22 +33,6 @@ function withTurn(fen: string, color: 'w' | 'b'): Chess | null {
 }
 
 /**
- * Enumerate (attackerSquare, attackerPieceType) pairs for a given color
- * attacking `square` in the current position.
- */
-function attackersOf(c: Chess, square: Square, color: 'w' | 'b'): { from: Square; type: string }[] {
-  const out: { from: Square; type: string }[] = [];
-  const scratch = withTurn(c.fen(), color);
-  if (!scratch) return out;
-  for (const m of scratch.moves({ verbose: true }) as Move[]) {
-    if (m.to === square && (m.flags.includes('c') || m.flags.includes('e') || m.piece)) {
-      out.push({ from: m.from as Square, type: m.piece });
-    }
-  }
-  return out;
-}
-
-/**
  * Recursive static-exchange evaluation on `square`. Positive = the side
  * currently to move in `c` gains that many points by initiating captures.
  */
@@ -176,7 +160,9 @@ function isForkAt(fenAfter: string, toSquare: Square): boolean {
  * Very light pin/skewer detector: walks every line of `attacker`'s sliders
  * (B/R/Q) in `fen`. A line whose first enemy piece is not the king and whose
  * second IS the king is a pin; one whose second is worth less than the first
- * is a skewer.
+ * is a skewer. A king in front is the classic skewer (the check forces it off
+ * the line), but only with a piece behind it: a pawn behind a checked king is
+ * not what anyone means by the word.
  *
  * Returns each line as a `slider>front>back` key rather than a yes/no, so the
  * caller can subtract the lines that already existed before the move — a pin
@@ -220,7 +206,7 @@ function pinSkewerLines(
               const key = `${sqName(r, f)}>${first.sq}>${sqName(rr, ff)}`;
               if (sq.type === 'k' && first.type !== 'k') {
                 pins.add(key);
-              } else if (secondVal < first.value && first.type !== 'k') {
+              } else if (first.type === 'k' ? sq.type !== 'p' : secondVal < first.value) {
                 skewers.add(key);
               }
               break;
@@ -454,8 +440,10 @@ export function detectMotifs(input: DetectMotifsInput): Motif[] {
   }
 
   // King-in-trouble: if opponent has many attackers near our king and no
-  // solid defenders, tag 'weakKing'.
-  if (winrateBefore - winrateAfter >= 0.15 && isKingUnsafe(fenAfter)) {
+  // solid defenders, tag 'weakKing'. "Our" king is the mover's, the side NOT
+  // to move in `fenAfter`.
+  const mover = fenAfter.split(' ')[1] === 'w' ? 'b' : 'w';
+  if (winrateBefore - winrateAfter >= 0.15 && isKingUnsafe(fenAfter, mover)) {
     motifs.add('weakKing');
   }
 
@@ -467,13 +455,15 @@ export function detectMotifs(input: DetectMotifsInput): Motif[] {
 }
 
 /**
- * Cheap "king safety" heuristic: count squares adjacent to the mover-to-move
- * king that are attacked by the opponent.
+ * Cheap "king safety" heuristic: count squares adjacent to `me`'s king that
+ * are attacked by the other side. Attacked means `attackers()`, the
+ * attack map, not a move list: a pawn push onto an empty square is a move but
+ * not an attack, and a pawn's diagonal onto an empty square is an attack but
+ * not a move.
  */
-function isKingUnsafe(fen: string): boolean {
+function isKingUnsafe(fen: string, me: 'w' | 'b'): boolean {
   const c = loadSafe(fen);
   if (!c) return false;
-  const me = c.turn();
   const board = c.board();
   let kingFile = -1;
   let kingRankIdx = -1;
@@ -495,8 +485,7 @@ function isKingUnsafe(fen: string): boolean {
       const nf = kingFile + df;
       if (nr < 0 || nr > 7 || nf < 0 || nf > 7) continue;
       const sq = (String.fromCharCode(97 + nf) + (8 - nr)) as Square;
-      const atks = attackersOf(c, sq, me === 'w' ? 'b' : 'w');
-      if (atks.length > 0) attackedCount++;
+      if (c.attackers(sq, me === 'w' ? 'b' : 'w').length > 0) attackedCount++;
     }
   }
   return attackedCount >= 3;

@@ -8,7 +8,7 @@ import type { Analysis } from './schema';
  * rules for `RECOMPUTE_VERSION` are documented beside the other version stamps
  * in `queries.ts`, which re-exports it.
  */
-export const RECOMPUTE_VERSION = 4;
+export const RECOMPUTE_VERSION = 5;
 
 /**
  * Is `now` the same engine search as `read`?
