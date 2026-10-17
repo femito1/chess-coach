@@ -423,7 +423,7 @@ export async function analyzeGamePgn(
  * Analyses produced before terminal positions were read off the board recorded
  * the engine's unscoreable answer as 0 cp, so the move that *ended* the game —
  * usually the winner's mate — reads as a ~48-point winrate collapse and drags
- * the whole harmonic mean down with it. The truth follows from `fenAfter`
+ * the whole game accuracy down with it. The truth follows from `fenAfter`
  * alone, which is what lets the boot recompute pass fix an existing library
  * without re-running Stockfish over it.
  *
@@ -468,40 +468,74 @@ export function harmonicMean(xs: number[], floor = 20): number {
   return xs.length / recip;
 }
 
+/** Geometric mean, each value floored at `floor` first, like `harmonicMean`.
+ *  Less dominated by the worst moves than the harmonic mean, which is what
+ *  fits Chess.com's numbers. */
+export function geometricMean(xs: number[], floor = 20): number {
+  if (xs.length === 0) return 100;
+  let logSum = 0;
+  for (const x of xs) {
+    const v = Math.max(floor, x);
+    if (v <= 0) return 0;
+    logSum += Math.log(v);
+  }
+  return Math.exp(logSum / xs.length);
+}
+
+/** The bottom of `cpToWinrate`'s curve: the mover is at or past the -1000 cp
+ *  clamp. Every stored winrate there is exactly this value. */
+const CLAMPED_LOST_WINRATE = cpToWinrate(-Infinity);
+
 export interface AccuracyAggregationOptions {
   /** Count book plies, as perfect moves. Never with their stored winrates:
    *  no engine search produced those, so they are not evidence of loss. */
   includeBook: boolean;
-  /** Lower bound applied before the harmonic mean. */
+  /** Lower bound applied to each move before the mean. */
   floor: number;
   /** Decay of the per-move curve (`moveAccuracy`). Default: Lichess's. */
   moveDecay?: number;
   /** Calibrates distance from 100 while preserving endpoints/order. */
   gapMultiplier?: number;
+  /** How per-move accuracies combine. Default `harmonic`. */
+  mean?: 'harmonic' | 'geometric';
+  /** Leave out engine-scored plies played from a position already at the
+   *  bottom of the winrate curve. No move there can lose winrate, so every one
+   *  scores 100, good or bad. Default false. */
+  skipClampedLost?: boolean;
 }
 
 export const CURRENT_ACCURACY_MODEL: AccuracyAggregationOptions = {
   includeBook: true,
-  floor: 24,
-  moveDecay: 0.074,
+  floor: 9.6,
+  moveDecay: 0.085,
+  mean: 'geometric',
+  skipClampedLost: true,
 };
 
 export function computeAccuracyWithModel(
   moves: MoveEval[],
   model: AccuracyAggregationOptions,
 ): { white: number; black: number } {
-  const scoresFor = (white: boolean): number[] =>
-    moves
+  const scoresFor = (white: boolean): number[] => {
+    const own = moves
       .filter((move) => (move.ply % 2 === 1) === white)
-      .filter((move) => model.includeBook || move.classification !== 'book')
-      .map((move) => {
-        if (move.classification === 'book') return moveAccuracy(0, model.moveDecay);
-        const lossPct = Math.max(0, (move.winrateBefore - move.winrateAfter) * 100);
-        return moveAccuracy(lossPct, model.moveDecay);
-      });
+      .filter((move) => model.includeBook || move.classification !== 'book');
+    const informative = model.skipClampedLost
+      ? own.filter(
+          (move) => move.classification === 'book' || move.winrateBefore > CLAMPED_LOST_WINRATE,
+        )
+      : own;
+    // A side that spent the whole game clamped lost still gets a score.
+    return (informative.length > 0 ? informative : own).map((move) => {
+      if (move.classification === 'book') return moveAccuracy(0, model.moveDecay);
+      const lossPct = Math.max(0, (move.winrateBefore - move.winrateAfter) * 100);
+      return moveAccuracy(lossPct, model.moveDecay);
+    });
+  };
 
+  const mean = model.mean === 'geometric' ? geometricMean : harmonicMean;
   const rounded = (scores: number[]) => {
-    const raw = harmonicMean(scores, model.floor);
+    const raw = mean(scores, model.floor);
     const calibrated = 100 - (100 - raw) * (model.gapMultiplier ?? 1);
     return Math.round(Math.max(0, Math.min(100, calibrated)) * 10) / 10;
   };
@@ -517,28 +551,39 @@ export function computeAccuracyWithModel(
  *
  * Approach:
  *  1) Per-move accuracy is Lichess's exponential curve over the mover's
- *     winrate loss, with a steeper decay (0.074 vs Lichess's 0.04354).
+ *     winrate loss, with a steeper decay (0.085 vs Lichess's 0.04354).
  *  2) Book plies count as perfect moves, as they do on Chess.com.
- *  3) The game accuracy is the harmonic mean, each move floored at 24 first
- *     so one disaster can't zero an otherwise sound game.
+ *  3) Plies played from a position already clamped lost (-1000 cp or worse
+ *     for the mover) are left out: no move there can lose winrate, so each
+ *     would score 100 whatever was played.
+ *  4) The game accuracy is the geometric mean, each move floored at 9.6
+ *     first so one disaster can't zero an otherwise sound game.
  *
- * Calibrated 2026-10-14 against Chess.com's own `accuracies` on this user's
- * games: 938 colour-scores from 469 rapid/blitz/bullet games (~700-1000
- * rated), all analysed with Stockfish 16 NNUE at depth 18. 5-fold
- * cross-validated MAE 4.24 (was 9.18; bias −6.8 → +0.9); 95% of scores within
- * ±10 (was 62%). Fitted on Jan-Jul only, it scored 4.4 on Aug-Oct, where the
- * previous model scored 10.4. The fitted values were stable across folds
- * (decay 0.072-0.074, floor 23.3-23.8).
+ * Calibrated against Chess.com's own `accuracies` on this user's games: 938
+ * colour-scores from 469 rapid/blitz/bullet games (~700-1000 rated, Jan-Oct
+ * 2026), all analysed with Stockfish 16 NNUE at depth 18. Refitted 2026-10-17:
+ * 5-fold cross-validated MAE 3.81 (4.28 for the 2026-10-14 harmonic model,
+ * 9.18 before that), bias +0.9, 95% within ±10. Fitted on Jan-Jul only, it
+ * scored 3.95 on Aug-Oct (4.50 for the harmonic model). Better in every time
+ * control. Fitted values were stable across folds (decay 0.085-0.086, floor
+ * 9.3-10.0), and the clamp cut-off, when left free, landed on the clamp in
+ * every fold.
  *
- * What the fit settled:
- *  - The previous model's ×1.5 stretch of the distance from 100 was fitted on
- *    Carlsen/Nakamura archives and read club games ~7 points low. Refitted
- *    here, the stretch goes to ×1.0 once the per-move decay is free: the
- *    shape of the curve was wrong, not its scale.
- *  - Mixing in an arithmetic mean never helped (its weight fitted to 0).
- *  - Counting book plies cut MAE from 4.74 to 4.24.
+ * What the fits settled:
+ *  - The geometric mean beats the harmonic one (CV 4.14 vs 4.28 on its own),
+ *    and a free power mean fits to the geometric. An arithmetic blend, a soft
+ *    floor and convex or piecewise stretches of the gap from 100 did not help.
+ *  - The ×1.5 gap stretch of an older model was fitted on Carlsen/Nakamura
+ *    archives and read club games ~7 points low. Refitted, it goes to ×1.0.
+ *  - Counting book plies helps.
  *
- * Known residual: in games Chess.com scores below 60 this reads ~5 high.
+ * Known residual: in games Chess.com scores below 60 this reads ~3.5 high.
+ * Most of that is regression to the mean, not the model: grouped by
+ * Chess.com's own score, a perfectly calibrated model with this much noise
+ * would read ~2.7 high there. Grouped by this model's score, the low-end bias
+ * is ~1. It is still worst on sides with many skipped plies (a long lost
+ * ending), where it reads a few points low.
+ *
  * Changing the model needs an `ACCURACY_BACKFILL_VERSION` bump
  * (`db/queries.ts`) to reach stored games. Synced games need nothing more:
  * cloud sync re-derives accuracy from every analysis it pulls.

@@ -67,8 +67,9 @@ export const USER_TIME_BACKFILL_VERSION = 1;
  *  changes its output for existing analyses. */
 export const BRILLIANT_BACKFILL_VERSION = 1;
 /** Version stamp for the boot-time `backfillAccuracies` pass. 1 = the
- *  2026-10-14 recalibration against Chess.com (see `computeAccuracy`). */
-export const ACCURACY_BACKFILL_VERSION = 1;
+ *  2026-10-14 recalibration against Chess.com, 2 = the 2026-10-17 refit to a
+ *  geometric mean (see `computeAccuracy`). */
+export const ACCURACY_BACKFILL_VERSION = 2;
 /**
  * Stamps `Analysis.recomputeVersion` on rows that predate the field, using the
  * DB's own `lastRecomputeVersion` as the claim. Its own pass with its own gate,

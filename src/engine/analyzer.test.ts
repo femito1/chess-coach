@@ -84,8 +84,10 @@ describe('computeAccuracy', () => {
     // comment.
     expect(CURRENT_ACCURACY_MODEL).toEqual({
       includeBook: true,
-      floor: 24,
-      moveDecay: 0.074,
+      floor: 9.6,
+      moveDecay: 0.085,
+      mean: 'geometric',
+      skipClampedLost: true,
     });
   });
 
@@ -138,6 +140,23 @@ describe('computeAccuracy', () => {
 
     expect(score).toBeGreaterThan(0);
     expect(score).toBeLessThan(70);
+  });
+
+  it('leaves out plies played from a position already clamped lost', () => {
+    // After the blunder White sits at the bottom of the curve, where every
+    // move "loses" nothing. Counting those as perfect would pull the score
+    // back up for moves that were never really judged.
+    const lost = cpToWinrate(-1000);
+    const playingOn = (ply: number): MoveEval => ({
+      ...move(ply, 0, 'good'),
+      winrateBefore: lost,
+      winrateAfter: lost,
+    });
+    const blunder = [move(1, 0, 'best'), move(3, 0.45, 'blunder')];
+    const withLostTail = [...blunder, playingOn(5), playingOn(7), playingOn(9)];
+    expect(computeAccuracy(withLostTail).white).toBe(computeAccuracy(blunder).white);
+    // A side that was lost from its first move still gets a score.
+    expect(computeAccuracy([playingOn(1), playingOn(3)]).white).toBe(100);
   });
 
   it('supports the legacy model for benchmark comparisons', () => {
