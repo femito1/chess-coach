@@ -468,15 +468,27 @@ gcloud([
   '--replication-policy=automatic',
   `--project=${project}`,
 ], { capture: true, tolerate: /ALREADY_EXISTS|already exists/i, label: 'creating the secret' });
-// On stdin, never argv: anything on a command line is readable by every process
-// on the machine through `ps`.
-gcloud(['secrets', 'versions', 'add', cfg.secret, '--data-file=-', `--project=${project}`], {
-  capture: true,
-  stdin: serviceRoleKey ?? '',
-  redact: true,
-  label: 'adding a secret version',
-});
-ok(`${cfg.secret} (new version added)`);
+// Add a version only when the key changed. Every version is billed once past
+// six, the job reads `:latest`, and a redeploy almost never rotates the key, so
+// adding one per deploy just piles up copies of the same value. Read-only, so it
+// runs under --dry-run too. Its output is captured, never printed.
+const current = gcloud(
+  ['secrets', 'versions', 'access', 'latest', `--secret=${cfg.secret}`, `--project=${project}`],
+  { capture: true, readOnly: true, tolerate: /NOT_FOUND|not found|DESTROYED|DISABLED/i, label: 'reading the latest secret version' },
+);
+if (!current.tolerated && current.stdout === (serviceRoleKey ?? '')) {
+  ok(`${cfg.secret} (latest version already holds this key, none added)`);
+} else {
+  // On stdin, never argv: anything on a command line is readable by every
+  // process on the machine through `ps`.
+  gcloud(['secrets', 'versions', 'add', cfg.secret, '--data-file=-', `--project=${project}`], {
+    capture: true,
+    stdin: serviceRoleKey ?? '',
+    redact: true,
+    label: 'adding a secret version',
+  });
+  ok(`${cfg.secret} (new version added)`);
+}
 
 /* ----------------------------------------------------------- 5. account --- */
 step('creating the service account and granting two roles');

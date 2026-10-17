@@ -415,10 +415,11 @@ Two things the free tier does not make obvious:
 - **It is per billing account, not per project.** Every project on the same
   billing account draws from one allowance, so another project's Cloud Run use
   counts against this one.
-- **Every deploy stores another version of the service_role secret.** Six active
-  versions are free; past that each costs ~$0.06/month. Old versions can be
-  destroyed (`gcloud secrets versions destroy <n> --secret=…`) — the job reads
-  `:latest`.
+- **Secret versions are billed past six active ones** (~$0.06/month each). The
+  deploy adds a version of the service_role secret only when the key differs
+  from `:latest`, so redeploys don't pile up copies. Old versions can be
+  destroyed (`gcloud secrets versions destroy <n> --secret=…`), since the job
+  reads `:latest`.
 
 Set a budget alert (`console.cloud.google.com/billing` → Budgets & alerts) so a
 surprise is an email rather than an invoice. Cloud Run needs a billing account
