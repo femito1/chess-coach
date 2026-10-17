@@ -310,6 +310,7 @@ export function LibraryPuzzleSolver({
               cpWhite={liveEval?.cpWhite ?? null}
               mate={mateForWhite(liveEval?.mate, boardFen)}
               orientation={solverColor}
+              idleTitle={finished ? undefined : t('puzzles.solver.evalHidden')}
             />
           }
           board={

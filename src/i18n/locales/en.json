@@ -353,7 +353,8 @@
       "solution": "Solution",
       "replayStepByStep": "Replay step-by-step",
       "solutionPlaythrough": "Solution playthrough",
-      "toMoveShort": "{{color}} to play"
+      "toMoveShort": "{{color}} to play",
+      "evalHidden": "The eval shows once the puzzle is over"
     },
     "subtitleRecommended": "Matched to the tactics you have been missing lately.",
     "rating": "Rating {{rating}}",

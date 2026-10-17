@@ -20,6 +20,9 @@ export interface EvalBarProps {
   orientation?: 'white' | 'black';
   /** Pixel height to match the adjacent `<Board>` (which is square). */
   className?: string;
+  /** Tooltip while there is no reading. Defaults to saying the engine is
+   *  thinking, which is wrong for a bar kept blank on purpose. */
+  idleTitle?: string;
 }
 
 /**
@@ -61,6 +64,7 @@ export function EvalBar({
   mate,
   orientation = 'white',
   className,
+  idleTitle = 'Engine thinking…',
 }: EvalBarProps) {
   // White's winrate, [0..1]. When mate is in play we slam to one end.
   let winrateWhite = 0.5;
@@ -87,7 +91,7 @@ export function EvalBar({
     <div
       className={`relative shrink-0 rounded-md overflow-hidden border border-border bg-bg-raised ${className ?? ''}`}
       style={{ width: EVAL_BAR_WIDTH_PX }}
-      title={label ? `Eval: ${label}` : 'Engine thinking…'}
+      title={label ? `Eval: ${label}` : idleTitle}
     >
       <div
         className="absolute left-0 right-0 bg-black/85"

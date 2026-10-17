@@ -353,7 +353,8 @@
       "solution": "Soluzione",
       "replayStepByStep": "Riproduci passo-passo",
       "solutionPlaythrough": "Riproduzione della soluzione",
-      "toMoveShort": "{{color}} muove"
+      "toMoveShort": "{{color}} muove",
+      "evalHidden": "La valutazione appare a puzzle finito"
     },
     "subtitleRecommended": "Abbinati alle tattiche che hai sbagliato di recente.",
     "rating": "Rating {{rating}}",

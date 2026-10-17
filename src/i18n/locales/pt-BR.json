@@ -353,7 +353,8 @@
       "solution": "Solução",
       "replayStepByStep": "Reproduzir passo a passo",
       "solutionPlaythrough": "Reprodução da solução",
-      "toMoveShort": "{{color}} joga"
+      "toMoveShort": "{{color}} joga",
+      "evalHidden": "A avaliação aparece quando o problema termina"
     },
     "subtitleRecommended": "Combinados com as táticas que você tem errado ultimamente.",
     "rating": "Rating {{rating}}",
