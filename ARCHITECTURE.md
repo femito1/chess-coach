@@ -83,11 +83,12 @@ passes, via `recomputeChunkSize`).
 |---|---|---|---|
 | 1 | `resetRunningToPending()` — **awaited, blocking**; recovers games left `running` by an unclean unload | every boot | — |
 | 2 | `requeueStaleErrors()` — requeues games whose `analysisError` matches a known-transient pattern | every boot | — |
+| 2b | `fixFamilyRepertoireColors()` (`openings/library.ts`) — re-derives each family repertoire's colour from `familyColor`; a wrong one gets the colour, rebuilt fresh cards and cleared line stats | every boot (a cloud pull can restore an old row at any time; it reads one tiny table) | — |
 | 3 | `refreshOpeningMetadata()` — re-parses `opening`/`eco` from PGN | `lastOpeningRefreshVersion` | `OPENING_REFRESH_VERSION` (1) |
-| 4 | `recomputeClassificationsAndAccuracies()` | `lastRecomputeVersion` | `RECOMPUTE_VERSION` (4) |
+| 4 | `recomputeClassificationsAndAccuracies()` | `lastRecomputeVersion` | `RECOMPUTE_VERSION` (5) |
 | 5 | `backfillUserTimeStats()` | `lastUserTimeBackfillVersion` | `USER_TIME_BACKFILL_VERSION` (1) |
 | 6 | `backfillBrilliantCounts()` | `lastBrilliantBackfillVersion` | `BRILLIANT_BACKFILL_VERSION` (1) |
-| 7 | `backfillAccuracies()` — re-derives cached `Game.accuracy` from stored winrates after a model recalibration | `lastAccuracyBackfillVersion` | `ACCURACY_BACKFILL_VERSION` (1) |
+| 7 | `backfillAccuracies()` — re-derives cached `Game.accuracy` from stored winrates after a model recalibration | `lastAccuracyBackfillVersion` | `ACCURACY_BACKFILL_VERSION` (2) |
 | 8 | `backfillRecomputeVersion()` — copies the DB-wide recompute stamp onto rows that predate `Analysis.recomputeVersion` | `lastRecomputeStampBackfillVersion` | `RECOMPUTE_STAMP_BACKFILL_VERSION` (1) |
 
 Every constant lives in `src/db/queries.ts` except `RECOMPUTE_VERSION`, which is
@@ -248,8 +249,8 @@ chess.js (`terminalOutcome`) and never enqueues them.
 
 Getting this wrong is silent and expensive: the last move of a game won on the
 board is the mate, so reading its `fenAfter` as equal charges the *winner* a
-~48-point winrate drop — one move accuracy of ~10 inside a harmonic mean over a
-dozen scored plies, enough to take a 74 game to 45. The move list still says
+~48-point winrate drop, a move accuracy at the floor inside the game's mean,
+enough to take a good game down by tens of points. The move list still says
 `best` (`classifyMove` consults `isBest`), so the only symptom is a number that
 feels wrong, on roughly a third of a blitz library. `mateToCp(0)` returns the
 mated side's floor for the same reason: `mate 0` means "already mated".
@@ -328,17 +329,22 @@ was not found. The analyzer check catches rows imported before the filter, and
 any other source.
 
 **Game accuracy is calibrated against Chess.com's own figures.**
-`CURRENT_ACCURACY_MODEL` (`analyzer.ts`) is the harmonic mean of per-move
-accuracies — Lichess's curve with a steeper decay (0.074) — each floored at 24,
-book plies counted as perfect, no gap stretch. Fitted on 938 colour-scores from
-this user's games (~700-1000 rated, all Stockfish 16 NNUE depth 18) that carry
-Chess.com `accuracies`: 5-fold cross-validated MAE 4.24 (9.18 for the previous
-model; bias −6.8 → +0.9), 95% within ±10, and 4.4 on Aug-Oct when fitted on
-Jan-Jul only. A gap stretch (a ×1.5 one fitted on Carlsen/Nakamura) refits to
-×1.0 once the decay is free. Residual: § Open items. The fitting data: Chess.com
-publishes `accuracies` on ~20% of this user's games, unauthenticated, at
-`api.chess.com/pub/player/<user>/games/YYYY/MM`; the matching move lists are in
-`cloud_analyses`. **A model change is an `ACCURACY_BACKFILL_VERSION` bump** (the
+`CURRENT_ACCURACY_MODEL` (`analyzer.ts`) is the geometric mean of per-move
+accuracies (Lichess's curve with a steeper decay, 0.085), each floored at 9.6,
+book plies counted as perfect, plies played from an already clamped-lost
+position (-1000 cp or worse for the mover) left out, no gap stretch. Fitted on
+938 colour-scores from this user's games (~700-1000 rated, all Stockfish 16
+NNUE depth 18) that carry Chess.com `accuracies`: 5-fold cross-validated MAE
+3.81 (4.28 for the previous harmonic-mean model), bias +0.9, 95% within ±10,
+and 3.95 on Aug-Oct when fitted on Jan-Jul only. In games Chess.com scores
+below 60 it still reads ~3.5 high, and most of that is regression to the mean
+from grouping by Chess.com's own score (a perfectly calibrated model with this
+much noise would read ~2.7 high there), so a model change will not remove it.
+The `computeAccuracy` doc comment lists what the fits ruled out. The fitting
+data: Chess.com publishes `accuracies` on ~20% of this user's games,
+unauthenticated, at `api.chess.com/pub/player/<user>/games/YYYY/MM`. The
+matching move lists are in `cloud_analyses`, joined on `gameIdFromUrl(url)`.
+**A model change is an `ACCURACY_BACKFILL_VERSION` bump** (the
 cheap `backfillAccuracies` pass — stored winrates only), **not** a
 `RECOMPUTE_VERSION` bump. The Cloud Run worker computes accuracy with its own
 bundled copy, but only into `cloud_games`, which clients never trust for it
@@ -1599,31 +1605,9 @@ Known, unfixed, and worth picking up. Remove an entry when it is done.
   NULL `recompute_version`.** They heal without intervention: NULL reads as
   vintage 0, so any sync from a device whose local copy is stamped outranks it in
   `isBetter` and pushes the column; after a restore the recompute pass stamps any
-  pulled row below 4, and the same push follows. No backfill is worthwhile: one
-  restricted to images with `RECOMPUTE_VERSION ≥ 3` could only claim 3 (column
-  and `data->recomputeVersion` together), still below the current 4, so those
-  rows would be reclassified and re-pushed anyway.
-- **Repertoires created in the wrong colour before `familyColor`'s current rules
-  are not migrated.** Nothing re-derives a stored repertoire's colour.
-- **Motif detection gaps** (`engine/motifs.ts`): `isKingUnsafe` (`weakKing`)
-  counts attacked king-adjacent squares via `attackersOf`, a move list, so a pawn
-  push onto an empty square counts as an attack (and a pawn's diagonal does not);
-  `pinSkewerLines` ignores a skewer with the king in front (`first.type !== 'k'`).
-- **Openings readers replay a set-up-position game as if from the standard
-  start**: `buildPersonalOpeningStats` (`openings/recommendations.ts`) and
-  `uciFromPgn` (`openings/identifyFromGame.ts`) key the set-up game's moves as
-  standard-start prefixes, and `EngineCockpit`'s fallback board replays them on
-  `new Chess()`.
-- **Accuracy model residual**: reads ~5 high where Chess.com scores below 60
-  (§ Engine, calibration).
-- **Each worker deploy adds a Secret Manager version of the `service_role` key**
-  (five at last count; six active versions are free). Old versions can be
-  destroyed: `scripts/worker/README.md` § Cost, and a guard.
+  pulled row below the current version, and the same push follows. No backfill
+  is worthwhile: one restricted to images with `RECOMPUTE_VERSION ≥ 3` could only
+  claim 3 (column and `data->recomputeVersion` together), still below the current
+  version, so those rows would be reclassified and re-pushed anyway.
 - **`public/_headers` sets no `Content-Security-Policy`.** A hardening gap; a
   policy has to admit the R2 net origin and the Clerk and Supabase endpoints.
-- **`TIERS` in `scripts/build-puzzles.mjs` and `PUZZLE_TIERS` in the manifest are
-  vestigial** (only the build's band report reads them; the page serves no tiers).
-  Drop them on the next corpus rebuild.
-- **Puzzle solver eval-bar tooltip**: while solving, the deliberately neutral bar
-  still titles itself "Engine thinking…" (`EvalBar`'s no-label fallback), which
-  implies an engine is running.
