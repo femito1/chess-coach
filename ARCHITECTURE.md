@@ -1609,5 +1609,3 @@ Known, unfixed, and worth picking up. Remove an entry when it is done.
   is worthwhile: one restricted to images with `RECOMPUTE_VERSION ≥ 3` could only
   claim 3 (column and `data->recomputeVersion` together), still below the current
   version, so those rows would be reclassified and re-pushed anyway.
-- **`public/_headers` sets no `Content-Security-Policy`.** A hardening gap; a
-  policy has to admit the R2 net origin and the Clerk and Supabase endpoints.

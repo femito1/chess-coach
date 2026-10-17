@@ -731,6 +731,17 @@ architecture doesn't have to change.
   `src/engine/engine.ts` and the `/stockfish/*` note in
   `public/_headers`. Re-run §3's net check on the deploy.
 
+- **Different Clerk instance (e.g. `pk_test_` → `pk_live_`), Supabase
+  project, or NNUE net host**: update the `Content-Security-Policy` in
+  `public/_headers` in the same commit. It allowlists the Clerk Frontend
+  API host (scripts and fetches), the Supabase project URL and the R2 net
+  host by name, so a stale entry shows up as "Refused to load / connect"
+  console errors and a broken sign-in, sync or a silent fall back to the
+  classical eval. The CSP lives only in the `/*` block: Pages appends
+  per-route headers, and a second policy would intersect with the first.
+  Stockfish workers run under the CSP sent with their own script, which is
+  why removing `'wasm-unsafe-eval'` breaks every analysis.
+
 ## 9. Chrome extension distribution
 
 The extension lives at `extension/` and pairs with the deployed app

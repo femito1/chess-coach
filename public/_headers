@@ -20,6 +20,82 @@
 # loads), swap that line to `credentialless` instead -- still enables
 # SharedArrayBuffer on modern Chromium / Firefox, but is more permissive
 # about cross-origin loads. Track the regression in DEPLOY.md.
+#
+# ── Content-Security-Policy ────────────────────────────────────────────
+#
+# Enforced, and declared ONLY here in `/*`. Pages appends per-route headers to
+# the wildcard (see the COEP incident under /stockfish/*), so a second CSP on
+# any route would be a second policy, and browsers enforce every policy at
+# once: the effective rule becomes the intersection, which silently tightens.
+# It also covers the engine's worker scripts, and that matters: a dedicated
+# worker runs under the CSP sent with ITS OWN script response, not the page's.
+#
+# Every source below was observed in use, not guessed. Method: a production
+# `vite build` (real Clerk + Supabase keys, R2 net URL from .env.production)
+# and an auth-bypass build, served by a Node server applying this exact file,
+# driven by Playwright. Discovery ran a deny-everything policy as Report-Only
+# with a `report-uri`, which catches violations inside workers too. Then this
+# policy was enforced and every step re-run with zero violations and zero
+# reports: signed-out redirects to the Clerk widget, /privacy, every
+# signed-in route, Chess.com onboarding lookup, review-by-url import plus a
+# full threaded Stockfish analysis, and the Puzzles page. crossOriginIsolated
+# stayed true and the threaded build ran throughout.
+#
+#   script-src 'wasm-unsafe-eval'  Stockfish compiles WebAssembly in its
+#                    workers. Negative control: without it every analysis
+#                    fails with a CompileError. This is NOT 'unsafe-eval'.
+#   close-falcon-62.clerk.accounts.dev  Clerk's Frontend API (the dev
+#                    instance behind the pk_test_ key). clerk-js and its UI
+#                    chunks load from it as scripts, and it is the fetch
+#                    target for every session call. A Clerk production
+#                    instance has a different host (clerk.<your domain>), so
+#                    switching keys means changing BOTH lines here.
+#   challenges.cloudflare.com  Turnstile, which Clerk runs as bot protection
+#                    when someone submits the sign-up form. Needs script-src
+#                    and frame-src only (Cloudflare's and Clerk's CSP docs, and
+#                    observed: it loaded and challenged with no connect-src
+#                    entry). Verified by submitting a +clerk_test sign-up.
+#                    The challenge iframe can log its own CSP error ("data:,"
+#                    against *.challenges.cloudflare.com hosts). That comes from
+#                    Cloudflare's policy on its iframe, not from this one.
+#   style-src 'unsafe-inline'  Clerk injects <style> elements for its CSS-in-JS
+#                    (seen as style-src-elem violations without it). Clerk's
+#                    docs list it as required. React `style=` props don't
+#                    need it.
+#   img-src data:    Vite inlines small images as data: URIs, including the
+#                    board's piece SVGs.
+#   img.clerk.com    Clerk's provider icons and user avatars.
+#   images.chesscomfiles.com  Chess.com avatars on onboarding. It sends CORP,
+#                    so the image also passes COEP.
+#   clerk-telemetry.com  Clerk's dev-instance telemetry. clerk-js turns it off
+#                    when navigator.webdriver is true, so tests never send it.
+#                    Observed (POST 200) only after that flag was masked.
+#   jminpgpftihregnkobnd.supabase.co  Supabase REST (cloud sync, profiles).
+#                    No realtime is used, so there is no wss: entry. Checked
+#                    with a real REST request under this policy (200). A
+#                    signed-in sync couldn't run locally without making a
+#                    real account.
+#   api.chess.com    Imports, archives and the onboarding profile lookup.
+#   pub-0110d0bdad544ae6a1a6151b54021f00.r2.dev  The NNUE net (VITE_NNUE_NET_URL,
+#                    see DEPLOY.md). The app's HEAD probe and each Stockfish
+#                    worker's GET are both connect-src. A new net host means
+#                    changing it here too. The bucket's CORS rule allows only
+#                    prod and localhost:5173. So the full net load was checked
+#                    against a stand-in CORS host in this slot: 4 worker GETs,
+#                    NNUE analysis finished, no violations.
+#   worker-src blob:  clerk-js runs its timers in a blob: worker. Stockfish
+#                    and its pthread workers are 'self'.
+#   frame-ancestors 'none'  The CSP form of X-Frame-Options: DENY. Nothing
+#                    embeds the app. The extension only opens it in tabs.
+#   form-action 'self'  Clerk submits its forms through fetch. OAuth leaves
+#                    by top-level navigation, which CSP does not restrict
+#                    (the GitHub button reached github.com under this policy).
+#
+# Left out because none of the code paths ask for them: 'unsafe-inline' or
+# 'unsafe-eval' for scripts (Clerk's example lists them for Next.js dev
+# only), *.protect.clerk.com (not referenced by clerk-js 5.128, and the
+# instance has no Protect), accounts.google.com (One Tap is unused), and
+# lichess.org (links only, no fetches).
 
 /*
   Cross-Origin-Opener-Policy: same-origin
@@ -28,6 +104,7 @@
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://close-falcon-62.clerk.accounts.dev https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://img.clerk.com https://images.chesscomfiles.com; connect-src 'self' https://close-falcon-62.clerk.accounts.dev https://clerk-telemetry.com https://jminpgpftihregnkobnd.supabase.co https://api.chess.com https://pub-0110d0bdad544ae6a1a6151b54021f00.r2.dev; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'
 
 # Stockfish engine bundle: the `.js` glue and the `.wasm` payloads. Files are
 # pinned per-build so safe to mark immutable. If you swap Stockfish versions,

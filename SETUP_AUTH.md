@@ -297,7 +297,9 @@ is **deliberately deferred**. It needs a custom domain (DEPLOY.md §5), which th
 project does not have — the assigned `chess-coach-bip.pages.dev` hostname cannot
 carry the required CNAME records. Note before planning it: **Clerk does not
 transfer user data between instances**, so existing accounts would have to sign up
-again.
+again. The new instance's Frontend API host also has to replace
+`close-falcon-62.clerk.accounts.dev` in the `Content-Security-Policy` in
+`public/_headers` (DEPLOY.md §8), or sign-in stops loading.
 
 Unrelated to both: the browser evicting the origin's storage takes the session
 *and* the library together. See ARCHITECTURE.md § Storage durability.
