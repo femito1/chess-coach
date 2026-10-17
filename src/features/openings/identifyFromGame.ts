@@ -1,6 +1,6 @@
-import { Chess } from 'chess.js';
 import { db } from '@/db/schema';
 import { identifyOpeningLine } from './library';
+import { uciFromPgn } from './recommendations';
 
 /**
  * Identify an opening from a game's *moves* rather than its name.
@@ -19,21 +19,6 @@ import { identifyOpeningLine } from './library';
  * Costs one PGN read per call, so callers should only reach for it on the rows
  * that failed to resolve by name — never as the primary path.
  */
-
-/** A game's moves as UCI, or null if the PGN won't parse. */
-export function uciFromPgn(pgn: string): string[] | null {
-  try {
-    const chess = new Chess();
-    chess.loadPgn(pgn);
-    const uci = chess
-      .history({ verbose: true })
-      .map((move) => move.from + move.to + (move.promotion ?? ''));
-    return uci.length > 0 ? uci : null;
-  } catch {
-    // A malformed historical PGN should never break a caller's render.
-    return null;
-  }
-}
 
 /**
  * The canonical library family for a game, derived from its moves. Null when

@@ -5,7 +5,7 @@ import {
   replayLine,
   type OpeningLine,
 } from '@/features/openings/library';
-import { uciFromPgn } from '@/features/openings/identifyFromGame';
+import { uciFromPgn } from '@/features/openings/recommendations';
 import { findNodeByFen } from '@/features/repertoire/store';
 import { stripOpeningMoves, type GameForCharts } from './progress';
 

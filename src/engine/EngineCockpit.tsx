@@ -130,13 +130,9 @@ export function EngineCockpit({
       const c = new Chess();
       c.loadPgn(pgn);
       const history = c.history({ verbose: true });
-      const replay = new Chess();
-      const target = Math.min(progressPly, history.length);
-      for (let i = 0; i < target; i++) {
-        const h = history[i];
-        replay.move({ from: h.from, to: h.to, promotion: h.promotion });
-      }
-      return replay.fen();
+      // `after` already starts from the game's own first position, which a
+      // replay on `new Chess()` would not for a `[SetUp]` game.
+      return history[Math.min(progressPly, history.length) - 1]?.after ?? null;
     } catch {
       return null;
     }

@@ -1,4 +1,4 @@
-import { Chess } from 'chess.js';
+import { Chess, DEFAULT_POSITION } from 'chess.js';
 import type { Color, Game, GameResult } from '@/db/schema';
 import type { OpeningLine } from './library';
 
@@ -51,6 +51,30 @@ export function openingLineKey(uci: readonly string[]): string {
   return uci.join(' ');
 }
 
+/**
+ * A game's moves as UCI, for matching against opening lines. Null if the PGN
+ * won't parse, has no moves, or starts from a set-up position: those moves are
+ * not a prefix of anything played from the standard start, and keying them as
+ * if they were credits the user with openings they never played.
+ */
+export function uciFromPgn(pgn: string): string[] | null {
+  try {
+    const chess = new Chess();
+    chess.loadPgn(pgn);
+    const history = chess.history({ verbose: true });
+    if (history.length === 0 || !isStandardStart(history[0].before)) return null;
+    return history.map((move) => move.from + move.to + (move.promotion ?? ''));
+  } catch {
+    // A malformed historical PGN should never break a caller's render.
+    return null;
+  }
+}
+
+/** The standard start, ignoring the move counters a `[FEN]` header may vary. */
+function isStandardStart(fen: string): boolean {
+  return fen.split(' ').slice(0, 4).join(' ') === DEFAULT_POSITION.split(' ').slice(0, 4).join(' ');
+}
+
 export function buildPersonalOpeningStats(
   // `result` is optional so callers with partial game shapes (and games
   // whose result was never recorded) still work; a missing result simply
@@ -64,40 +88,32 @@ export function buildPersonalOpeningStats(
 
   for (const game of games) {
     if (game.userColor !== color) continue;
-    try {
-      const chess = new Chess();
-      chess.loadPgn(game.pgn);
-      const uci = chess.history({ verbose: true }).map(
-        (move) => move.from + move.to + (move.promotion ?? ''),
-      );
-      if (uci.length === 0) continue;
-      relevantGames++;
-      // `result` is already stored from the user's perspective, so we can
-      // fold it straight in without re-checking colour. `'unknown'`
-      // contributes to prefixCounts (via the loop) but not to W/D/L.
-      const outcome =
-        game.result === 'win'
-          ? 'wins'
-          : game.result === 'loss'
-            ? 'losses'
-            : game.result === 'draw'
-              ? 'draws'
-              : null;
-      for (let length = 1; length <= uci.length; length++) {
-        const key = openingLineKey(uci.slice(0, length));
-        prefixCounts.set(key, (prefixCounts.get(key) ?? 0) + 1);
-        if (outcome) {
-          const rec = prefixRecords.get(key);
-          if (rec) rec[outcome]++;
-          else {
-            const fresh: WinDrawLoss = { wins: 0, draws: 0, losses: 0 };
-            fresh[outcome] = 1;
-            prefixRecords.set(key, fresh);
-          }
+    const uci = uciFromPgn(game.pgn);
+    if (!uci) continue;
+    relevantGames++;
+    // `result` is already stored from the user's perspective, so we can
+    // fold it straight in without re-checking colour. `'unknown'`
+    // contributes to prefixCounts (via the loop) but not to W/D/L.
+    const outcome =
+      game.result === 'win'
+        ? 'wins'
+        : game.result === 'loss'
+          ? 'losses'
+          : game.result === 'draw'
+            ? 'draws'
+            : null;
+    for (let length = 1; length <= uci.length; length++) {
+      const key = openingLineKey(uci.slice(0, length));
+      prefixCounts.set(key, (prefixCounts.get(key) ?? 0) + 1);
+      if (outcome) {
+        const rec = prefixRecords.get(key);
+        if (rec) rec[outcome]++;
+        else {
+          const fresh: WinDrawLoss = { wins: 0, draws: 0, losses: 0 };
+          fresh[outcome] = 1;
+          prefixRecords.set(key, fresh);
         }
       }
-    } catch {
-      // A malformed historical PGN should not break opening suggestions.
     }
   }
 

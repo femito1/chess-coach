@@ -6,6 +6,7 @@ import {
   personalRecordForLine,
   rankOpeningLines,
   recommendedStarterLines,
+  uciFromPgn,
 } from './recommendations';
 
 function line(
@@ -50,6 +51,20 @@ describe('buildPersonalOpeningStats', () => {
     expect(stats.relevantGames).toBe(1);
     expect(stats.prefixCounts.get(openingLineKey(ITALIAN))).toBe(1);
     expect(stats.prefixCounts.has(openingLineKey(QUEENS_GAMBIT))).toBe(false);
+  });
+
+  it('skips a game played from a set-up position, even when its moves look like an opening', () => {
+    // Knight odds: the same 1.e4 e5 2.Nf3, but not from the standard start.
+    const odds =
+      '[SetUp "1"]\n[FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/R1BQKBNR w KQkq - 0 1"]\n\n1. e4 e5 2. Nf3';
+    const standard =
+      '[SetUp "1"]\n[FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]\n\n1. e4 e5 2. Nf3';
+    expect(uciFromPgn(odds)).toBeNull();
+    expect(uciFromPgn(standard)).toEqual(E4);
+
+    const stats = buildPersonalOpeningStats([{ userColor: 'white', pgn: odds }], 'white');
+    expect(stats.relevantGames).toBe(0);
+    expect(stats.prefixCounts.has(openingLineKey(E4))).toBe(false);
   });
 });
 
