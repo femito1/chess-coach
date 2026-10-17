@@ -23,6 +23,7 @@ import {
   setAnalysisStatus,
 } from '@/db/queries';
 import { computeUserTimeStats } from '@/features/dashboard/progress';
+import { fixFamilyRepertoireColors } from '@/features/openings/library';
 import { analysisPool } from './pool';
 
 /** How long the queue has to be idle (no pending games found) before we
@@ -189,6 +190,13 @@ export async function startAnalysisQueue(): Promise<void> {
           `[queue] requeued ${healed} stale-error games from a previous session`,
         );
       }
+    });
+
+    // A family repertoire's colour follows `familyColor`. Every boot, because
+    // a cloud pull can restore a row stored under older rules at any time.
+    await bootStep('fixFamilyRepertoireColors', async () => {
+      const fixed = await fixFamilyRepertoireColors();
+      if (fixed > 0) console.info(`[queue] fixed the colour of ${fixed} repertoires`);
     });
 
     boot.setPhase('phaseRefreshingOpenings');

@@ -5,8 +5,9 @@ import {
   type OpeningFamilyMeta,
   type OpeningLine,
 } from '@/data/openings.generated';
-import { db, type Color, type Repertoire } from '@/db/schema';
-import { addMove, createRepertoire } from '@/features/repertoire/store';
+import { db, type Color, type Repertoire, type RepertoireCard } from '@/db/schema';
+import { addMove, cardId, createRepertoire, nodeId } from '@/features/repertoire/store';
+import { newSrsState } from '@/srs/sm2';
 import { openingLineKey } from './recommendations';
 
 export type { OpeningLine };
@@ -464,6 +465,73 @@ export async function ensureFamilyRepertoire(family: string): Promise<Repertoire
     kind: 'family',
     family,
   });
+}
+
+/**
+ * Re-derive the colour of every family repertoire from `familyColor`, and fix
+ * the ones that disagree. Returns how many were fixed.
+ *
+ * Earlier rules for `familyColor` called several Black gambits White (Latvian,
+ * Elephant, Benko Gambit Accepted, …), and `ensureFamilyRepertoire` created
+ * their repertoires in that colour, so every drill quizzed the opponent's
+ * moves. A family repertoire's colour is never the user's choice, so the rule
+ * is the truth and the stored colour can be corrected.
+ *
+ * The tree stays: nodes are positions and moves, whoever plays them. What
+ * depended on the colour is rebuilt or dropped:
+ *  - SRS cards sit on the positions where the owner is to move, so they are
+ *    rebuilt on the other side's positions, fresh. The old cards scheduled the
+ *    opponent's moves, so there is no progress on them worth keeping.
+ *  - Per-line stats measured the opponent's moves too, so they are cleared.
+ *
+ * Runs on every boot rather than once behind a stamp: a cloud pull can bring
+ * an old wrong-colour row back at any time, and the check is one read of a
+ * table with a handful of rows. The writes go through the normal tables, so
+ * the repertoire sync hooks push the fix like any other edit.
+ */
+export async function fixFamilyRepertoireColors(): Promise<number> {
+  const wrong = (await db.repertoires.toArray()).filter(
+    (r) => r.kind === 'family' && r.family && r.color !== familyColor(r.family),
+  );
+  for (const rep of wrong) {
+    const color = familyColor(rep.family!);
+    await db.transaction(
+      'rw',
+      db.repertoires,
+      db.repertoireNodes,
+      db.repertoireCards,
+      db.repertoireLineStats,
+      async () => {
+        const nodes = await db.repertoireNodes.where('repertoireId').equals(rep.id).toArray();
+        const byId = new Map(nodes.map((n) => [n.id, n]));
+        // One card per position the owner is to move in, expecting the main
+        // child's move where the node names one (as `addMove` would have).
+        const cards = new Map<string, RepertoireCard>();
+        const now = Date.now();
+        for (const child of nodes) {
+          if (!child.parentFen || !child.moveUci) continue;
+          const parentTurn = child.parentFen.split(' ')[1] === 'w' ? 'white' : 'black';
+          if (parentTurn !== color) continue;
+          const id = cardId(rep.id, child.parentFen);
+          const isMain = byId.get(nodeId(rep.id, child.parentFen))?.mainChildFen === child.fen;
+          if (cards.has(id) && !isMain) continue;
+          cards.set(id, {
+            id,
+            repertoireId: rep.id,
+            fen: child.parentFen,
+            expectedUci: child.moveUci,
+            srs: newSrsState(),
+            createdAt: now,
+          });
+        }
+        await db.repertoireCards.where('repertoireId').equals(rep.id).delete();
+        await db.repertoireCards.bulkPut([...cards.values()]);
+        await db.repertoireLineStats.where('repertoireId').equals(rep.id).delete();
+        await db.repertoires.update(rep.id, { color, updatedAt: now });
+      },
+    );
+  }
+  return wrong.length;
 }
 
 /**

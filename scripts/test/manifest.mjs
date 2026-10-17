@@ -58,6 +58,7 @@ export const BROWSER_TESTS = [
   { name: 'prep-gaps',                 file: 'scripts/test/integration/prep-gaps.mjs',                 category: 'integration' },
   { name: 'repertoire-practice',        file: 'scripts/test/integration/repertoire-practice.mjs',        category: 'integration' },
   { name: 'repertoire-bulk-add-stamp',  file: 'scripts/test/integration/repertoire-bulk-add-stamp.mjs',  category: 'integration' },
+  { name: 'repertoire-color-fix',       file: 'scripts/test/integration/repertoire-color-fix.mjs',       category: 'integration' },
   { name: 'brilliant-backfill',         file: 'scripts/test/integration/brilliant-backfill.mjs',         category: 'integration' },
   { name: 'accuracy-backfill',          file: 'scripts/test/integration/accuracy-backfill.mjs',          category: 'integration' },
   { name: 'phase2',                     file: 'scripts/test/integration/phase2.mjs',                     category: 'integration' },

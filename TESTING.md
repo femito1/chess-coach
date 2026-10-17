@@ -172,6 +172,13 @@ variation to a repertoire retires the row with no reload: that is the difference
 between reading the repertoire tree and merely checking whether a family
 repertoire exists.
 
+`repertoire-color-fix` pins the boot pass that corrects a family repertoire
+stored in the wrong colour. Its key assertion compares the fixed repertoire's
+cards against a second repertoire built in the right colour from the same lines,
+so "has cards on Black's positions" cannot pass with the wrong expected moves.
+It also checks a repertoire already in the right colour comes through
+byte-for-byte unchanged, since the pass runs on every boot.
+
 `games-sticky-scroll` pins that the games table's horizontal scrollbar is on
 screen in a small window. Its first three assertions are preconditions — the table
 really is wider than the window, the page really is taller, and the scroller's own
