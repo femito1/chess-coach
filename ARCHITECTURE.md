@@ -1597,10 +1597,9 @@ end to end: their ids are a separate number space, so rewriting one to
 
 Known, unfixed, and worth picking up. Remove an entry when it is done.
 
-- **Extension 0.3.1 is not published.** The manifest (name "Chess Coach: Review
-  After Game"; Review counts as handling the game; daily URLs kept) is ahead of the
-  Web Store listing. Rebuild the zip and submit: DEPLOY.md § 9 (9b/9c),
-  `extension/README.md`.
+- **Extension 0.3.1 is in Web Store review** (submitted 2026-10-17, with the
+  listing text in `extension/WEB_STORE_LISTING.md`). Remove this entry once it is
+  published, or fix and resubmit if it is rejected: DEPLOY.md § 9c.
 - **`cloud_analyses` rows the worker wrote before it used `toCloudAnalysis` have
   NULL `recompute_version`.** They heal without intervention: NULL reads as
   vintage 0, so any sync from a device whose local copy is stamped outranks it in

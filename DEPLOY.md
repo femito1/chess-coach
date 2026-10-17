@@ -792,8 +792,8 @@ publish a custom-named zip.
 For wide distribution. One-time setup: create a developer account at
 `https://chrome.google.com/webstore/devconsole` ($5 registration).
 
-**Outstanding:** `extension/manifest.json` is at version 0.3.1, and the
-Web Store item needs re-publishing at that version — steps 2–3 below.
+**Outstanding:** version 0.3.1 was submitted for review on 2026-10-17.
+Drop this note once the store shows it as published.
 
 For each release:
 
